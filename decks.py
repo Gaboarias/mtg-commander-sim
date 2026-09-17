@@ -51,9 +51,16 @@ def _fill(deck, identity):
 def lorehold():
     commander = cards.Quintorius()
     d = []
+    # motor de Espiritus (P1.1): salidas de cementerio -> dispara Quintorius
     d.append(cards.Hofri())
     d.append(cards.BagOfHolding())
     d.append(cards.SevinnesReclamation())
+    d.append(cards.FaithlessLooting())
+    d.append(cards.UnderworldBreach())
+    d.append(cards.SunTitan())
+    d.append(cards.KarmicGuide())
+    d.append(cards.CronistaEspectral())
+    d.append(cards.MerodeadorDeTumbas())
     # criaturas de relleno tematicas
     d.append(creature("Historiador de Guerra", "1R", 2, 2, color_id=(R,)))
     d.append(creature("Cronista Lorehold", "2W", 2, 3, color_id=(W,)))
@@ -122,7 +129,7 @@ def _tricky_commander():
 
     def _attacks(game, perm, **kw):     # al atacar, tus criaturas ganan +1/+1
         for p in perm.controller.creatures():
-            p.counters["+1/+1"] = p.counters.get("+1/+1", 0) + 1
+            game.add_counters(p, "+1/+1", 1)
     c.triggers = {"attacks": _attacks}
     return c
 

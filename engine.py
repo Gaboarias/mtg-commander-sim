@@ -116,6 +116,7 @@ class Card:
     on_cast_resolve: Optional[Callable] = None     # (game, controller, targets) -> None
     triggers: dict = field(default_factory=dict)   # {evento: (game, perm, **kw)}
     activated: Optional[Callable] = None           # declarado, sin invocar todavia
+    counter_modifier: Optional[Callable] = None    # (game, perm, kind, n) -> n' (reemplazo)
 
     def identity(self) -> set:
         """Identidad de color: explicita si existe, si no se deduce del coste."""
@@ -223,6 +224,7 @@ class Player:
         self.cmdr_tax = 0                    # +2 por lanzamiento desde la zona de mando
         self.cmdr_damage: dict = {}          # {nombre_comandante: int}; 21 elimina
         self.lands_played = 0
+        self.draws_this_turn = 0     # se reinicia cada turno (para efectos "2do robo")
         self.lost = False
         self.policy = policy
 
@@ -241,7 +243,10 @@ class Player:
                 self.lost = True     # perder por deckout
                 return
             self.hand.append(self.library.pop())
-            game.emit("draw", player=self)
+            self.draws_this_turn += 1
+            # `count` = cuantas cartas van robadas este turno (para efectos como
+            # el drenaje de Kang, que mira la SEGUNDA carta robada del turno).
+            game.emit("draw", player=self, count=self.draws_this_turn)
 
     # -- consultas -------------------------------------------------------- #
     def creatures(self) -> list:
@@ -427,6 +432,19 @@ class Game:
             self.sba()
 
     # -- movimiento de cartas -------------------------------------------- #
+    def add_counters(self, perm: Permanent, kind: str, n: int):
+        """Pone `n` contadores de tipo `kind` sobre `perm`, aplicando los
+        modificadores de reemplazo (doblar, sumar) de los permanentes de su
+        controlador. Gancho generico: las cartas definen `counter_modifier`.
+        """
+        if n > 0:
+            for other in perm.controller.battlefield:
+                mod = other.card.counter_modifier
+                if mod is not None:
+                    n = mod(self, perm, kind, n)
+        perm.counters[kind] = perm.counters.get(kind, 0) + n
+        return n
+
     def move_to_battlefield(self, card: Card, player: "Player",
                             is_token: bool = False) -> Permanent:
         perm = Permanent(card, player, is_token=is_token)
@@ -690,6 +708,7 @@ class Game:
             perm.summoning_sick = False
             perm.damage = 0
         p.lands_played = 0
+        p.draws_this_turn = 0
 
         # UPKEEP
         self.emit("upkeep", player=p)

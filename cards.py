@@ -105,21 +105,57 @@ def dmg_all_opponents(n):
 
 
 # --------------------------------------------------------------------------- #
-# LOREHOLD (R/W) — Espiritus desde el exilio del cementerio
+# LOREHOLD (R/W) — Espiritus cuando cartas dejan tu cementerio
 # --------------------------------------------------------------------------- #
 
+def mill(game, player, n):
+    """Mueve las n cartas de arriba de la biblioteca al cementerio."""
+    for _ in range(n):
+        if not player.library:
+            return
+        card = player.library.pop()
+        player.graveyard.append(card)
+        game.emit("to_graveyard", player=player, card=card)
+
+
+def reanimate(game, ctrl, card):
+    """Saca `card` del cementerio y lo pone en el campo. Emite leaves_graveyard
+    (por eso puede disparar a Quintorius)."""
+    if card not in ctrl.graveyard:
+        return None
+    ctrl.graveyard.remove(card)
+    game.emit("leaves_graveyard", player=ctrl, card=card)
+    return game.move_to_battlefield(card, ctrl)
+
+
+def _quintorius_lgy(game, perm, **kw):
+    """Quintorius: cuando una o mas cartas dejan TU cementerio, crea un
+    Espiritu 3/2."""
+    if kw.get("player") is not perm.controller:
+        return
+    make_token(game, perm.controller, "Espiritu", 3, 2)
+    game.log(f"{perm.controller.name}: Quintorius crea un Espiritu 3/2")
+
+
 def _quintorius_upkeep(game, perm, **kw):
+    """Motor auto-suficiente (decision de diseno del simulador): en tu
+    mantenimiento exilia una carta de tu cementerio. Eso emite
+    leaves_graveyard, que dispara la creacion del Espiritu. Sin esto, el
+    arquetipo dependeria de robar un enabler concreto en un mazo singleton."""
     ctrl = perm.controller
-    has_engine = any("gy_exile" in p.card.tags for p in ctrl.battlefield)
-    if has_engine:
-        make_token(game, ctrl, "Espiritu", 3, 2)
-        game.log(f"{ctrl.name}: Quintorius crea un Espiritu 3/2")
+    if ctrl.graveyard:
+        card = next((c for c in ctrl.graveyard if c.is_land()), ctrl.graveyard[0])
+        game.leave_graveyard(ctrl, card, dest="exile")
 
 
 def Quintorius():
     c = creature("Quintorius, Historiador", "2RW", 3, 4, legendary=True,
                  tags=("engine",), color_id=(R, W))
-    c.triggers = {"upkeep": _quintorius_upkeep}
+    def etb(game, ctrl, perm):     # siembra el cementerio al entrar
+        mill(game, ctrl, 2)
+    c.on_etb = etb
+    c.triggers = {"leaves_graveyard": _quintorius_lgy,
+                  "upkeep": _quintorius_upkeep}
     return c
 
 
@@ -127,11 +163,11 @@ def _hofri_watch(game, hofri_perm, **kw):
     dead = kw.get("perm")
     if dead is None or dead.controller is not hofri_perm.controller:
         return
-    if dead is hofri_perm or not dead.is_creature():
+    if dead is hofri_perm or not dead.is_creature() or dead.is_token:
         return
     ctrl = hofri_perm.controller
-    tok = make_token(game, ctrl, dead.name + " (Espiritu)",
-                     dead.card.power + 1, dead.card.toughness + 1, kw=("haste",))
+    make_token(game, ctrl, dead.name + " (Espiritu)",
+               dead.card.power + 1, dead.card.toughness + 1, kw=("haste",))
     game.log(f"{ctrl.name}: Hofri devuelve {dead.name} como Espiritu")
 
 
@@ -142,9 +178,55 @@ def Hofri():
     return c
 
 
+def _bag_upkeep(game, perm, **kw):
+    # Bag of Holding: exilia una carta del cementerio en tu mantenimiento.
+    # (motor repetible de salida de cementerio -> alimenta a Quintorius)
+    ctrl = perm.controller
+    if ctrl.graveyard:
+        card = next((c for c in ctrl.graveyard if c.is_land()), ctrl.graveyard[0])
+        game.leave_graveyard(ctrl, card, dest="exile")
+
+
 def BagOfHolding():
-    return Card("Bag of Holding", {"artifact"}, parse_cost("1"),
-                tags={"engine", "gy_exile"})
+    c = Card("Bag of Holding", {"artifact"}, parse_cost("1"),
+             tags={"engine", "gy_exile"})
+    c.triggers = {"upkeep": _bag_upkeep}
+    return c
+
+
+def FaithlessLooting():
+    # siembra el cementerio: roba 2, descarta 2 (a cementerio)
+    def eff(game, ctrl, targets):
+        ctrl.draw(2, game)
+        for _ in range(2):
+            if not ctrl.hand:
+                break
+            if ctrl.policy and hasattr(ctrl.policy, "choose_discard"):
+                card = ctrl.policy.choose_discard(game, ctrl)
+            else:
+                card = ctrl.hand[-1]
+            ctrl.hand.remove(card)
+            ctrl.graveyard.append(card)
+            game.emit("to_graveyard", player=ctrl, card=card)
+    return Card("Faithless Looting", {"sorcery"}, parse_cost("R"),
+                on_cast_resolve=eff, tags={"draw", "engine"}, color_id={R})
+
+
+def CronistaEspectral():
+    # auto-molienda barata: siembra el cementerio para el motor de Espiritus
+    def etb(game, ctrl, perm):
+        mill(game, ctrl, 3)
+    c = creature("Cronista Espectral", "1W", 1, 2, tags=("engine",), color_id=(W,))
+    c.on_etb = etb
+    return c
+
+
+def MerodeadorDeTumbas():
+    def etb(game, ctrl, perm):
+        mill(game, ctrl, 2)
+    c = creature("Merodeador de Tumbas", "1R", 2, 1, tags=("engine",), color_id=(R,))
+    c.on_etb = etb
+    return c
 
 
 def SevinnesReclamation():
@@ -152,13 +234,53 @@ def SevinnesReclamation():
         # devuelve un permanente de coste <=3 del cementerio a la mano
         opts = [c for c in ctrl.graveyard
                 if c.cost and c.cost.cmc <= 3 and ({"creature", "artifact",
-                 "enchantment", "land"} & c.types)]
+                 "enchantment"} & c.types)]
         if opts:
             card = max(opts, key=lambda c: c.cost.cmc)
             game.leave_graveyard(ctrl, card, dest="hand")
             game.log(f"{ctrl.name}: Sevinne's Reclamation recupera {card.name}")
     return Card("Sevinne's Reclamation", {"sorcery"}, parse_cost("1W"),
-                on_cast_resolve=eff, tags={"engine", "gy_exile"})
+                on_cast_resolve=eff, tags={"engine", "gy_exile"}, color_id={W})
+
+
+def UnderworldBreach():
+    def etb(game, ctrl, perm):
+        # exilia hasta 3 cartas del cementerio (cada una dispara leaves_graveyard)
+        for _ in range(3):
+            if not ctrl.graveyard:
+                break
+            game.leave_graveyard(ctrl, ctrl.graveyard[0], dest="exile")
+    c = Card("Underworld Breach", {"enchantment"}, parse_cost("1R"),
+             tags={"engine", "gy_exile"}, color_id={R})
+    c.on_etb = etb
+    return c
+
+
+def SunTitan():
+    def etb(game, ctrl, perm):
+        opts = [c for c in ctrl.graveyard
+                if c.cost and c.cost.cmc <= 3 and "creature" in c.types]
+        if opts:
+            card = max(opts, key=lambda c: c.cost.cmc)
+            reanimate(game, ctrl, card)
+            game.log(f"{ctrl.name}: Sun Titan reanima {card.name}")
+    c = creature("Sun Titan", "4WW", 6, 6, kw=("vigilance",),
+                 tags=("engine", "gy_exile"), color_id=(W,))
+    c.on_etb = etb
+    return c
+
+
+def KarmicGuide():
+    def etb(game, ctrl, perm):
+        opts = [c for c in ctrl.graveyard if "creature" in c.types]
+        if opts:
+            card = max(opts, key=lambda c: c.cost.cmc if c.cost else 0)
+            reanimate(game, ctrl, card)
+            game.log(f"{ctrl.name}: Karmic Guide reanima {card.name}")
+    c = creature("Karmic Guide", "3WW", 2, 2, kw=("flying",),
+                 tags=("engine", "gy_exile"), color_id=(W,))
+    c.on_etb = etb
+    return c
 
 
 # --------------------------------------------------------------------------- #
@@ -166,7 +288,7 @@ def SevinnesReclamation():
 # --------------------------------------------------------------------------- #
 
 def _managorger_cast(game, perm, **kw):
-    perm.counters["+1/+1"] = perm.counters.get("+1/+1", 0) + 1
+    game.add_counters(perm, "+1/+1", 1)
 
 
 def Managorger():
@@ -188,16 +310,20 @@ def Kalonian():
     c = creature("Kalonian Hydra", "3GG", 0, 0, kw=("trample",),
                  tags=("creature",), color_id=(G,))
     def etb(game, ctrl, perm):        # entra con cuatro contadores +1/+1
-        perm.counters["+1/+1"] = 4
+        game.add_counters(perm, "+1/+1", 4)
     c.on_etb = etb
     c.triggers = {"attacks": _kalonian_attacks}
     return c
 
 
 def HardenedScales():
-    # simplificado: al entrar cada criatura tuya arranca con un contador extra
-    return Card("Hardened Scales", {"enchantment"}, parse_cost("G"),
-                tags={"engine"}, color_id={G})
+    # si vas a poner uno o mas contadores +1/+1, pone uno mas
+    def mod(game, perm, kind, n):
+        return n + 1 if kind == "+1/+1" else n
+    c = Card("Hardened Scales", {"enchantment"}, parse_cost("G"),
+             tags={"engine"}, color_id={G})
+    c.counter_modifier = mod
+    return c
 
 
 def _ascendancy_cast(game, perm, **kw):
@@ -218,17 +344,23 @@ def SimicAscendancy():
 
 
 def BranchingEvolution():
-    return Card("Branching Evolution", {"enchantment"}, parse_cost("2G"),
-                tags={"engine"}, color_id={G})
+    # duplica los contadores +1/+1 que pondrias
+    def mod(game, perm, kind, n):
+        return n * 2 if kind == "+1/+1" else n
+    c = Card("Branching Evolution", {"enchantment"}, parse_cost("2G"),
+             tags={"engine"}, color_id={G})
+    c.counter_modifier = mod
+    return c
 
 
 # --------------------------------------------------------------------------- #
 # KANG (B) — Connive / robo y drenaje
 # --------------------------------------------------------------------------- #
 
-def _kang_attacks(game, perm, **kw):
+def _connive(game, perm):
+    """Connive: roba 1, luego descarta 1 elegida por la politica. Si lo
+    descartado NO era tierra, pone un +1/+1 sobre `perm`."""
     ctrl = perm.controller
-    # connive: roba 1, descarta la de menor puntuacion; si no era tierra +1/+1
     ctrl.draw(1, game)
     if not ctrl.hand:
         return
@@ -240,14 +372,33 @@ def _kang_attacks(game, perm, **kw):
     ctrl.graveyard.append(card)
     game.emit("to_graveyard", player=ctrl, card=card)
     if not card.is_land():
-        perm.counters["+1/+1"] = perm.counters.get("+1/+1", 0) + 1
+        game.add_counters(perm, "+1/+1", 1)
     game.log(f"{ctrl.name}: Kang connive (descarta {card.name})")
+
+
+def _kang_attacks(game, perm, **kw):
+    _connive(game, perm)
+
+
+def _kang_draw(game, perm, **kw):
+    # drena 1 a cada oponente con la SEGUNDA carta robada del turno,
+    # venga del connive o de cualquier otro efecto (ej. Night's Whisper).
+    if kw.get("count") != 2:
+        return
+    ctrl = perm.controller
+    drained = 0
+    for o in game.opponents(ctrl):
+        game.deal_damage(perm, o, 1)
+        drained += 1
+    ctrl.life += drained
+    if drained:
+        game.log(f"{ctrl.name}: Kang drena {drained} (2da carta del turno)")
 
 
 def Kang():
     c = creature("Kang, el Embaucador", "2B", 2, 2, kw=("menace",),
                  legendary=True, tags=("engine",), color_id=(B,))
-    c.triggers = {"attacks": _kang_attacks}
+    c.triggers = {"attacks": _kang_attacks, "draw": _kang_draw}
     return c
 
 

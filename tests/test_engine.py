@@ -146,6 +146,66 @@ def test_simic_ascendancy_wins():
     assert b.lost
 
 
+# -- Quintorius crea Espiritu al salir carta del cementerio (P1.1) --------- #
+def test_quintorius_makes_spirit_on_leave_graveyard():
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = _game([a, b])
+    g.move_to_battlefield(cards.Quintorius(), a)  # ETB siembra cementerio
+    before = sum(1 for p in a.battlefield if p.name == "Espiritu")
+    g.emit("upkeep", player=a)  # upkeep exilia del cementerio -> leaves_graveyard
+    g.resolve_stack()
+    after = sum(1 for p in a.battlefield if p.name == "Espiritu")
+    assert after > before
+
+
+# -- Kang drena con la 2da carta robada del turno, sin atacar (P1.3) -------- #
+def test_kang_drains_on_second_draw_without_attacking():
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = _game([a, b])
+    g.move_to_battlefield(cards.Kang(), a)
+    a.draws_this_turn = 1  # ya se robo la carta natural del turno
+    b_life = b.life
+    a_life = a.life
+    cards.NightsWhisper().on_cast_resolve(g, a, [])  # roba 2 (2da y 3ra del turno)
+    g.resolve_stack()
+    assert b.life == b_life - 1   # drenaje por la 2da carta
+    assert a.life == a_life + 1   # Kang gana esa vida
+
+
+# -- Kang connive: +1/+1 solo si lo descartado no era tierra (P1.3) --------- #
+def test_kang_connive_counter_only_on_nonland_discard():
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = _game([a, b])
+    kang = g.move_to_battlefield(cards.Kang(), a)
+    # forzamos la mano: solo tierras -> descarta tierra -> sin contador
+    a.hand = [land("Swamp", [B], basic=True)]
+    a.library = [creature("X", "1B", 1, 1)]  # lo que robe el connive
+    cards._connive(g, kang)
+    assert kang.counters.get("+1/+1", 0) == 0
+
+
+# -- dobladores / Hardened Scales modifican los +1/+1 (P1.2) --------------- #
+def test_counter_modifiers():
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = _game([a, b])
+    creat = g.move_to_battlefield(creature("Bicho", "1G", 1, 1), a)
+    # sin modificadores: +1
+    g.add_counters(creat, "+1/+1", 1)
+    assert creat.counters["+1/+1"] == 1
+    # Hardened Scales: +1 extra -> el proximo +1 pone 2
+    g.move_to_battlefield(cards.HardenedScales(), a)
+    g.add_counters(creat, "+1/+1", 1)
+    assert creat.counters["+1/+1"] == 3
+    # Branching Evolution: duplica -> (1+1)*2 = 4 mas
+    g.move_to_battlefield(cards.BranchingEvolution(), a)
+    g.add_counters(creat, "+1/+1", 1)
+    assert creat.counters["+1/+1"] == 7
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
