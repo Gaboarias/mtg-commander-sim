@@ -1,0 +1,23 @@
+{
+  "name": "mtg-commander-sim",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Motor de simulacion de Magic: The Gathering (Commander) con interfaz web.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^15.5.25",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "@types/react": "19.0.2",
+    "@types/react-dom": "19.0.2",
+    "typescript": "5.7.2"
+  }
+}

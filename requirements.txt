@@ -1,0 +1,2 @@
+# El motor es Python puro (solo stdlib). Sin dependencias externas.
+# Este archivo marca las funciones de /api como runtime de Python en Vercel.

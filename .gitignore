@@ -1,0 +1,15 @@
+# deps
+node_modules/
+# next
+.next/
+out/
+next-env.d.ts
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+# env / vercel
+.env*
+.vercel
+# os
+.DS_Store
