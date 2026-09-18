@@ -286,3 +286,45 @@ footer { color: var(--muted); font-size: .82rem; margin-top: 34px; line-height: 
 a { color: var(--accent-2); text-decoration: none; }
 a:hover { text-decoration: underline; }
 textarea:focus { border-color: var(--accent-2) !important; }
+
+/* --- Reproductor de partida (Fase 1) --------------------------------- */
+.scrub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.scrub .range { flex: 1; min-width: 160px; accent-color: var(--accent); }
+.scrub .ghost, .scrub .go { padding: 6px 12px; }
+.now { display: flex; align-items: center; gap: 10px; margin: 4px 0 12px; flex-wrap: wrap; }
+.turnbadge { background: var(--accent); color: #1a1508; font-weight: 700; border-radius: 999px; padding: 3px 12px; font-size: .82rem; white-space: nowrap; }
+.now .label { color: var(--text); }
+
+.seats { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+.seats[data-n="1"], .seats[data-n="2"] { grid-template-columns: 1fr 1fr; }
+.seats[data-n="3"] { grid-template-columns: repeat(3, 1fr); }
+.seats[data-n="4"] { grid-template-columns: repeat(2, 1fr); }
+.seats[data-n="5"], .seats[data-n="6"] { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 720px) { .seats, .seats[data-n] { grid-template-columns: 1fr; } }
+
+.seat { border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); padding: 10px 12px; }
+.seat.active { border-color: rgba(216,178,58,.7); box-shadow: 0 0 0 1px rgba(216,178,58,.4); }
+.seat.dead { opacity: .45; }
+.seat-head { display: flex; justify-content: space-between; align-items: baseline; }
+.seat-name { font-weight: 700; }
+.life { font-variant-numeric: tabular-nums; font-weight: 700; }
+.life.low { color: #e0684f; }
+.seat-meta { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: .8rem; margin: 4px 0 8px; }
+.empty { font-size: .8rem; margin: 6px 0; }
+
+.row-cards { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.row-cards.lands { opacity: .9; }
+.cardmini { width: 58px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); background: var(--panel); transition: transform .15s; position: relative; }
+.cardmini.tapped { transform: rotate(9deg); }
+.cardmini.atk { box-shadow: 0 0 0 2px #e0684f; }
+.cardmini .art { height: 42px; background-size: cover; background-position: center; }
+.cardmini .art.ph { display: flex; align-items: center; justify-content: center; text-align: center; padding: 2px; }
+.cardmini .art.ph span { font-size: .5rem; line-height: 1.05; color: var(--text); overflow: hidden; max-height: 100%; }
+.cardmini .art.ph.land { background: linear-gradient(160deg, #3a5a3a, #24201a); }
+.cardmini .art.ph.crea { background: linear-gradient(160deg, #4a3a5a, #24201a); }
+.cardmini .art.ph.other { background: linear-gradient(160deg, #5a4a3a, #24201a); }
+.cardmini .cm-name { font-size: .5rem; padding: 2px 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.cardmini .cm-pt { position: absolute; bottom: 14px; right: 2px; background: rgba(0,0,0,.75); color: #fff; font-size: .55rem; font-weight: 700; padding: 0 3px; border-radius: 3px; }
+.cardmini .cm-pt .dmg { color: #ff9a86; }
+.cardmini .cm-counter { position: absolute; top: 2px; left: 2px; background: var(--accent); color: #1a1508; font-size: .5rem; font-weight: 700; padding: 0 3px; border-radius: 3px; }
+.win-line { margin-top: 12px; font-size: 1.05rem; }

@@ -389,7 +389,7 @@ class Game:
     SELF_SCOPED = {"upkeep", "end_step", "draw", "landfall", "cast", "begin_combat"}
 
     def __init__(self, players: list, seed: int = 0, max_turns: int = 60,
-                 log: bool = False, mulligan: bool = False):
+                 log: bool = False, mulligan: bool = False, trace: bool = False):
         self.players = players
         self.rng = random.Random(seed)
         self.max_turns = max_turns
@@ -399,11 +399,15 @@ class Game:
         self.active_index = 0
         self.stack: list = []
         self._in_priority = False    # evita recursion al lanzar en respuesta
+        self.trace_enabled = trace   # graba snapshots del estado (replay visual)
+        self.trace: list = []
         for p in players:
             p.setup(self.rng)
         if mulligan:
             for p in players:
                 self._mulligan(p)
+        if self.trace_enabled:
+            self._snapshot("inicio de la partida")
 
     # -- mulligan (regla de Londres, P2.5) -------------------------------- #
     def _mulligan(self, p: "Player", max_mulls: int = 3):
@@ -443,6 +447,51 @@ class Game:
         self.log_lines.append(line)
         if self.log_enabled:
             print(line)
+        if self.trace_enabled:
+            self._snapshot(msg)
+
+    # -- traza para replay visual (Fase 1) -------------------------------- #
+    def _snapshot(self, label: str):
+        """Guarda un estado serializable de la mesa en el momento de `label`.
+        Se dispara desde log(): cada linea de relato queda emparejada con el
+        tablero resultante, listo para reproducir paso a paso."""
+        self.trace.append({
+            "turn": self.turn,
+            "active": self.active_index,
+            "label": label,
+            "stack": [getattr(o.source, "name", "?") for o in self.stack],
+            "players": [self._player_state(p) for p in self.players],
+        })
+
+    def _perm_state(self, pm: "Permanent") -> dict:
+        creature = pm.is_creature()
+        return {
+            "uid": pm.uid,
+            "name": pm.name,
+            "tapped": pm.tapped,
+            "power": pm.power if creature else None,
+            "toughness": pm.toughness if creature else None,
+            "damage": pm.damage,
+            "counters": {k: v for k, v in pm.counters.items() if v},
+            "is_land": pm.card.is_land(),
+            "is_creature": creature,
+            "is_token": pm.is_token,
+            "attacking": bool(pm.attacking),
+            "sick": pm.summoning_sick,
+        }
+
+    def _player_state(self, p: "Player") -> dict:
+        return {
+            "name": p.name,
+            "life": p.life,
+            "lost": p.lost,
+            "hand": len(p.hand),
+            "library": len(p.library),
+            "commander": [c.name for c in p.command],
+            "cmdr_tax": p.cmdr_tax,
+            "graveyard": [c.name for c in p.graveyard],
+            "battlefield": [self._perm_state(pm) for pm in p.battlefield],
+        }
 
     # -- helpers de jugadores -------------------------------------------- #
     def alive(self) -> list:

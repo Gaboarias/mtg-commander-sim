@@ -284,6 +284,23 @@ def test_build_card_from_scryfall_data():
     assert c.identity() == {"W"}
 
 
+def test_trace_records_serializable_steps():
+    # Fase 1: con trace=True el motor graba snapshots del estado por evento.
+    import json
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = Game([a, b], seed=1, max_turns=8, trace=True)
+    g.play()
+    assert len(g.trace) > 0
+    step = g.trace[0]
+    assert step["label"]  # inicio de la partida
+    assert len(step["players"]) == 2
+    p0 = step["players"][0]
+    assert set(p0) >= {"name", "life", "hand", "library", "commander",
+                       "graveyard", "battlefield"}
+    json.dumps(g.trace)   # debe ser serializable
+
+
 def test_build_split_card_uses_front_face():
     # split/DFC: type_line y mana_cost vienen combinados con '//'; hay que usar
     # la cara frontal (castable), sin perder el nombre completo.

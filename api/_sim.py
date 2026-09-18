@@ -281,6 +281,55 @@ def match(specs, n=120, level="intermedio"):
             "notes": notes, "games": games}
 
 
+def _art_url(card):
+    """Saca la mejor URL de arte de un dict de Scryfall (o de su cara frontal)."""
+    iu = card.get("image_uris") or {}
+    if not iu and card.get("card_faces"):
+        iu = (card["card_faces"][0].get("image_uris") or {})
+    return iu.get("art_crop") or iu.get("normal") or iu.get("small")
+
+
+def _card_images(names):
+    """{nombre: url_de_arte} para los nombres que existan en Scryfall. Las cartas
+    caseras de los ejemplos no resuelven -> el front usa un placeholder."""
+    names = [n for n in names if n]
+    if _scry is None or not names:
+        return {}
+    data = _scry.resolve_many(names)
+    out = {}
+    for n in names:
+        card = data.get(_scry._norm(n))
+        if card:
+            url = _art_url(card)
+            if url:
+                out[n] = url
+    return out
+
+
+def replay(specs, seed=0, level="intermedio"):
+    """Juega UNA partida con la traza activa y devuelve los pasos para el
+    reproductor visual (Fase 1) + un mapa de arte por carta."""
+    deck_defs, max_turns = _build_deck_defs(specs)
+    players = run.build_players_from_defs(deck_defs, level=_lvl(level))
+    g = Game(players, seed=int(seed), max_turns=max_turns, trace=True)
+    winner = g.play()
+
+    names = set()
+    for step in g.trace:
+        for pl in step["players"]:
+            names.update(pl["commander"])
+            names.update(pl["graveyard"])
+            for pm in pl["battlefield"]:
+                names.add(pm["name"])
+    return {
+        "players": [p.name for p in players],
+        "winner": winner,
+        "turns": g.turn,
+        "steps": g.trace,
+        "images": _card_images(names),
+    }
+
+
 def match_log(specs, level="intermedio"):
     """Juega UNA partida de la mesa y devuelve el relato turno a turno."""
     deck_defs, max_turns = _build_deck_defs(specs)
