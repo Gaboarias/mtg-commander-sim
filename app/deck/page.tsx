@@ -117,9 +117,17 @@ export default function DeckPage() {
     return lines.join("\n");
   }
 
+  function deckColors(): string[] {
+    const order = ["W", "U", "B", "R", "G"];
+    const set = new Set<string>();
+    (resolved?.commander?.colors || []).forEach((c) => set.add(c));
+    resolved?.cards.forEach((c) => (c.colors || []).forEach((x) => set.add(x)));
+    return order.filter((c) => set.has(c));
+  }
+
   function onSaveDeck() {
     const name = deckName.trim() || resolved?.commander_name || "Mi deck";
-    setSavedDecks(saveDeck(name, currentDeckText()));
+    setSavedDecks(saveDeck(name, currentDeckText(), deckColors()));
     setDeckName("");
     setJustSaved(name);
     setTimeout(() => setJustSaved(null), 4000);

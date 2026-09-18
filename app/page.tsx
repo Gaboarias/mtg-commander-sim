@@ -11,11 +11,18 @@ type RegDeck = { key: string; commander: string; identity: string[] };
 type MatchSpec =
   | { kind: "registered"; key: string; name: string }
   | { kind: "custom"; name: string; text: string };
-type Pickable = { id: string; label: string; sub: string; spec: MatchSpec; mine: boolean };
+type Pickable = { id: string; label: string; tag: string; colors: string[]; spec: MatchSpec; mine: boolean };
 type Res = { deck: string; wins: number; pct: number };
 
-function idColor(ids: string[]) {
-  return ids.join(" / ");
+function Pips({ ids }: { ids: string[] }) {
+  if (!ids || ids.length === 0) return null;
+  return (
+    <>
+      {ids.map((c) => (
+        <span key={c} className={`pip pip-${c}`}>{c}</span>
+      ))}
+    </>
+  );
 }
 
 export default function Home() {
@@ -32,7 +39,8 @@ export default function Home() {
     const mine: Pickable[] = listDecks().map((d: SavedDeck) => ({
       id: "mine:" + d.id,
       label: d.name,
-      sub: "mi deck",
+      tag: "mi deck",
+      colors: d.colors || [],
       spec: { kind: "custom", name: d.name, text: d.text },
       mine: true,
     }));
@@ -43,7 +51,8 @@ export default function Home() {
         const examples: Pickable[] = (d.decks || []).map((x: RegDeck) => ({
           id: "reg:" + x.key,
           label: x.commander,
-          sub: idColor(x.identity) + " · ejemplo",
+          tag: "ejemplo",
+          colors: x.identity || [],
           spec: { kind: "registered", key: x.key, name: x.commander },
           mine: false,
         }));
@@ -144,7 +153,9 @@ export default function Home() {
                 {p.mine ? "★ " : ""}
                 {p.label}
               </div>
-              <div className="sub">{p.sub}</div>
+              <div className="sub">
+                <Pips ids={p.colors} /> {p.tag}
+              </div>
             </button>
           ))}
           {pickables.length === 0 && <span className="muted">Cargando…</span>}

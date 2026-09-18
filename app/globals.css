@@ -75,15 +75,15 @@ header p { color: var(--muted); margin: 0 0 8px; line-height: 1.5; }
 .deck-btn .name { font-weight: 600; text-transform: capitalize; }
 .deck-btn .sub { color: var(--muted); font-size: .82rem; margin-top: 3px; }
 
-.pip { display: inline-block; width: 16px; height: 16px; border-radius: 50%;
-  font-size: .68rem; line-height: 16px; text-align: center; margin-right: 3px;
-  color: #111; font-weight: 700; }
-.pip.W { background: var(--w); }
-.pip.U { background: var(--u); color: #fff; }
-.pip.B { background: var(--b); color: #fff; }
-.pip.R { background: var(--r); color: #fff; }
-.pip.G { background: var(--g); color: #fff; }
-.pip.C { background: #b9bec9; }
+.pip { display: inline-block; width: 17px; height: 17px; border-radius: 50%;
+  font-size: .66rem; line-height: 17px; text-align: center; margin-right: 3px;
+  font-weight: 800; box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+.pip-W { background: #f4efe0; color: #3a352a; }
+.pip-U { background: #2f7dd1; color: #fff; }
+.pip-B { background: #4a4351; color: #e7e0ec; }
+.pip-R { background: #d3452f; color: #fff; }
+.pip-G { background: #2f9d5b; color: #06240f; }
+.pip-C { background: #b7bcc6; color: #26292f; }
 
 .row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
 label { color: var(--muted); font-size: .9rem; }

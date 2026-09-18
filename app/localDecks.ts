@@ -8,6 +8,7 @@ export type SavedDeck = {
   id: string;
   name: string;
   text: string; // decklist en texto (Commander + '1 Nombre'), re-resoluble
+  colors?: string[]; // identidad de color (para los pips), ej. ["R","W"]
   updatedAt: number;
 };
 
@@ -42,17 +43,18 @@ export function listDecks(): SavedDeck[] {
   return Array.isArray(decks) ? decks.sort((a, b) => b.updatedAt - a.updatedAt) : [];
 }
 
-export function saveDeck(name: string, text: string, id?: string): SavedDeck[] {
+export function saveDeck(name: string, text: string, colors?: string[], id?: string): SavedDeck[] {
   const decks = listDecks();
   const now = Date.now();
   if (id) {
     const i = decks.findIndex((d) => d.id === id);
-    if (i >= 0) decks[i] = { ...decks[i], name, text, updatedAt: now };
+    if (i >= 0) decks[i] = { ...decks[i], name, text, colors, updatedAt: now };
   } else {
     decks.push({
       id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
       name,
       text,
+      colors,
       updatedAt: now,
     });
   }
