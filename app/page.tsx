@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
-import { listDecks, type SavedDeck } from "./localDecks";
+import { listDecks, removeDeck, type SavedDeck } from "./localDecks";
 
 const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6"];
 
@@ -73,6 +73,16 @@ export default function Home() {
         setSelected(mine.slice(0, 2).map((p) => p.id));
       });
   }, []);
+
+  function deleteMine(id: string, label: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!window.confirm(`¿Borrar el deck "${label}" de este navegador?`)) return;
+    removeDeck(id.replace(/^mine:/, ""));
+    setPickables((ps) => ps.filter((x) => x.id !== id));
+    setSelected((s) => s.filter((x) => x !== id));
+    setMineCount((c) => Math.max(0, c - 1));
+  }
 
   function toggle(id: string) {
     setSelected((s) =>
@@ -187,6 +197,17 @@ export default function Home() {
               <div className="sub">
                 <Pips ids={p.colors} /> {p.tag}
               </div>
+              {p.mine && (
+                <span
+                  className="del"
+                  role="button"
+                  aria-label={`Borrar ${p.label}`}
+                  title="Borrar este deck"
+                  onClick={(e) => deleteMine(p.id, p.label, e)}
+                >
+                  ✕
+                </span>
+              )}
             </button>
           ))}
           {pickables.length === 0 && <span className="muted">Cargando…</span>}

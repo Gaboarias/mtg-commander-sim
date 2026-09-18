@@ -178,8 +178,26 @@ header p { color: var(--muted); margin: 0 0 8px; max-width: 62ch; }
   padding: 14px 16px;
   cursor: pointer;
   text-align: left;
+  position: relative;
   transition: transform .12s ease, border-color .18s, box-shadow .18s, background .18s;
 }
+.deck-btn .del {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: .8rem;
+  line-height: 1;
+  color: var(--muted);
+  opacity: .55;
+  transition: opacity .15s, background .15s, color .15s;
+}
+.deck-btn .del:hover { opacity: 1; color: #fff; background: rgba(200,60,60,.85); }
 .deck-btn:hover { border-color: rgba(91,134,255,.5); transform: translateY(-2px); box-shadow: var(--shadow); }
 .deck-btn:active { transform: translateY(0); }
 .deck-btn.on {
