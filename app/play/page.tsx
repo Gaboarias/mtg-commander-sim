@@ -72,6 +72,8 @@ def act(kind, arg_json):
     elif kind == 'respond': g.respond(a.get('i'), a.get('target_uid'))
     elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
     return json.dumps(g.state())
+def export_game():
+    return json.dumps(_IG['g'].export())
 `;
 
 export default function Play() {
@@ -201,6 +203,29 @@ export default function Play() {
 
   function togglePick(uid: number) {
     setPicked((s) => { const n = new Set(s); n.has(uid) ? n.delete(uid) : n.add(uid); return n; });
+  }
+
+  function download(name: string, text: string, type: string) {
+    const blob = new Blob([text], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.click();
+    URL.revokeObjectURL(url);
+  }
+  function exportGame(fmt: "json" | "txt") {
+    const py = pyRef.current;
+    if (!py) return;
+    const fn = py.globals.get("export_game");
+    const raw = fn();
+    fn.destroy?.();
+    const data = JSON.parse(raw);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    if (fmt === "json") {
+      download(`partida-${stamp}.json`, JSON.stringify(data, null, 2), "application/json");
+    } else {
+      const head = `Partida — ${data.players.join(" vs ")}\nGanador: ${data.winner || "sin definir"} · ${data.turns} turnos\n\n`;
+      download(`partida-${stamp}.txt`, head + (data.log || []).join("\n"), "text/plain");
+    }
   }
 
   // trae arte + texto real (Scryfall) para las cartas que van apareciendo
@@ -497,6 +522,11 @@ export default function Play() {
           <div className="card">
             <h2>Relato</h2>
             <div className="log">{(state.log || []).join("\n")}</div>
+            <div className="act-block" style={{ marginTop: 10 }}>
+              <span className="act-label">Exportar todas las jugadas:</span>
+              <button className="ghost" onClick={() => exportGame("json")}>⬇ JSON</button>
+              <button className="ghost" onClick={() => exportGame("txt")}>⬇ Texto</button>
+            </div>
           </div>
         </>
       )}

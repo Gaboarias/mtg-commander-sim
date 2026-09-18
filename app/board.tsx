@@ -88,8 +88,16 @@ export function Seat({
         </motion.span>
       </div>
       <div className="seat-meta">
-        <span>✋ {p.hand}</span>
-        <span>📚 {p.library}</span>
+        <motion.span key={"h" + p.hand} title="cartas en mano"
+          initial={reduce ? false : { scale: 1.35, color: "var(--accent)" }}
+          animate={{ scale: 1, color: "var(--muted)" }} transition={{ duration: 0.5 }}>
+          ✋ {p.hand}
+        </motion.span>
+        <motion.span key={"l" + p.library} title="cartas en biblioteca"
+          initial={reduce ? false : { scale: 1.35, color: "var(--accent)" }}
+          animate={{ scale: 1, color: "var(--muted)" }} transition={{ duration: 0.5 }}>
+          📚 {p.library}
+        </motion.span>
         <span>⚰ {p.graveyard.length}</span>
         <span title="comandante">👑 {p.commander.join(", ") || "—"}</span>
         {maxCmdr > 0 && (

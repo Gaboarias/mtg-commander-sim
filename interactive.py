@@ -388,6 +388,16 @@ class InteractiveGame:
                 "can_attack": self._my_turn() and not self.attacked,
                 "can_end": self._my_turn()}
 
+    def export(self):
+        """Relato COMPLETO de la partida + resumen, para descargar y analizar."""
+        return {
+            "players": [p.name for p in self.players],
+            "human": self.players[self.human_index].name,
+            "winner": self.winner,
+            "turns": self.g.turn,
+            "log": list(self.g.log_lines),
+        }
+
     def _defense_state(self):
         """Datos de la ventana de defensa: quién me ataca, con qué puedo bloquear
         y qué instantáneos puedo lanzar en respuesta."""
