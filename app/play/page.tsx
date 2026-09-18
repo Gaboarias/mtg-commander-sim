@@ -102,25 +102,46 @@ export default function Play() {
   const [targeting, setTargeting] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; targets: TargetOpt[] } | null>(null);
   const [bottom, setBottom] = useState<number[]>([]);  // cartas al fondo tras mulligan
 
-  useEffect(() => {
-    const mine: Pickable[] = listDecks().map((d: SavedDeck) => ({
+  const examplesRef = useRef<Pickable[]>([]);
+
+  function myPickables(): Pickable[] {
+    return listDecks().map((d: SavedDeck) => ({
       id: "mine:" + d.id, label: d.name, tag: "mi deck",
       spec: { kind: "custom", name: d.name, text: d.text }, mine: true,
     }));
+  }
+
+  // arma la lista completa (mis decks + ejemplos), preservando la selección
+  function rebuild(examples: Pickable[]) {
+    const mine = myPickables();
+    const all = [...mine, ...examples];
+    setPickables(all);
+    setMineId((prev) => (all.some((p) => p.id === prev) ? prev : (mine[0] || all[0])?.id || ""));
+    setFoeIds((prev) => {
+      const keep = prev.filter((id) => all.some((p) => p.id === id));
+      if (keep.length > 0) return keep;
+      const first = all.find((p) => p.id !== (mine[0] || all[0])?.id);
+      return first ? [first.id] : [];
+    });
+  }
+
+  useEffect(() => {
     fetch("/api/catalog").then((r) => r.json()).then((d) => {
-      const examples: Pickable[] = (d.decks || []).map((x: RegDeck) => ({
+      examplesRef.current = (d.decks || []).map((x: RegDeck) => ({
         id: "reg:" + x.key, label: x.commander, tag: x.theme || "ejemplo",
         spec: { kind: "registered", key: x.key, name: x.commander }, mine: false,
       }));
-      const all = [...mine, ...examples];
-      setPickables(all);
-      setMineId((mine[0] || all[0])?.id || "");
-      const foe = all.find((p) => p.id !== (mine[0] || all[0])?.id);
-      if (foe) setFoeIds([foe.id]);
-    }).catch(() => {
-      setPickables(mine);
-      if (mine[0]) setMineId(mine[0].id);
-    });
+      rebuild(examplesRef.current);
+    }).catch(() => rebuild([]));
+    // volver del editor: refrescar mis decks guardados al recuperar el foco
+    const refresh = () => { if (document.visibilityState === "visible") rebuild(examplesRef.current); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function ensurePyodide() {
@@ -308,6 +329,14 @@ export default function Play() {
       {!state && (
         <div className="card">
           <h2><span className="step">1</span> Preparar la partida</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Tus decks guardados (★) del <a href="/deck">editor</a> aparecen acá.
+            {pickables.some((p) => p.mine)
+              ? " "
+              : " Todavía no tenés decks guardados: creá y guardá uno en el editor."}
+            <button className="ghost" style={{ padding: "2px 10px", marginLeft: 8 }}
+              onClick={() => rebuild(examplesRef.current)}>↻ Actualizar mis decks</button>
+          </p>
           <div className="row" style={{ flexWrap: "wrap", gap: 14 }}>
             <label>Tu deck&nbsp;
               <select value={mineId} onChange={(e) => setMineId(e.target.value)}
