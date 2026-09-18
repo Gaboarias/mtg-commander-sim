@@ -284,6 +284,27 @@ def test_build_card_from_scryfall_data():
     assert c.identity() == {"W"}
 
 
+def test_interactive_manual_turn():
+    # Fase 2: el humano maneja su turno; los rivales juegan solos.
+    import json
+    import interactive
+    import decks
+    defs = [("Tu deck",) + decks.build("marvel"),
+            ("Rival",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    st = ig.state()
+    assert st["phase"] == "main" and st["active"] == 0
+    assert "hand_cards" in st["players"][0]        # el humano ve su mano
+    assert "hand_cards" not in st["players"][1]     # el rival no
+    if st["legal"]["lands"]:
+        st = ig.play_land(st["legal"]["lands"][0]["i"])
+        assert len(st["players"][0]["battlefield"]) >= 1
+    t0 = st["turn"]
+    st = ig.end_turn()                              # corre el turno del rival
+    assert st["turn"] > t0
+    json.dumps(st)                                  # serializable para la web
+
+
 def test_trace_records_serializable_steps():
     # Fase 1: con trace=True el motor graba snapshots del estado por evento.
     import json

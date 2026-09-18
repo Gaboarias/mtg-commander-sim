@@ -829,12 +829,19 @@ class Game:
         return d if isinstance(d, Player) else d.controller
 
     def combat(self, p: "Player"):
-        self.emit("begin_combat", player=p)
-        self.resolve_stack()
+        self._begin_combat(p)
         if not self.opponents(p):
             return
-
         attackers = p.policy.declare_attackers(self, p) if p.policy else []
+        self._resolve_combat(p, attackers)
+
+    def _begin_combat(self, p: "Player"):
+        self.emit("begin_combat", player=p)
+        self.resolve_stack()
+
+    def _resolve_combat(self, p: "Player", attackers: list):
+        """Aplica los atacantes declarados (por la política o por un humano):
+        dispara 'attacks', deja bloquear a los rivales y resuelve el daño."""
         declared = []
         for perm, defender in attackers:
             if not perm.can_attack():
@@ -931,9 +938,9 @@ class Game:
                     self.deal_damage(b, a, b.power, combat=True)
 
     # -- turno ------------------------------------------------------------ #
-    def run_turn(self):
-        p = self.ap()
-
+    def begin_turn(self, p: "Player"):
+        """UNTAP + UPKEEP + DRAW + SBA. Compartido por el turno de la política
+        (run_turn) y por el turno manual de un humano (interactive)."""
         # UNTAP
         for perm in p.battlefield:
             perm.tapped = False
@@ -953,6 +960,25 @@ class Game:
             self.resolve_stack()
         self.sba()
 
+    def end_turn(self, p: "Player"):
+        """END STEP + CLEANUP + SBA. Compartido por run_turn y el turno manual."""
+        self.emit("end_step", player=p)
+        self.resolve_stack()
+        for perm in p.battlefield:
+            perm.damage = 0
+        while len(p.hand) > 7:
+            if p.policy and hasattr(p.policy, "choose_discard"):
+                card = p.policy.choose_discard(self, p)
+            else:
+                card = p.hand[-1]
+            p.hand.remove(card)
+            p.graveyard.append(card)
+            self.emit("to_graveyard", player=p, card=card)
+        self.sba()
+
+    def run_turn(self):
+        p = self.ap()
+        self.begin_turn(p)
         if p.lost:
             return
 
@@ -973,23 +999,7 @@ class Game:
             self.resolve_stack()
         self.sba()
 
-        # END STEP
-        self.emit("end_step", player=p)
-        self.resolve_stack()
-
-        # CLEANUP
-        for perm in p.battlefield:
-            perm.damage = 0
-        while len(p.hand) > 7:
-            # descarte: delega en la politica si puede
-            if p.policy and hasattr(p.policy, "choose_discard"):
-                card = p.policy.choose_discard(self, p)
-            else:
-                card = p.hand[-1]
-            p.hand.remove(card)
-            p.graveyard.append(card)
-            self.emit("to_graveyard", player=p, card=card)
-        self.sba()
+        self.end_turn(p)
 
     def play(self) -> str:
         """Corre la partida. Devuelve el nombre del ganador o 'EMPATE'."""
