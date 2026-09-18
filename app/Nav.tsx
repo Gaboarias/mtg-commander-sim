@@ -2,11 +2,37 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 
 const LINKS = [
   { href: "/", label: "Simulador" },
   { href: "/deck", label: "Editor de decks" },
 ];
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState("dark");
+  useEffect(() => {
+    setTheme(document.documentElement.dataset.theme || "dark");
+  }, []);
+  function toggle() {
+    const next = (document.documentElement.dataset.theme || "dark") === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem("mtgsim:theme", next);
+    } catch {}
+    setTheme(next);
+  }
+  return (
+    <button
+      className="theme-toggle"
+      onClick={toggle}
+      aria-label="Cambiar tema"
+      title={theme === "light" ? "Modo oscuro" : "Modo claro"}
+    >
+      {theme === "light" ? "🌙" : "☀️"}
+    </button>
+  );
+}
 
 export default function Nav() {
   const path = usePathname();
@@ -30,6 +56,7 @@ export default function Nav() {
               </Link>
             );
           })}
+          <ThemeToggle />
         </div>
       </div>
     </nav>

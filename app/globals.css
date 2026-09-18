@@ -1,18 +1,15 @@
 :root {
-  --bg: #0e1015;
-  --panel: #171a22;
-  --panel-2: #1e222c;
-  --border: #2a2f3a;
-  --text: #e7e9ee;
-  --muted: #9aa2b1;
-  --accent: #d8b23a;
-  --accent-2: #5b86ff;
-  --w: #e9e6d8;
-  --u: #4f8bd6;
-  --b: #7a6a8a;
-  --r: #d05a4a;
-  --g: #4fae6a;
-  /* paleta categorica validada (dataviz, modo oscuro) para las barras */
+  /* --- tema OSCURO (por defecto), tono pergamino nocturno MTG --- */
+  --bg: #12100c;
+  --panel: #1c1913;
+  --panel-2: #24201a;
+  --border: #3a3324;
+  --text: #ece3cf;
+  --muted: #a99d84;
+  --accent: #d8b23a;      /* oro */
+  --accent-2: #6f95ff;
+  --font-display: "Cinzel", Georgia, "Times New Roman", serif;
+  /* paleta categorica validada (dataviz, modo OSCURO) para las barras */
   --s1: #3987e5;
   --s2: #d95926;
   --s3: #199e70;
@@ -21,8 +18,34 @@
   --s6: #008300;
   --s-none: #898781;
   --radius: 16px;
-  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.55);
-  --ring: 0 0 0 1px rgba(255,255,255,.04);
+  --shadow: 0 1px 2px rgba(0,0,0,.45), 0 10px 28px -14px rgba(0,0,0,.6);
+  --ring: 0 0 0 1px rgba(216,178,58,.07);
+  --page-glow: radial-gradient(1100px 520px at 50% -8%, rgba(216,178,58,.10), transparent 60%),
+               radial-gradient(820px 480px at 88% 0%, rgba(111,149,255,.07), transparent 55%);
+}
+
+:root[data-theme="light"] {
+  /* --- tema CLARO: pergamino, no blanco --- */
+  --bg: #e8dcc0;
+  --panel: #f4ecd8;
+  --panel-2: #ece0c4;
+  --border: #cbb98f;
+  --text: #302819;
+  --muted: #6f6145;
+  --accent: #8a5a12;      /* bronce/oro oscuro para contraste */
+  --accent-2: #2f5aa8;
+  /* paleta categorica validada (dataviz, modo CLARO) para las barras */
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --s4: #eda100;
+  --s5: #e87ba4;
+  --s6: #008300;
+  --s-none: #8a8375;
+  --shadow: 0 1px 2px rgba(80,60,20,.15), 0 10px 26px -16px rgba(80,60,20,.35);
+  --ring: 0 0 0 1px rgba(120,90,20,.08);
+  --page-glow: radial-gradient(1100px 520px at 50% -8%, rgba(138,90,18,.10), transparent 60%),
+               radial-gradient(820px 480px at 88% 0%, rgba(47,90,168,.06), transparent 55%);
 }
 
 * { box-sizing: border-box; }
@@ -31,14 +54,12 @@ html, body {
   margin: 0;
   padding: 0;
   color: var(--text);
-  background:
-    radial-gradient(1100px 520px at 50% -8%, rgba(91,134,255,.10), transparent 60%),
-    radial-gradient(800px 480px at 90% 0%, rgba(216,178,58,.06), transparent 55%),
-    var(--bg);
+  background: var(--page-glow), var(--bg);
   background-attachment: fixed;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   line-height: 1.5;
+  transition: background-color .2s, color .2s;
 }
 
 /* ---- nav ---- */
@@ -68,7 +89,7 @@ html, body {
   gap: 8px;
   letter-spacing: -0.01em;
 }
-.nav-brand span { font-size: .98rem; }
+.nav-brand span { font-size: 1rem; font-family: var(--font-display); letter-spacing: .02em; }
 .nav-links { display: flex; gap: 6px; }
 .nav-link {
   color: var(--muted);
@@ -97,16 +118,35 @@ html, body {
 
 header { margin-bottom: 8px; }
 header h1 {
-  font-size: 2.1rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 2.15rem;
   margin: 0 0 10px;
-  letter-spacing: -0.025em;
-  line-height: 1.1;
-  background: linear-gradient(180deg, #fff, #c4c8d2);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  letter-spacing: 0.01em;
+  line-height: 1.12;
+  color: var(--text);
 }
 header p { color: var(--muted); margin: 0 0 8px; max-width: 62ch; }
+
+/* badge circular de paso */
+.step {
+  display: inline-grid; place-items: center;
+  width: 27px; height: 27px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #f0d267, var(--accent) 60%, #a9821c);
+  color: #211a06; font-weight: 800; font-size: .86rem; flex: none;
+  box-shadow: 0 2px 6px -2px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.25);
+  font-family: var(--font-display);
+}
+
+/* boton de tema en la nav */
+.theme-toggle {
+  background: rgba(255,255,255,.05); color: var(--text);
+  border: 1px solid var(--border); border-radius: 999px;
+  width: 34px; height: 34px; cursor: pointer; font-size: .95rem;
+  display: inline-grid; place-items: center;
+  transition: background .18s, border-color .18s;
+}
+.theme-toggle:hover { background: rgba(216,178,58,.15); border-color: var(--accent); }
 
 /* ---- cards ---- */
 .card {
@@ -118,12 +158,14 @@ header p { color: var(--muted); margin: 0 0 8px; max-width: 62ch; }
   box-shadow: var(--shadow), var(--ring);
 }
 .card h2 {
-  font-size: 1.06rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.12rem;
   margin: 0 0 16px;
-  letter-spacing: -0.01em;
+  letter-spacing: .01em;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 /* ---- deck picker ---- */

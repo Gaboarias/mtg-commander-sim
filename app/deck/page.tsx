@@ -429,7 +429,7 @@ export default function DeckPage() {
       </div>
 
       <div className="card">
-        <h2>1 · Traé tu lista</h2>
+        <h2><span className="step">1</span> Traé tu lista</h2>
         <div className="row" style={{ marginBottom: 10, flexWrap: "wrap" }}>
           <span className="muted">Empezar desde:</span>
           {precons.length > 0 ? (
@@ -561,7 +561,7 @@ export default function DeckPage() {
 
       {resolved && (
         <div className="card">
-          <h2>2 · Revisá y editá</h2>
+          <h2><span className="step">2</span> Revisá y editá</h2>
           {resolved.commander ? (
             <p>
               <strong>Comandante:</strong> {resolved.commander.name}{" "}
@@ -634,7 +634,7 @@ export default function DeckPage() {
 
       {resolved && !noStorage && (
         <div className="card">
-          <h2>3 · Guardar en mis decks</h2>
+          <h2><span className="step">3</span> Guardar en mis decks</h2>
           <div className="row">
             <input
               value={deckName}

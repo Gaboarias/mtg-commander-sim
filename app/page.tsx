@@ -136,7 +136,7 @@ export default function Home() {
       </header>
 
       <div className="card">
-        <h2>1 · Elegí los decks ({selected.length}/6)</h2>
+        <h2><span className="step">1</span> Elegí los decks ({selected.length}/6)</h2>
         {mineCount === 0 && (
           <p className="muted">
             Todavía no guardaste decks. Podés usar los de ejemplo, o crear el tuyo
@@ -164,7 +164,7 @@ export default function Home() {
       </div>
 
       <div className="card">
-        <h2>2 · Jugar</h2>
+        <h2><span className="step">2</span> Jugar</h2>
         <div className="row">
           <label>
             Nivel de la IA&nbsp;
