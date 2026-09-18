@@ -52,6 +52,16 @@ Hoy el disparador roba 1 y descarta la ultima carta de la mano. Deberia:
 
 ## P2 — Reglas que faltan
 
+> **Estado: P2.1–P2.5 IMPLEMENTADAS** (ver tests en `tests/test_engine.py`).
+> - P2.1 ventana de prioridad en `Game.cast` + `policy.respond` + `Counterspell`.
+> - P2.2 `Game.can_target`/`legal_creature_targets`, hexproof/ward, removal dirigido.
+> - P2.3 lealtad + `activate_loyalty` (una por turno) + daño resta lealtad + SBA a 0.
+>   En esta build Quintorius sigue siendo comandante criatura (motor de Espíritus
+>   del P1.1); el planeswalker con `-4` se agregó como carta aparte
+>   (`Quintorius, Loremaster`). Falta pulir el ataque dirigido a PWs por la IA.
+> - P2.4 `Permanent.power/toughness` suman `static_mod` (anthems/capas).
+> - P2.5 `Game(mulligan=True)` regla de Londres + `policy.should_mulligan`.
+
 ### P2.1 Prioridad e instantaneos
 Hoy los instantaneos solo se lanzan en fase principal. Falta una ventana de
 respuesta tras poner algo en la pila y antes de declarar bloqueadores.

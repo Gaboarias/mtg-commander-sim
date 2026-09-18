@@ -597,10 +597,14 @@ class Game:
                 key = source.name
                 target.cmdr_damage[key] = target.cmdr_damage.get(key, 0) + amount
         elif isinstance(target, Permanent):
-            deathtouch = isinstance(source, Permanent) and source.has("deathtouch")
-            target.damage += amount
-            if deathtouch and amount > 0:
-                target.damage = max(target.damage, target.toughness)
+            if "planeswalker" in target.card.types:
+                # el dano a un planeswalker le quita lealtad (P2.3)
+                target.counters["loyalty"] = target.counters.get("loyalty", 0) - amount
+            else:
+                deathtouch = isinstance(source, Permanent) and source.has("deathtouch")
+                target.damage += amount
+                if deathtouch and amount > 0:
+                    target.damage = max(target.damage, target.toughness)
             if isinstance(source, Permanent) and source.has("lifelink"):
                 source.controller.life += amount
 
@@ -629,6 +633,13 @@ class Game:
                         continue
                     if perm.toughness <= 0 or perm.damage >= perm.toughness:
                         self.to_graveyard(perm, "sba")
+                        changed = True
+            # planeswalkers sin lealtad
+            for p in self.players:
+                for perm in list(p.battlefield):
+                    if ("planeswalker" in perm.card.types
+                            and perm.counters.get("loyalty", 0) <= 0):
+                        self.to_graveyard(perm, "loyalty 0")
                         changed = True
             # regla de legendarios
             for p in self.players:
@@ -719,6 +730,28 @@ class Game:
                 self.sba()
         finally:
             self._in_priority = False
+
+    def activate_loyalty(self, perm: Permanent, index: int) -> bool:
+        """Activa una habilidad de lealtad (P2.3). Una por turno. `index`
+        selecciona la habilidad en card.loyalty_abilities = ((coste, efecto),..)
+        con coste +N (sube) o -N (baja, exige lealtad suficiente)."""
+        if perm.activated_this_turn or "planeswalker" not in perm.card.types:
+            return False
+        abilities = perm.card.loyalty_abilities
+        if not abilities or not (0 <= index < len(abilities)):
+            return False
+        cost, eff = abilities[index]
+        loy = perm.counters.get("loyalty", 0)
+        if cost < 0 and loy + cost < 0:
+            return False
+        perm.counters["loyalty"] = loy + cost
+        perm.activated_this_turn = True
+        self.log(f"{perm.controller.name}: {perm.name} activa {cost:+d} "
+                 f"(lealtad {perm.counters['loyalty']})")
+        if eff:
+            eff(self, perm.controller, perm)
+        self.sba()
+        return True
 
     def play_land(self, player: "Player", card: Card) -> bool:
         if player.lands_played >= 1:
@@ -833,6 +866,7 @@ class Game:
             perm.tapped = False
             perm.summoning_sick = False
             perm.damage = 0
+            perm.activated_this_turn = False
         p.lands_played = 0
         p.draws_this_turn = 0
 

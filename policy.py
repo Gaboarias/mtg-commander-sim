@@ -62,6 +62,9 @@ class Policy:
             if me.can_pay(card.cost):
                 game.cast(me, card, targets=targets)
 
+        # 4) activar planeswalkers (P2.3): una habilidad por turno
+        self._activate_planeswalkers(game, me)
+
     def choose_targets(self, game, me, card):
         """Elige objetivos legales segun el target_spec de la carta."""
         spec = getattr(card, "target_spec", None)
@@ -71,6 +74,21 @@ class Policy:
                 return []
             return [max(pool, key=lambda p: (p.power, p.toughness))]
         return []
+
+    def _activate_planeswalkers(self, game, me):
+        for perm in list(me.battlefield):
+            if "planeswalker" not in perm.card.types or perm.activated_this_turn:
+                continue
+            abils = perm.card.loyalty_abilities
+            if not abils:
+                continue
+            loy = perm.counters.get("loyalty", 0)
+            idx = 0  # por defecto la primera (normalmente el +)
+            # usar el ultimate (coste negativo) si hay lealtad de sobra
+            for i, (cost, _eff) in enumerate(abils):
+                if cost < 0 and loy + cost >= 0 and loy >= 7:
+                    idx = i
+            game.activate_loyalty(perm, idx)
 
     def _maybe_cast_commander(self, game, me):
         on_field = any(p.card is me.commander_card for p in me.battlefield)

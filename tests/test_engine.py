@@ -327,6 +327,38 @@ def test_game_with_mulligan_keeps_seven_and_conserves_cards():
         assert len(p.hand) + len(p.library) == 99   # nada se pierde
 
 
+# -- P2.3 planeswalker: lealtad, activacion, -4, muerte a 0 ---------------- #
+def test_planeswalker_loyalty_and_minus_four():
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = _game([a, b])
+    pw = g.move_to_battlefield(cards.QuintoriusPlaneswalker(), a)
+    assert pw.counters["loyalty"] == 4          # lealtad inicial
+    # +1 crea Espiritu y sube lealtad
+    assert g.activate_loyalty(pw, 0) is True
+    assert pw.counters["loyalty"] == 5
+    assert any(p.name == "Espiritu" for p in a.battlefield)
+    # una sola activacion por turno
+    assert g.activate_loyalty(pw, 1) is False
+    # nuevo turno: se puede activar el -4
+    pw.activated_this_turn = False
+    b_life = b.life
+    assert g.activate_loyalty(pw, 1) is True     # el -4 existe y se activa
+    assert b.life == b_life - 4                   # 4 a cada oponente
+    assert pw.counters["loyalty"] == 1
+
+
+def test_planeswalker_dies_at_zero_loyalty():
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = _game([a, b])
+    pw = g.move_to_battlefield(cards.QuintoriusPlaneswalker(), a)
+    # el dano de combate le resta lealtad
+    g.deal_damage(None, pw, 4)
+    g.sba()
+    assert pw not in a.battlefield               # 0 lealtad -> al cementerio
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

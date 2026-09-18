@@ -29,7 +29,7 @@ _IMPLEMENTED = [
     cards.Kang, cards.GrayMerchant, cards.GoForTheThroat, cards.NightsWhisper,
     cards.DamnationWipe,
     cards.SolRing, cards.ArcaneSignet, cards.CommandTower,
-    cards.Counterspell,
+    cards.Counterspell, cards.QuintoriusPlaneswalker,
 ]
 
 

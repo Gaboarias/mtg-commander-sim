@@ -62,6 +62,7 @@ def lorehold():
     d.append(cards.CronistaEspectral())
     d.append(cards.MerodeadorDeTumbas())
     d.append(cards.anthem("Estandarte de Basalto", "2W", 1, 1, (W,)))  # P2.4 anthem
+    d.append(cards.QuintoriusPlaneswalker())                           # P2.3 planeswalker
     # criaturas de relleno tematicas
     d.append(creature("Historiador de Guerra", "1R", 2, 2, color_id=(R,)))
     d.append(creature("Cronista Lorehold", "2W", 2, 3, color_id=(W,)))

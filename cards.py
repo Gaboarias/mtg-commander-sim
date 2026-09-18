@@ -54,6 +54,21 @@ def rock(name, cost, colors, tags=("ramp",)):
     )
 
 
+def planeswalker(name, cost, loyalty, abilities, color_id, tags=("engine",)):
+    """Constructor de planeswalker (P2.3). `abilities` = ((coste, efecto), ...)
+    con coste +N/-N y efecto(game, controller, perm)."""
+    return Card(
+        name=name,
+        types={"planeswalker"},
+        cost=parse_cost(cost),
+        loyalty=loyalty,
+        loyalty_abilities=tuple(abilities),
+        supertypes={"legendary"},
+        color_id=set(color_id),
+        tags=set(tags),
+    )
+
+
 def make_token(game, player, name, power, toughness, kw=(), subtypes=()):
     tok = Card(
         name=name,
@@ -214,6 +229,22 @@ def _bag_upkeep(game, perm, **kw):
     if ctrl.graveyard:
         card = next((c for c in ctrl.graveyard if c.is_land()), ctrl.graveyard[0])
         game.leave_graveyard(ctrl, card, dest="exile")
+
+
+def QuintoriusPlaneswalker():
+    """Planeswalker Lorehold (P2.3): +1 crea un Espiritu 3/2; -4 hace 4 a cada
+    oponente. (Es una carta distinta del comandante criatura Quintorius.)"""
+    def plus(game, ctrl, perm):
+        make_token(game, ctrl, "Espiritu", 3, 2)
+        game.log(f"{ctrl.name}: PW crea un Espiritu 3/2")
+
+    def ultimate(game, ctrl, perm):
+        for o in game.opponents(ctrl):
+            game.deal_damage(perm, o, 4)
+        game.log(f"{ctrl.name}: PW -4 hace 4 a cada oponente")
+
+    return planeswalker("Quintorius, Loremaster", "3RW", 4,
+                        ((+1, plus), (-4, ultimate)), (R, W))
 
 
 def BagOfHolding():
