@@ -414,6 +414,36 @@ def test_policy_holds_blockers_under_threat():
     assert len(res2) == 3
 
 
+# -- P4 semillas reproducibles + export JSON ------------------------------- #
+def test_reproducible_seed():
+    import run
+    a = run.one(["lorehold", "kang"], seed=42)
+    b = run.one(["lorehold", "kang"], seed=42)
+    c = run.one(["lorehold", "kang"], seed=43)
+    assert a == b            # misma semilla, mismo ganador
+    # y el log completo tambien coincide
+    g1 = run._build_game(["lorehold", "kang"], seed=42)
+    g2 = run._build_game(["lorehold", "kang"], seed=42)
+    g1.play()
+    g2.play()
+    assert g1.log_lines == g2.log_lines
+    _ = c  # otra semilla puede o no diferir; solo verificamos determinismo
+
+
+def test_export_json(tmp_path=None):
+    import run
+    import os
+    import tempfile
+    import json as _json
+    d = tmp_path or tempfile.mkdtemp()
+    path = os.path.join(str(d), "out.json")
+    out = run.export_json(["lorehold", "kang"], 20, path, full_log=False)
+    assert out["n"] == 20 and sum(out["wins"].values()) == 20
+    with open(path) as f:
+        loaded = _json.load(f)
+    assert len(loaded["games"]) == 20 and "winrate" in loaded
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

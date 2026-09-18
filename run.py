@@ -6,9 +6,16 @@ Uso:
     python3 run.py lorehold kang -n 500    # 500 partidas
     python3 run.py lorehold kang --log     # una partida comentada turno a turno
     python3 run.py --log lorehold kang tricky
+    python3 run.py lorehold kang -n 2000 --jobs 8    # paralelo en 8 procesos
+    python3 run.py lorehold kang -n 500 --json out.json          # exporta resumen
+    python3 run.py lorehold kang -n 50  --json out.json --full-log  # + registro
+
+Semillas reproducibles: `one(keys, seed=i)` da SIEMPRE la misma partida para la
+misma semilla; `many`/`export` usan semillas 0..n-1.
 """
 from __future__ import annotations
 
+import json
 import sys
 from collections import Counter
 
@@ -57,11 +64,32 @@ def many_defs(deck_defs, n=200):
     return wins
 
 
-def many(keys, n=200, verbose=True, mulligan=False):
-    wins = Counter()
-    for i in range(n):
-        winner = one(keys, seed=i, log=False, mulligan=mulligan)
-        wins[winner] += 1
+# --- paralelizacion (P4) -------------------------------------------------- #
+
+def _worker(task):
+    """Worker de multiprocessing: corre una partida y devuelve (seed, winner).
+    Debe ser top-level para poder picklearse."""
+    keys, seed, mulligan = task
+    return seed, one(keys, seed=seed, mulligan=mulligan)
+
+
+def _run_many(keys, n, mulligan=False, jobs=1):
+    """Corre n partidas (semillas 0..n-1). jobs>1 usa multiprocessing.
+    Devuelve lista de (seed, winner) en orden de semilla."""
+    tasks = [(keys, i, mulligan) for i in range(n)]
+    if jobs and jobs > 1:
+        import multiprocessing as mp
+        with mp.Pool(processes=jobs) as pool:
+            results = pool.map(_worker, tasks)
+    else:
+        results = [_worker(t) for t in tasks]
+    results.sort(key=lambda x: x[0])
+    return results
+
+
+def many(keys, n=200, verbose=True, mulligan=False, jobs=1):
+    results = _run_many(keys, n, mulligan=mulligan, jobs=jobs)
+    wins = Counter(w for _seed, w in results)
     if verbose:
         print(f"\n=== {' vs '.join(keys)}  ({n} partidas) ===")
         for key in keys:
@@ -72,20 +100,64 @@ def many(keys, n=200, verbose=True, mulligan=False):
     return wins
 
 
+def export_json(keys, n, path, mulligan=False, jobs=1, full_log=False):
+    """Exporta n partidas a un JSON: resumen + por-partida (semilla, ganador,
+    turnos y, si full_log, el registro turno a turno)."""
+    games = []
+    if full_log:
+        # necesitamos el log de cada partida -> corremos secuencial capturando
+        for i in range(n):
+            g = _build_game(keys, seed=i, mulligan=mulligan)
+            winner = g.play()
+            games.append({"seed": i, "winner": winner, "turns": g.turn,
+                          "log": g.log_lines})
+    else:
+        for seed, winner in _run_many(keys, n, mulligan=mulligan, jobs=jobs):
+            games.append({"seed": seed, "winner": winner})
+    wins = Counter(x["winner"] for x in games)
+    out = {
+        "matchup": keys,
+        "n": n,
+        "mulligan": mulligan,
+        "wins": dict(wins),
+        "winrate": {k: round(100 * wins.get(k, 0) / n, 2)
+                    for k in keys + ["EMPATE"]},
+        "games": games,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    print(f"Exportadas {n} partidas a {path}")
+    return out
+
+
 def main(argv):
     args = list(argv)
     log = False
     mulligan = False
+    full_log = False
     n = 200
+    jobs = 1
+    json_path = None
     if "--log" in args:
         log = True
         args.remove("--log")
     if "--mull" in args:
         mulligan = True
         args.remove("--mull")
+    if "--full-log" in args:
+        full_log = True
+        args.remove("--full-log")
     if "-n" in args:
         i = args.index("-n")
         n = int(args[i + 1])
+        del args[i:i + 2]
+    if "--jobs" in args:
+        i = args.index("--jobs")
+        jobs = int(args[i + 1])
+        del args[i:i + 2]
+    if "--json" in args:
+        i = args.index("--json")
+        json_path = args[i + 1]
         del args[i:i + 2]
 
     keys = args if args else DEFAULT_MATCHUP
@@ -94,11 +166,14 @@ def main(argv):
             print(f"mazo desconocido: {k}. Opciones: {list(decks.DECKS)}")
             return 1
 
-    if log:
+    if json_path:
+        export_json(keys, n, json_path, mulligan=mulligan, jobs=jobs,
+                    full_log=full_log)
+    elif log:
         winner = one(keys, seed=0, log=True, mulligan=mulligan)
         print(f"\nGanador: {winner}")
     else:
-        many(keys, n=n, mulligan=mulligan)
+        many(keys, n=n, mulligan=mulligan, jobs=jobs)
     return 0
 
 

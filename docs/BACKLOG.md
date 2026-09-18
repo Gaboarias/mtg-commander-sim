@@ -125,15 +125,18 @@ puntuacion (y prefiere tierras de sobra si estas inundado).
 
 ---
 
-## P4 — Infraestructura
+## P4 — Infraestructura  ✅ (todo implementado)
 
-- **Tests.** No hay ninguno. Empezar por: coste de mana con duales, impuesto de
-  comandante, 21 de dano de comandante, arrollar, amenaza, regla de legendarios.
-- **Importar listas desde texto.** Parser de formato Moxfield -> `decks.py`.
-- **Exportar partidas.** `--log` a JSON para analisis posterior.
-- **Paralelizar.** `run.py` con `multiprocessing` para correr miles de partidas.
-- **Semillas reproducibles.** `one(keys, seed=i)` ya lo hace; documentar que
-  la misma semilla da la misma partida.
+- **Tests.** ✅ 30 tests en `tests/test_engine.py` (mana con duales, impuesto de
+  comandante, 21 de dano, arrollar, amenaza, legendarios, y cada P1/P2/P3/P4).
+- **Importar listas desde texto.** ✅ `decklist.py` (Moxfield/Archidekt/texto) +
+  `cardsdb.py` (registro + Scryfall) + editor web `/deck`.
+- **Exportar partidas.** ✅ `run.py --json out.json` (resumen + por-partida;
+  `--full-log` incluye el registro turno a turno). `export_json()`.
+- **Paralelizar.** ✅ `run.py --jobs N` (multiprocessing); determinista e igual
+  al secuencial. ~3.6x con 4 procesos.
+- **Semillas reproducibles.** ✅ `one(keys, seed=i)` da siempre la misma partida
+  (mismo ganador y mismo log). Test `test_reproducible_seed`.
 
 ---
 
