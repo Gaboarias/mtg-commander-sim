@@ -106,16 +106,22 @@ con 0-1 o 6-7 tierras.
 
 ## P3 — Calidad de la IA
 
-### P3.1 La politica no guarda mana
-`main_phase` gasta hasta quedarse seca. No reserva para respuestas.
+> **Estado: P3.1–P3.3 IMPLEMENTADAS.**
 
-### P3.2 Los ataques ignoran la politica multijugador
-`declare_attackers` siempre ataca al jugador con menos vidas. En un pod real eso
-convierte al lider en objetivo, lo cual esta bien, pero no modela alianzas ni
-que atacar te deja abierto al tercero.
+### P3.1 La politica no guarda mana  ✅
+`main_phase` reserva el coste del instantaneo reactivo (counter) mas barato en
+mano cuando hay oponentes: no tapea por debajo de ese coste
+(`policy._reserve_mana`). Test `test_policy_reserves_mana_for_counter`.
 
-### P3.3 La eleccion de descarte es `hand.pop()`
-Descarta la ultima carta robada. Deberia descartar la de menor puntuacion.
+### P3.2 Los ataques ignoran la politica multijugador  ✅
+`declare_attackers` sigue apuntando al rival con menos vida, pero si OTRO
+oponente tiene un tablero amenazante (poder >= 60% de tu vida) guarda
+bloqueadores (los de mayor resistencia) en vez de atacar con todo. Test
+`test_policy_holds_blockers_under_threat`.
+
+### P3.3 La eleccion de descarte es `hand.pop()`  ✅
+Resuelto junto con P1.3: `policy.choose_discard` descarta la carta de menor
+puntuacion (y prefiere tierras de sobra si estas inundado).
 
 ---
 

@@ -45,6 +45,9 @@ class Policy:
         self._maybe_cast_commander(game, me)
 
         # 3) lanzar hechizos por prioridad mientras alcance el mana
+        # P3.1: reservar mana si tengo un instantaneo de respuesta (counter) y
+        # hay a quien responder. No tapeo por debajo de ese coste.
+        reserve = self._reserve_mana(game, me)
         castables = self._castable_spells(game, me)
         # ordenar por score desc; en fase 2 tambien entran cartas sin tag util
         castables.sort(key=lambda c: self.score(game, me, c), reverse=True)
@@ -59,8 +62,20 @@ class Policy:
             targets = self.choose_targets(game, me, card)
             if card.target_spec and not targets:
                 continue  # sin objetivo legal, no se puede lanzar
+            cmc = card.cost.cmc if card.cost else 0
+            if reserve and me.available_mana() - cmc < reserve:
+                continue  # dejar mana para la respuesta
             if me.can_pay(card.cost):
                 game.cast(me, card, targets=targets)
+
+    def _reserve_mana(self, game, me):
+        """Mana a reservar para respuestas: el coste del instantaneo reactivo
+        mas barato en mano, si hay oponentes a quienes responder."""
+        if not game.opponents(me):
+            return 0
+        reactive = [c for c in me.hand
+                    if "counter" in c.tags and c.cost is not None]
+        return min((c.cost.cmc for c in reactive), default=0)
 
         # 4) activar planeswalkers (P2.3): una habilidad por turno
         self._activate_planeswalkers(game, me)
@@ -159,9 +174,21 @@ class Policy:
         # planeswalkers rivales (amenazas a derribar)
         pws = [perm for o in opps for perm in o.battlefield
                if "planeswalker" in perm.card.types]
+
+        # P3.2 conciencia multijugador: si OTRO rival (no el objetivo) tiene un
+        # tablero amenazante, guardo bloqueadores en vez de atacar con todo.
+        max_other = max((sum(c.power for c in o.creatures())
+                         for o in opps if o is not target), default=0)
+        # atacan los de mayor poder; se quedan de guardia los de mayor resistencia
+        attackers.sort(key=lambda c: c.power, reverse=True)
+        keep = 0
+        if max_other >= me.life * 0.6:
+            keep = max(1, len(attackers) // 3)
+        sending = attackers[:len(attackers) - keep] if keep else attackers
+
         result = []
         pw_i = 0
-        for i, atk in enumerate(attackers):
+        for i, atk in enumerate(sending):
             # manda ~la mitad de los atacantes a un planeswalker rival si existe
             if pws and i % 2 == 1:
                 result.append((atk, pws[pw_i % len(pws)]))

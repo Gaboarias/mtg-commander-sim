@@ -375,6 +375,45 @@ def test_planeswalker_dies_at_zero_loyalty():
     assert pw not in a.battlefield               # 0 lealtad -> al cementerio
 
 
+# -- P3.1 la politica reserva mana para un counter ------------------------- #
+def test_policy_reserves_mana_for_counter():
+    me = _mk_player("me")   # comandante 2G: no se paga con Islas
+    opp = _mk_player("opp")
+    g = _game([me, opp])
+    for _ in range(3):
+        g.move_to_battlefield(land("Island", [U], basic=True), me)
+    me.hand = [cards.Counterspell(),
+               creature("Chico", "1", 1, 1),
+               creature("Grande", "3", 3, 3)]
+    me.policy.main_phase(g, me, second=True)
+    # reservo 2 (UU): puedo bajar el Chico (1) pero no el Grande (3),
+    # y me quedan 2 fuentes para el Counterspell
+    assert me.can_pay(cards.Counterspell().cost)
+    assert any(p.name == "Chico" for p in me.battlefield)
+    assert not any(p.name == "Grande" for p in me.battlefield)
+
+
+# -- P3.2 guarda bloqueadores si un tercero amenaza ------------------------ #
+def test_policy_holds_blockers_under_threat():
+    me = _mk_player("me")
+    target = _mk_player("target")
+    threat = _mk_player("threat")
+    g = _game([me, target, threat])
+    target.life = 5
+    for _ in range(3):
+        c = g.move_to_battlefield(creature("Mio", "1R", 3, 3), me)
+        c.summoning_sick = False
+    for _ in range(3):
+        g.move_to_battlefield(creature("Bestia", "1R", 10, 10), threat)
+    res = me.policy.declare_attackers(g, me)
+    assert len(res) < 3   # guarda al menos un bloqueador
+    # sin amenaza de terceros, ataca con todo
+    for perm in list(threat.battlefield):
+        g.to_graveyard(perm, "test")
+    res2 = me.policy.declare_attackers(g, me)
+    assert len(res2) == 3
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
