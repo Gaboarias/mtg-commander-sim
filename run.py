@@ -55,11 +55,11 @@ def play_defs(deck_defs, seed=0, log=False, max_turns=60):
     return Game(players, seed=seed, log=log, max_turns=max_turns)
 
 
-def many_defs(deck_defs, n=200):
+def many_defs(deck_defs, n=200, max_turns=60):
     """Corre n partidas entre decks ya construidos. Devuelve Counter de wins."""
     wins = Counter()
     for i in range(n):
-        g = play_defs(deck_defs, seed=i)
+        g = play_defs(deck_defs, seed=i, max_turns=max_turns)
         wins[g.play()] += 1
     return wins
 

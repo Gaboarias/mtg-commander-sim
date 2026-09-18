@@ -2,160 +2,172 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { listDecks, type SavedDeck } from "./localDecks";
 
-type Deck = { key: string; commander: string; identity: string[] };
-type Cov = { deck: string; implemented: number; vanilla: number };
-type SimResult = { deck: string; wins: number; pct: number };
+type RegDeck = { key: string; commander: string; identity: string[] };
+type MatchSpec =
+  | { kind: "registered"; key: string; name: string }
+  | { kind: "custom"; name: string; text: string };
+type Pickable = { id: string; label: string; sub: string; spec: MatchSpec; mine: boolean };
+type Res = { deck: string; wins: number; pct: number };
 
-function Pips({ ids }: { ids: string[] }) {
-  return (
-    <>
-      {ids.map((c) => (
-        <span key={c} className={`pip ${c}`}>
-          {c}
-        </span>
-      ))}
-    </>
-  );
+function idColor(ids: string[]) {
+  return ids.join(" / ");
 }
 
 export default function Home() {
-  const [decks, setDecks] = useState<Deck[]>([]);
-  const [coverage, setCoverage] = useState<Cov[]>([]);
+  const [pickables, setPickables] = useState<Pickable[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
-  const [n, setN] = useState(200);
-  const [seed, setSeed] = useState(0);
+  const [n, setN] = useState(120);
   const [busy, setBusy] = useState(false);
-  const [sim, setSim] = useState<{ n: number; results: SimResult[] } | null>(null);
+  const [result, setResult] = useState<{ players: number; n: number; results: Res[] } | null>(null);
   const [log, setLog] = useState<{ winner: string; turns: number; log: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mineCount, setMineCount] = useState(0);
 
   useEffect(() => {
+    const mine: Pickable[] = listDecks().map((d: SavedDeck) => ({
+      id: "mine:" + d.id,
+      label: d.name,
+      sub: "mi deck",
+      spec: { kind: "custom", name: d.name, text: d.text },
+      mine: true,
+    }));
+    setMineCount(mine.length);
     fetch("/api/catalog")
       .then((r) => r.json())
       .then((d) => {
-        setDecks(d.decks || []);
-        setCoverage(d.coverage || []);
-        setSelected((d.decks || []).slice(0, 2).map((x: Deck) => x.key));
+        const examples: Pickable[] = (d.decks || []).map((x: RegDeck) => ({
+          id: "reg:" + x.key,
+          label: x.commander,
+          sub: idColor(x.identity) + " · ejemplo",
+          spec: { kind: "registered", key: x.key, name: x.commander },
+          mine: false,
+        }));
+        const all = [...mine, ...examples];
+        setPickables(all);
+        // preseleccionar: mis decks primero, o los primeros ejemplos
+        const pre = (mine.length >= 2 ? mine : all).slice(0, Math.max(2, Math.min(2, all.length)));
+        setSelected(pre.map((p) => p.id));
       })
-      .catch(() => setError("No se pudo cargar el catalogo de mazos."));
+      .catch(() => {
+        setPickables(mine);
+        setSelected(mine.slice(0, 2).map((p) => p.id));
+      });
   }, []);
 
-  function toggle(key: string) {
+  function toggle(id: string) {
     setSelected((s) =>
-      s.includes(key) ? s.filter((k) => k !== key) : s.length < 4 ? [...s, key] : s
+      s.includes(id) ? s.filter((x) => x !== id) : s.length < 6 ? [...s, id] : s
     );
   }
 
-  async function runSim() {
-    if (selected.length < 2) return;
+  function selectedSpecs(): MatchSpec[] {
+    return selected
+      .map((id) => pickables.find((p) => p.id === id)?.spec)
+      .filter(Boolean) as MatchSpec[];
+  }
+
+  async function run(logMode: boolean) {
+    const decks = selectedSpecs();
+    if (decks.length < 2) {
+      setError("Elegí al menos 2 decks.");
+      return;
+    }
     setBusy(true);
     setError(null);
-    setLog(null);
+    if (logMode) setResult(null);
+    else setLog(null);
     try {
-      const r = await fetch(`/api/simulate?matchup=${selected.join(",")}&n=${n}`);
-      const d = await r.json();
-      if (d.error) setError(d.error);
-      else setSim(d);
-    } catch {
-      setError("Error al simular.");
+      const r = await fetch("/api/match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(logMode ? { decks, log: true } : { decks, n }),
+      });
+      const raw = await r.text();
+      let d;
+      try {
+        d = JSON.parse(raw);
+      } catch {
+        throw new Error(`HTTP ${r.status}: ${raw.slice(0, 200)}`);
+      }
+      if (d.error) throw new Error(d.error);
+      if (logMode) setLog(d);
+      else setResult(d);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
   }
 
-  async function runLog() {
-    if (selected.length < 2) return;
-    setBusy(true);
-    setError(null);
-    setSim(null);
-    try {
-      const r = await fetch(
-        `/api/simulate?matchup=${selected.join(",")}&log=1&seed=${seed}`
-      );
-      const d = await r.json();
-      if (d.error) setError(d.error);
-      else setLog(d);
-    } catch {
-      setError("Error al generar la partida.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const maxPct = sim ? Math.max(...sim.results.map((r) => r.pct), 1) : 1;
+  const maxPct = result ? Math.max(...result.results.map((r) => r.pct), 1) : 1;
 
   return (
     <div className="wrap">
       <header>
-        <h1>🎴 MTG Commander Sim</h1>
+        <h1>🎴 Simulador de partidas</h1>
         <p>
-          Motor de simulacion de <strong>Magic: The Gathering</strong> (formato
-          Commander) en Python puro. Elegi 2 a 4 mazos, corre miles de partidas y
-          medi la tasa de victoria — o mira una partida turno a turno.
-        </p>
-        <p>
-          <Link href="/deck">🛠️ Editor de decks →</Link> — importá tu lista
-          (Moxfield/Archidekt), editá cartas y probá variaciones.
+          Elegí de 2 a 6 decks y mirá cuánto gana cada uno en muchas partidas.
+          Creá y guardá tus decks en el <Link href="/deck">editor de decks →</Link>.
         </p>
       </header>
 
       <div className="card">
-        <h2>1 · Elegi los mazos ({selected.length}/4)</h2>
+        <h2>1 · Elegí los decks ({selected.length}/6)</h2>
+        {mineCount === 0 && (
+          <p className="muted">
+            Todavía no guardaste decks. Podés usar los de ejemplo, o crear el tuyo
+            en el <Link href="/deck">editor</Link>.
+          </p>
+        )}
         <div className="decks">
-          {decks.map((d) => (
+          {pickables.map((p) => (
             <button
-              key={d.key}
-              className={`deck-btn ${selected.includes(d.key) ? "on" : ""}`}
-              onClick={() => toggle(d.key)}
+              key={p.id}
+              className={`deck-btn ${selected.includes(p.id) ? "on" : ""}`}
+              onClick={() => toggle(p.id)}
             >
-              <div className="name">{d.key}</div>
-              <div className="sub">
-                <Pips ids={d.identity} /> {d.commander}
+              <div className="name">
+                {p.mine ? "★ " : ""}
+                {p.label}
               </div>
+              <div className="sub">{p.sub}</div>
             </button>
           ))}
-          {decks.length === 0 && !error && <span className="muted">Cargando…</span>}
+          {pickables.length === 0 && <span className="muted">Cargando…</span>}
         </div>
       </div>
 
       <div className="card">
-        <h2>2 · Simular</h2>
+        <h2>2 · Jugar</h2>
         <div className="row">
           <label>
-            Partidas&nbsp;
+            Partidas a simular&nbsp;
             <input
               type="number"
               min={1}
-              max={2000}
+              max={500}
               value={n}
               onChange={(e) => setN(Number(e.target.value))}
             />
           </label>
-          <button className="go" onClick={runSim} disabled={busy || selected.length < 2}>
-            {busy ? "Corriendo…" : "Correr simulacion"}
+          <button className="go" onClick={() => run(false)} disabled={busy || selected.length < 2}>
+            {busy ? "Jugando…" : "Simular la mesa"}
           </button>
-          <label>
-            Semilla&nbsp;
-            <input
-              type="number"
-              min={0}
-              value={seed}
-              onChange={(e) => setSeed(Number(e.target.value))}
-            />
-          </label>
-          <button className="ghost" onClick={runLog} disabled={busy || selected.length < 2}>
+          <button className="ghost" onClick={() => run(true)} disabled={busy || selected.length < 2}>
             Ver una partida
           </button>
         </div>
-        {selected.length < 2 && <p className="muted">Elegi al menos 2 mazos.</p>}
         {error && <p className="err">⚠ {error}</p>}
       </div>
 
-      {sim && (
+      {result && (
         <div className="card">
-          <h2>Resultados · {sim.n} partidas</h2>
-          {sim.results.map((r) => (
+          <h2>
+            Resultados · {result.players} decks · {result.n} partidas
+          </h2>
+          {result.results.map((r) => (
             <div className="bar-row" key={r.deck}>
               <div className="bar-head">
                 <span className="deck">{r.deck}</span>
@@ -168,51 +180,25 @@ export default function Home() {
               </div>
             </div>
           ))}
+          <p className="muted" style={{ marginTop: 8 }}>
+            «sin definir» = partidas que llegaron al límite sin un ganador claro.
+          </p>
         </div>
       )}
 
       {log && (
         <div className="card">
           <h2>
-            Partida (semilla {seed}) · Gana <span className="win">{log.winner}</span> en{" "}
-            {log.turns} turnos
+            Una partida · gana <span className="win">{log.winner}</span> en {log.turns} turnos
           </h2>
           <div className="log">{log.log.join("\n")}</div>
         </div>
       )}
 
-      {coverage.length > 0 && (
-        <div className="card">
-          <h2>Cobertura de cartas</h2>
-          <p className="muted">
-            Cuantas cartas de cada mazo tienen efecto implementado vs. vainilla.
-          </p>
-          <table>
-            <thead>
-              <tr>
-                <th>Mazo</th>
-                <th>Con efecto</th>
-                <th>Vainilla</th>
-              </tr>
-            </thead>
-            <tbody>
-              {coverage.map((c) => (
-                <tr key={c.deck}>
-                  <td style={{ textTransform: "capitalize" }}>{c.deck}</td>
-                  <td>{c.implemented}</td>
-                  <td>{c.vanilla}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
       <footer>
-        Motor en Python puro (sin dependencias) · API serverless en Vercel ·
-        interfaz Next.js. El codigo del motor vive en <code>engine.py</code>,{" "}
-        <code>cards.py</code>, <code>decks.py</code>, <code>policy.py</code>. Ver{" "}
-        <code>ADDING_CARDS.md</code> para agregar cartas.
+        Los resultados son estimaciones de muchas partidas jugadas por una IA
+        simple. Las cartas con efecto programado usan su habilidad; el resto se
+        juega con sus datos reales (coste, fuerza, resistencia).
       </footer>
     </div>
   );

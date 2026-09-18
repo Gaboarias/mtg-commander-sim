@@ -134,6 +134,71 @@ def resolve_decklist(text):
     }
 
 
+def _build_deck_defs(specs):
+    """Arma [(label, deck, commander)] desde specs (registered/custom) con una
+    sola resolucion de Scryfall para los custom. Devuelve (deck_defs, max_turns).
+    """
+    specs = [s for s in specs if s][:6]
+    if len(specs) < 2:
+        raise ValueError("elegí al menos 2 decks")
+
+    custom_names = []
+    for s in specs:
+        if s.get("kind") == "custom":
+            parsed = decklist.parse_decklist(s.get("text", ""))
+            s["_parsed"] = parsed
+            if parsed.get("commander"):
+                custom_names.append(parsed["commander"])
+            custom_names += [nm for _, nm in parsed["cards"]]
+    fetch = _make_fetch(custom_names) if custom_names else None
+
+    deck_defs = []
+    seen = {}
+    for s in specs:
+        if s.get("kind") == "registered":
+            key = s.get("key")
+            if key not in decks.DECKS:
+                raise ValueError(f"deck desconocido: {key}")
+            deck, cmd = decks.build(key)
+            label = s.get("name") or key
+        else:
+            deck, cmd, _rep = decklist.build_deck(s["_parsed"], fetch=fetch)
+            label = s.get("name") or cmd.name
+        base = label
+        k = seen.get(base, 0)
+        seen[base] = k + 1
+        if k:
+            label = f"{base} ({k + 1})"
+        deck_defs.append((label, deck, cmd))
+
+    # mas jugadores -> mas turnos para que la partida se resuelva
+    max_turns = min(320, 40 + 40 * len(deck_defs))
+    return deck_defs, max_turns
+
+
+def match(specs, n=120):
+    """Simula una mesa de 2 a 6 decks. Devuelve winrate por deck."""
+    n = max(1, min(int(n), 500))
+    deck_defs, max_turns = _build_deck_defs(specs)
+    wins = run.many_defs(deck_defs, n=n, max_turns=max_turns)
+    results = [{"deck": label, "wins": wins.get(label, 0),
+                "pct": round(100 * wins.get(label, 0) / n, 1)}
+               for label, _d, _c in deck_defs]
+    results.sort(key=lambda r: -r["pct"])
+    results.append({"deck": "sin definir", "wins": wins.get("EMPATE", 0),
+                    "pct": round(100 * wins.get("EMPATE", 0) / n, 1)})
+    return {"n": n, "players": len(deck_defs), "results": results}
+
+
+def match_log(specs):
+    """Juega UNA partida de la mesa y devuelve el relato turno a turno."""
+    deck_defs, max_turns = _build_deck_defs(specs)
+    g = run.play_defs(deck_defs, seed=0, log=False, max_turns=max_turns)
+    winner = g.play()
+    return {"players": len(deck_defs), "winner": winner, "turns": g.turn,
+            "log": g.log_lines}
+
+
 def simulate_custom(cards_list, commander_name, opponent, n):
     """Simula un deck editado (lista de {name, qty}) contra un mazo registrado."""
     if opponent not in decks.DECKS:
