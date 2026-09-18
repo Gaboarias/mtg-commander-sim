@@ -12,6 +12,14 @@
   --b: #7a6a8a;
   --r: #d05a4a;
   --g: #4fae6a;
+  /* paleta categorica validada (dataviz, modo oscuro) para las barras */
+  --s1: #3987e5;
+  --s2: #d95926;
+  --s3: #199e70;
+  --s4: #c98500;
+  --s5: #d55181;
+  --s6: #008300;
+  --s-none: #898781;
 }
 
 * { box-sizing: border-box; }
@@ -94,11 +102,13 @@ button.ghost {
   border-radius: 10px; padding: 11px 16px; cursor: pointer; font-size: .95rem;
 }
 
-.bar-row { margin: 10px 0; }
-.bar-head { display: flex; justify-content: space-between; font-size: .9rem; margin-bottom: 4px; }
-.bar-head .deck { text-transform: capitalize; font-weight: 600; }
-.bar-track { background: var(--panel-2); border-radius: 8px; height: 22px; overflow: hidden; }
-.bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent-2), var(--accent)); }
+.bar-row { margin: 12px 0; }
+.bar-head { display: flex; justify-content: space-between; font-size: .9rem; margin-bottom: 5px; align-items: baseline; }
+.bar-head .deck { font-weight: 600; display: flex; align-items: center; gap: 7px; }
+.swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+.bar-track { background: var(--panel-2); border-radius: 6px; height: 20px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 6px; min-width: 3px; }
+.bar-head .pct { font-variant-numeric: tabular-nums; font-weight: 700; }
 
 table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }

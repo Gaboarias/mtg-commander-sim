@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { motion, useReducedMotion } from "framer-motion";
 import { listDecks, type SavedDeck } from "./localDecks";
+
+const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6"];
 
 type RegDeck = { key: string; commander: string; identity: string[] };
 type MatchSpec =
@@ -101,7 +104,16 @@ export default function Home() {
     }
   }
 
+  const reduce = useReducedMotion();
   const maxPct = result ? Math.max(...result.results.map((r) => r.pct), 1) : 1;
+
+  // color por identidad del deck (orden de seleccion), no por ranking
+  const colorOf = (deck: string): string => {
+    if (deck === "sin definir") return "var(--s-none)";
+    const specs = selectedSpecs();
+    const i = specs.findIndex((s) => s.name === deck);
+    return `var(${SERIES[(i >= 0 ? i : 0) % SERIES.length]})`;
+  };
 
   return (
     <div className="wrap">
@@ -163,27 +175,41 @@ export default function Home() {
       </div>
 
       {result && (
-        <div className="card">
+        <motion.div
+          className="card"
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={reduce ? { duration: 0 } : { duration: 0.3 }}
+        >
           <h2>
             Resultados · {result.players} decks · {result.n} partidas
           </h2>
-          {result.results.map((r) => (
+          {result.results.map((r, i) => (
             <div className="bar-row" key={r.deck}>
               <div className="bar-head">
-                <span className="deck">{r.deck}</span>
-                <span>
+                <span className="deck">
+                  <span className="swatch" style={{ background: colorOf(r.deck) }} />
+                  {r.deck}
+                </span>
+                <span className="pct">
                   {r.pct}% <span className="muted">({r.wins})</span>
                 </span>
               </div>
               <div className="bar-track">
-                <div className="bar-fill" style={{ width: `${(r.pct / maxPct) * 100}%` }} />
+                <motion.div
+                  className="bar-fill"
+                  style={{ background: colorOf(r.deck) }}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${(r.pct / maxPct) * 100}%` }}
+                  transition={reduce ? { duration: 0 } : { duration: 0.6, delay: i * 0.06, ease: "easeOut" }}
+                />
               </div>
             </div>
           ))}
           <p className="muted" style={{ marginTop: 8 }}>
             «sin definir» = partidas que llegaron al límite sin un ganador claro.
           </p>
-        </div>
+        </motion.div>
       )}
 
       {log && (
