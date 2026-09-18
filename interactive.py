@@ -11,6 +11,7 @@ en el navegador. La capa web solo llama a estos métodos y dibuja `state()`.
 from __future__ import annotations
 
 import run
+import carddesc
 from engine import Game, Cost
 
 
@@ -153,6 +154,18 @@ class InteractiveGame:
             self._finish()
         return self.state()
 
+    def activate(self, uid, index=0):
+        """Activa una habilidad de lealtad de un planeswalker del humano."""
+        if not self._my_turn():
+            return self.state()
+        pm = self._find_perm(uid)
+        if pm is not None:
+            self.g.activate_loyalty(pm, int(index))
+            self.g.sba()
+            if len(self.g.alive()) <= 1:
+                self._finish()
+        return self.state()
+
     def end_turn(self):
         if not self._my_turn():
             return self.state()
@@ -165,7 +178,7 @@ class InteractiveGame:
     # -- estado serializable --------------------------------------------- #
     def legal(self):
         p = self.human()
-        lands, casts, attackers = [], [], []
+        lands, casts, attackers, activatables = [], [], [], []
         if self._my_turn():
             for i, c in enumerate(p.hand):
                 if c.is_land():
@@ -186,7 +199,17 @@ class InteractiveGame:
                     if pm.can_attack():
                         attackers.append({"uid": pm.uid, "name": pm.name,
                                           "power": pm.power, "toughness": pm.toughness})
+            for pm in p.battlefield:
+                if ("planeswalker" in pm.card.types and not pm.activated_this_turn
+                        and pm.card.loyalty_abilities):
+                    activatables.append({
+                        "uid": pm.uid, "name": pm.name,
+                        "loyalty": pm.counters.get("loyalty", 0),
+                        "abilities": [{"i": i, "cost": cost}
+                                      for i, (cost, _e) in enumerate(pm.card.loyalty_abilities)],
+                    })
         return {"lands": lands, "casts": casts, "attackers": attackers,
+                "activatables": activatables,
                 "can_attack": self._my_turn() and not self.attacked,
                 "can_end": self._my_turn()}
 
@@ -195,9 +218,15 @@ class InteractiveGame:
         for i, pl in enumerate(self.players):
             s = self.g._player_state(pl)
             if i == self.human_index:
-                s["hand_cards"] = [
-                    {"i": j, "name": c.name, "is_land": c.is_land(),
-                     "cost": _cost_str(c)} for j, c in enumerate(pl.hand)]
+                s["hand_cards"] = [{
+                    "i": j, "name": c.name, "is_land": c.is_land(),
+                    "is_creature": c.is_creature(), "cost": _cost_str(c),
+                    "power": c.power if c.is_creature() else None,
+                    "toughness": c.toughness if c.is_creature() else None,
+                    "types": sorted(c.types),
+                    "keywords": sorted(c.keywords),
+                    "abilities": carddesc.describe(c),
+                } for j, c in enumerate(pl.hand)]
             players.append(s)
         return {
             "turn": self.g.turn,

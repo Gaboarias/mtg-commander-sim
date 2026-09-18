@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
 
+import carddesc as _carddesc     # descripción legible de habilidades (puro)
+
 # --------------------------------------------------------------------------- #
 # Constantes
 # --------------------------------------------------------------------------- #
@@ -465,6 +467,11 @@ class Game:
 
     def _perm_state(self, pm: "Permanent") -> dict:
         creature = pm.is_creature()
+        pw = "planeswalker" in pm.card.types
+        loy_abils = []
+        if pw:
+            for i, (cost, _eff) in enumerate(pm.card.loyalty_abilities or ()):
+                loy_abils.append({"i": i, "cost": cost})
         return {
             "uid": pm.uid,
             "name": pm.name,
@@ -475,9 +482,16 @@ class Game:
             "counters": {k: v for k, v in pm.counters.items() if v},
             "is_land": pm.card.is_land(),
             "is_creature": creature,
+            "is_planeswalker": pw,
+            "loyalty": pm.counters.get("loyalty", 0) if pw else None,
+            "loyalty_abilities": loy_abils,
+            "activated": pm.activated_this_turn,
             "is_token": pm.is_token,
             "attacking": bool(pm.attacking),
             "sick": pm.summoning_sick,
+            "keywords": sorted(pm.keywords),
+            "types": sorted(pm.card.types),
+            "abilities": _carddesc.describe(pm.card),
         }
 
     def _player_state(self, p: "Player") -> dict:

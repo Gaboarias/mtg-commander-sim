@@ -306,6 +306,26 @@ def _card_images(names):
     return out
 
 
+def card_info(names):
+    """{nombre: {art, type, oracle}} desde Scryfall para las cartas reales.
+    Las cartas caseras no aparecen (el front usa lo que trae el motor)."""
+    names = [n for n in names if n]
+    if _scry is None or not names:
+        return {}
+    data = _scry.resolve_many(names)
+    out = {}
+    for n in names:
+        c = data.get(_scry._norm(n))
+        if not c:
+            continue
+        oracle = c.get("oracle_text") or ""
+        if not oracle and c.get("card_faces"):
+            oracle = c["card_faces"][0].get("oracle_text", "")
+        out[n] = {"art": _art_url(c), "type": c.get("type_line", ""),
+                  "oracle": oracle}
+    return out
+
+
 def replay(specs, seed=0, level="intermedio"):
     """Juega UNA partida con la traza activa y devuelve los pasos para el
     reproductor visual (Fase 1) + un mapa de arte por carta."""

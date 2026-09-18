@@ -2,17 +2,29 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useReducedMotion } from "framer-motion";
-import { Seat, type PlayerState } from "../board";
+import { Seat, type PlayerState, type Perm } from "../board";
 
 const PY_VERSION = "0.26.4";
 const PY_BASE = `https://cdn.jsdelivr.net/pyodide/v${PY_VERSION}/full/`;
 
 type RegDeck = { key: string; commander: string; identity: string[]; theme?: string };
+type HandCard = {
+  i: number; name: string; is_land: boolean; is_creature: boolean; cost: string;
+  power: number | null; toughness: number | null; types: string[];
+  keywords: string[]; abilities: string[];
+};
+type Activatable = { uid: number; name: string; loyalty: number; abilities: { i: number; cost: number }[] };
 type Legal = {
   lands: { i: number; name: string }[];
   casts: { i?: number; name: string; zone: string; cost: string; tax?: number }[];
   attackers: { uid: number; name: string; power: number; toughness: number }[];
+  activatables: Activatable[];
   can_attack: boolean; can_end: boolean;
+};
+type CardInfo = { art?: string; type?: string; oracle?: string };
+type Inspect = {
+  name: string; cost?: string; types?: string[]; power?: number | null;
+  toughness?: number | null; keywords?: string[]; abilities?: string[];
 };
 type GameState = {
   turn: number; active: number; human_index: number; phase: string; attacked: boolean;
@@ -59,6 +71,10 @@ export default function Play() {
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<GameState | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());  // atacantes elegidos
+  const [art, setArt] = useState<Record<string, string>>({});
+  const [info, setInfo] = useState<Record<string, CardInfo>>({});
+  const [inspect, setInspect] = useState<Inspect | null>(null);
+  const infoReq = useRef<Set<string>>(new Set());  // nombres ya pedidos
 
   useEffect(() => {
     fetch("/api/catalog").then((r) => r.json()).then((d) => {
@@ -121,6 +137,43 @@ export default function Play() {
 
   function togglePick(uid: number) {
     setPicked((s) => { const n = new Set(s); n.has(uid) ? n.delete(uid) : n.add(uid); return n; });
+  }
+
+  // trae arte + texto real (Scryfall) para las cartas que van apareciendo
+  useEffect(() => {
+    if (!state) return;
+    const names = new Set<string>();
+    for (const p of state.players) {
+      p.commander.forEach((n) => names.add(n));
+      p.graveyard.forEach((n) => names.add(n));
+      p.battlefield.forEach((pm) => names.add(pm.name));
+      (p.hand_cards || []).forEach((c) => names.add(c.name));
+    }
+    const need = [...names].filter((n) => n && !infoReq.current.has(n));
+    if (need.length === 0) return;
+    need.forEach((n) => infoReq.current.add(n));
+    fetch("/api/cardinfo", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ names: need }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        const gotInfo: Record<string, CardInfo> = d.info || {};
+        setInfo((prev) => ({ ...prev, ...gotInfo }));
+        setArt((prev) => {
+          const next = { ...prev };
+          for (const [n, v] of Object.entries(gotInfo)) if (v.art) next[n] = v.art;
+          return next;
+        });
+      })
+      .catch(() => {});
+  }, [state]);
+
+  function inspectCard(x: { name: string; cost?: string; types?: string[]; power?: number | null; toughness?: number | null; keywords?: string[]; abilities?: string[] }) {
+    setInspect({
+      name: x.name, cost: x.cost, types: x.types, power: x.power,
+      toughness: x.toughness, keywords: x.keywords, abilities: x.abilities,
+    });
   }
 
   const meIdx = state?.human_index ?? 0;
@@ -197,10 +250,11 @@ export default function Play() {
             <div className="seats" data-n={state.players.length}>
               {state.players.map((p, i) => (
                 <Seat
-                  key={p.name} p={p} active={i === state.active} art={{}} reduce={reduce}
+                  key={p.name} p={p} active={i === state.active} art={art} reduce={reduce}
                   selectableUids={myTurn && i === meIdx && !state.attacked ? attackableUids : undefined}
                   selectedUids={i === meIdx ? picked : undefined}
                   onCard={i === meIdx ? togglePick : undefined}
+                  onInspect={(pm: Perm) => inspectCard(pm)}
                 />
               ))}
             </div>
@@ -210,41 +264,76 @@ export default function Play() {
             )}
           </div>
 
-          {myTurn && (
-            <div className="card">
-              <h2>Tu turno</h2>
-              {legal && legal.lands.length > 0 && (
-                <div className="act-block">
-                  <span className="act-label">Jugar tierra:</span>
-                  {legal.lands.slice(0, 1).map((l) => (
-                    <button key={l.i} className="ghost" onClick={() => doAct("land", { i: l.i })}>🏞 {l.name}</button>
-                  ))}
-                  {legal.lands.length > 1 && <span className="muted">(+{legal.lands.length - 1} más en mano)</span>}
+          {myTurn && (() => {
+            const landIdx = new Set((legal?.lands || []).map((l) => l.i));
+            const castIdx = new Set((legal?.casts || []).filter((c) => c.zone === "hand").map((c) => c.i));
+            const commandCasts = (legal?.casts || []).filter((c) => c.zone === "command");
+            const hand = state.players[meIdx]?.hand_cards || [];
+            return (
+              <div className="card">
+                <h2>Tu mano</h2>
+                <div className="hand">
+                  {hand.map((hc) => {
+                    const canLand = landIdx.has(hc.i);
+                    const canCast = castIdx.has(hc.i);
+                    return (
+                      <div key={hc.i} className={`handcard ${canLand || canCast ? "playable" : ""}`}>
+                        <div className="hc-art" onClick={() => inspectCard(hc)} title="Ver carta"
+                          style={art[hc.name] ? { backgroundImage: `url(${art[hc.name]})` } : undefined}>
+                          {!art[hc.name] && <span>{hc.name}</span>}
+                          {hc.cost && <span className="hc-cost">{hc.cost}</span>}
+                        </div>
+                        <div className="hc-foot">
+                          <span className="hc-name" onClick={() => inspectCard(hc)}>{hc.name}</span>
+                          {canLand && <button className="go tiny" onClick={() => doAct("land", { i: hc.i })}>Jugar</button>}
+                          {canCast && <button className="go tiny" onClick={() => doAct("cast", { i: hc.i, zone: "hand" })}>Lanzar</button>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {hand.length === 0 && <span className="muted">mano vacía</span>}
                 </div>
-              )}
-              {legal && legal.casts.length > 0 && (
+
+                {commandCasts.length > 0 && (
+                  <div className="act-block">
+                    <span className="act-label">Zona de mando:</span>
+                    {commandCasts.map((c, k) => (
+                      <button key={k} className="ghost" onClick={() => doAct("cast", { zone: "command" })}>
+                        👑 Lanzar {c.name} <span className="muted">{c.cost}{c.tax ? ` +${c.tax}` : ""}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {legal && legal.activatables.length > 0 && (
+                  <div className="act-block">
+                    <span className="act-label">Planeswalkers:</span>
+                    {legal.activatables.map((pw) =>
+                      pw.abilities.map((ab) => (
+                        <button key={pw.uid + "-" + ab.i} className="ghost"
+                          onClick={() => doAct("activate", { uid: pw.uid, index: ab.i })}>
+                          {pw.name} {ab.cost >= 0 ? `+${ab.cost}` : ab.cost} <span className="muted">(◆{pw.loyalty})</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+
                 <div className="act-block">
-                  <span className="act-label">Lanzar:</span>
-                  {legal.casts.map((c, k) => (
-                    <button key={k} className="ghost" onClick={() => doAct("cast", { i: c.i, zone: c.zone })}>
-                      {c.zone === "command" ? "👑 " : ""}{c.name} <span className="muted">{c.cost}{c.zone === "command" && c.tax ? ` +${c.tax}` : ""}</span>
-                    </button>
-                  ))}
+                  <button className="go" onClick={() => doAct("attack", { uids: [...picked] })}
+                    disabled={!legal?.can_attack || picked.size === 0}>
+                    ⚔ Atacar {picked.size > 0 ? `(${picked.size})` : ""}
+                  </button>
+                  <button className="ghost" onClick={() => doAct("end")} disabled={!legal?.can_end}>Terminar turno ⏭</button>
                 </div>
-              )}
-              <div className="act-block">
-                <button className="go" onClick={() => doAct("attack", { uids: [...picked] })}
-                  disabled={!legal?.can_attack || picked.size === 0}>
-                  ⚔ Atacar {picked.size > 0 ? `(${picked.size})` : ""}
-                </button>
-                <button className="ghost" onClick={() => doAct("end")} disabled={!legal?.can_end}>Terminar turno ⏭</button>
+                <p className="muted" style={{ fontSize: ".8rem" }}>
+                  Tocá una carta para ver sus habilidades. Elegí criaturas tocándolas
+                  en tu tablero para atacar. Cuando un rival te ataque, los bloqueos los
+                  decide tu deck automáticamente (por ahora).
+                </p>
               </div>
-              <p className="muted" style={{ fontSize: ".8rem" }}>
-                Elegí criaturas tocándolas en tu tablero para atacar. Cuando un rival
-                te ataque, los bloqueos los decide tu deck automáticamente (por ahora).
-              </p>
-            </div>
-          )}
+            );
+          })()}
 
           <div className="card">
             <h2>Relato</h2>
@@ -253,9 +342,40 @@ export default function Play() {
         </>
       )}
 
+      {inspect && (
+        <div className="inspect-back" onClick={() => setInspect(null)}>
+          <div className="inspect" onClick={(e) => e.stopPropagation()}>
+            <button className="inspect-x" onClick={() => setInspect(null)}>✕</button>
+            {art[inspect.name] ? (
+              <div className="inspect-art" style={{ backgroundImage: `url(${art[inspect.name]})` }} />
+            ) : (
+              <div className="inspect-art ph"><span>{inspect.name}</span></div>
+            )}
+            <h3>{inspect.name} {inspect.cost ? <span className="muted">{inspect.cost}</span> : null}</h3>
+            <p className="muted" style={{ margin: "2px 0" }}>
+              {info[inspect.name]?.type || (inspect.types || []).join(" ")}
+              {inspect.power != null ? ` · ${inspect.power}/${inspect.toughness}` : ""}
+            </p>
+            {info[inspect.name]?.oracle ? (
+              <p className="oracle">{info[inspect.name]?.oracle}</p>
+            ) : (inspect.abilities && inspect.abilities.length > 0) ? (
+              <ul className="abil">{inspect.abilities.map((a, k) => <li key={k}>{a}</li>)}</ul>
+            ) : (
+              <p className="muted">Sin habilidades (carta básica).</p>
+            )}
+            {!info[inspect.name] && (
+              <p className="muted" style={{ fontSize: ".75rem" }}>
+                Carta de ejemplo (casera): se muestran sus habilidades del motor.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       <footer>
-        El sistema juega los turnos rivales con la dificultad elegida. Cartas de
-        ejemplo con ficha simple; el arte real llega al soportar decks importados.
+        El sistema juega los turnos rivales con la dificultad elegida. Las cartas
+        reales muestran su foto y texto de Scryfall; las de ejemplo, una ficha con
+        sus habilidades. Tocá cualquier carta (o su ⓘ) para verla.
       </footer>
     </div>
   );

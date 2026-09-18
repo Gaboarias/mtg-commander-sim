@@ -349,3 +349,26 @@ textarea:focus { border-color: var(--accent-2) !important; }
 .act-block .ghost, .act-block .go { padding: 6px 12px; }
 .cardmini.sel-able { outline: 1px dashed rgba(216,178,58,.6); outline-offset: 1px; }
 .cardmini.sel { outline: 2px solid var(--accent); box-shadow: 0 0 0 2px rgba(216,178,58,.5); }
+
+/* mano e inspector (Jugar) */
+.hand { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 14px; }
+.handcard { width: 92px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); overflow: hidden; }
+.handcard.playable { border-color: rgba(216,178,58,.6); }
+.hc-art { height: 66px; background-size: cover; background-position: center; position: relative; display: flex; align-items: center; justify-content: center; text-align: center; cursor: pointer; background-color: var(--panel); }
+.hc-art > span { font-size: .58rem; color: var(--text); padding: 3px; }
+.hc-cost { position: absolute; top: 3px; right: 3px; background: rgba(0,0,0,.75); color: #fff; font-size: .58rem; font-weight: 700; border-radius: 4px; padding: 0 4px; }
+.hc-foot { padding: 4px 5px; display: flex; flex-direction: column; gap: 4px; }
+.hc-name { font-size: .6rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; color: var(--muted); }
+.go.tiny { padding: 2px 6px; font-size: .68rem; }
+.cardmini .cm-info { position: absolute; top: 1px; right: 1px; z-index: 2; background: rgba(0,0,0,.6); color: #fff; border: 0; border-radius: 999px; width: 15px; height: 15px; font-size: .6rem; line-height: 1; cursor: pointer; padding: 0; }
+.cardmini .cm-loy { position: absolute; bottom: 14px; left: 2px; background: #b06a1f; color: #fff; font-size: .55rem; font-weight: 700; padding: 0 3px; border-radius: 3px; }
+
+.inspect-back { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+.inspect { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; max-width: 340px; width: 100%; position: relative; box-shadow: var(--shadow); }
+.inspect-x { position: absolute; top: 8px; right: 10px; background: transparent; border: 0; color: var(--muted); font-size: 1rem; cursor: pointer; }
+.inspect-art { height: 150px; border-radius: 10px; background-size: cover; background-position: center; margin-bottom: 10px; background-color: var(--panel-2); }
+.inspect-art.ph { display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px; }
+.inspect h3 { margin: 4px 0; }
+.inspect .oracle { white-space: pre-wrap; font-size: .85rem; line-height: 1.4; margin: 8px 0; }
+.inspect .abil { margin: 8px 0; padding-left: 18px; font-size: .85rem; }
+.inspect .abil li { margin: 3px 0; }

@@ -6,6 +6,9 @@ export type Perm = {
   uid: number; name: string; tapped: boolean; power: number | null; toughness: number | null;
   damage: number; counters: Record<string, number>; is_land: boolean; is_creature: boolean;
   is_token: boolean; attacking: boolean; sick: boolean;
+  is_planeswalker?: boolean; loyalty?: number | null;
+  loyalty_abilities?: { i: number; cost: number }[]; activated?: boolean;
+  keywords?: string[]; types?: string[]; abilities?: string[];
 };
 export type PlayerState = {
   name: string; life: number; lost: boolean; hand: number; library: number;
@@ -15,10 +18,10 @@ export type PlayerState = {
 };
 
 export function CardMini({
-  perm, art, reduce, selectable, selected, onClick,
+  perm, art, reduce, selectable, selected, onClick, onInspect,
 }: {
   perm: Perm; art?: string; reduce: boolean;
-  selectable?: boolean; selected?: boolean; onClick?: () => void;
+  selectable?: boolean; selected?: boolean; onClick?: () => void; onInspect?: () => void;
 }) {
   const plus = perm.counters["+1/+1"] || 0;
   return (
@@ -33,6 +36,10 @@ export function CardMini({
       onClick={onClick}
       style={onClick ? { cursor: "pointer" } : undefined}
     >
+      {onInspect && (
+        <button className="cm-info" title="Ver carta"
+          onClick={(e) => { e.stopPropagation(); onInspect(); }}>ⓘ</button>
+      )}
       {art ? (
         <div className="art" style={{ backgroundImage: `url(${art})` }} />
       ) : (
@@ -47,16 +54,18 @@ export function CardMini({
           {perm.damage > 0 ? <span className="dmg"> −{perm.damage}</span> : null}
         </div>
       )}
+      {perm.is_planeswalker && perm.loyalty != null && <span className="cm-loy">◆{perm.loyalty}</span>}
       {plus > 0 && <span className="cm-counter">+{plus}</span>}
     </motion.div>
   );
 }
 
 export function Seat({
-  p, active, art, reduce, selectableUids, selectedUids, onCard,
+  p, active, art, reduce, selectableUids, selectedUids, onCard, onInspect,
 }: {
   p: PlayerState; active: boolean; art: Record<string, string>; reduce: boolean;
   selectableUids?: Set<number>; selectedUids?: Set<number>; onCard?: (uid: number) => void;
+  onInspect?: (perm: Perm) => void;
 }) {
   const lands = p.battlefield.filter((x) => x.is_land);
   const nonlands = p.battlefield.filter((x) => !x.is_land);
@@ -103,6 +112,7 @@ export function Seat({
                 selectable={selectableUids?.has(pm.uid)}
                 selected={selectedUids?.has(pm.uid)}
                 onClick={onCard && selectableUids?.has(pm.uid) ? () => onCard(pm.uid) : undefined}
+                onInspect={onInspect ? () => onInspect(pm) : undefined}
               />
             ))}
           </AnimatePresence>
@@ -111,7 +121,10 @@ export function Seat({
       {lands.length > 0 && (
         <motion.div layout={!reduce} className="row-cards lands">
           <AnimatePresence>
-            {lands.map((pm) => <CardMini key={pm.uid} perm={pm} art={art[pm.name]} reduce={reduce} />)}
+            {lands.map((pm) => (
+              <CardMini key={pm.uid} perm={pm} art={art[pm.name]} reduce={reduce}
+                onInspect={onInspect ? () => onInspect(pm) : undefined} />
+            ))}
           </AnimatePresence>
         </motion.div>
       )}
