@@ -117,6 +117,9 @@ class Card:
     triggers: dict = field(default_factory=dict)   # {evento: (game, perm, **kw)}
     activated: Optional[Callable] = None           # declarado, sin invocar todavia
     counter_modifier: Optional[Callable] = None    # (game, perm, kind, n) -> n' (reemplazo)
+    static_mod: Optional[Callable] = None          # (fuente, objetivo) -> (dP, dT) anthem/capas
+    loyalty_abilities: tuple = ()                  # planeswalker: ((coste_lealtad, efecto), ...)
+    target_spec: Optional[str] = None              # "opp_creature" | "stack_spell" | None
 
     def identity(self) -> set:
         """Identidad de color: explicita si existe, si no se deduce del coste."""
@@ -163,6 +166,22 @@ class Permanent:
         self.blocked_by: list = []
         self.is_token = is_token
         self.uid = _next_uid()
+        self.game = None                 # backref, lo pone move_to_battlefield
+        self.activated_this_turn = False  # planeswalker: una activacion por turno
+
+    def _static_delta(self):
+        """Suma (dP, dT) de los modificadores estaticos (anthems/capas) que
+        aplican a este permanente."""
+        dp = dt = 0
+        if self.game is not None and self.is_creature():
+            for src in self.game.all_permanents():
+                sm = src.card.static_mod
+                if sm is not None:
+                    d = sm(src, self)
+                    if d:
+                        dp += d[0]
+                        dt += d[1]
+        return dp, dt
 
     # -- propiedades derivadas -------------------------------------------- #
     @property
@@ -171,11 +190,11 @@ class Permanent:
 
     @property
     def power(self) -> int:
-        return self.card.power + self.counters.get("+1/+1", 0)
+        return self.card.power + self.counters.get("+1/+1", 0) + self._static_delta()[0]
 
     @property
     def toughness(self) -> int:
-        return self.card.toughness + self.counters.get("+1/+1", 0)
+        return self.card.toughness + self.counters.get("+1/+1", 0) + self._static_delta()[1]
 
     @property
     def keywords(self) -> set:
@@ -396,6 +415,36 @@ class Game:
     def opponents(self, p: "Player") -> list:
         return [o for o in self.players if o is not p and not o.lost]
 
+    def all_permanents(self) -> list:
+        out = []
+        for pl in self.players:
+            out.extend(pl.battlefield)
+        return out
+
+    # -- objetivos (P2.2) ------------------------------------------------- #
+    def can_target(self, caster: "Player", perm: "Permanent") -> bool:
+        """Reglas de objetivo. hexproof: no puede ser objetivo de hechizos/
+        habilidades que controla un OPONENTE. ward: aqui se modela como
+        'intargeteable por rivales' salvo que el atacante pague (simplificado:
+        no lo puede pagar la IA, asi que protege)."""
+        if perm.controller is caster:
+            return True
+        if perm.has("hexproof"):
+            return False
+        if "ward" in perm.card.subtypes:  # ward simplificado
+            return False
+        return True
+
+    def legal_creature_targets(self, caster: "Player",
+                               opponents_only: bool = True) -> list:
+        pool = []
+        players = self.opponents(caster) if opponents_only else self.players
+        for pl in players:
+            for perm in pl.creatures():
+                if self.can_target(caster, perm):
+                    pool.append(perm)
+        return pool
+
     # -- eventos ---------------------------------------------------------- #
     def emit(self, event: str, **kw):
         """Encola en la pila los disparadores registrados para `event`.
@@ -448,8 +497,12 @@ class Game:
     def move_to_battlefield(self, card: Card, player: "Player",
                             is_token: bool = False) -> Permanent:
         perm = Permanent(card, player, is_token=is_token)
+        perm.game = self
         if card.enters_tapped:
             perm.tapped = True
+        # planeswalker: entra con su lealtad inicial
+        if "planeswalker" in card.types and card.loyalty:
+            perm.counters["loyalty"] = card.loyalty
         player.battlefield.append(perm)
         if card.on_etb:
             card.on_etb(self, player, perm)

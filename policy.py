@@ -56,8 +56,21 @@ class Policy:
             sc = self.score(game, me, card)
             if not second and sc <= 0:
                 continue  # sin tag util: esperar a fase 2
+            targets = self.choose_targets(game, me, card)
+            if card.target_spec and not targets:
+                continue  # sin objetivo legal, no se puede lanzar
             if me.can_pay(card.cost):
-                game.cast(me, card)
+                game.cast(me, card, targets=targets)
+
+    def choose_targets(self, game, me, card):
+        """Elige objetivos legales segun el target_spec de la carta."""
+        spec = getattr(card, "target_spec", None)
+        if spec == "opp_creature":
+            pool = game.legal_creature_targets(me)
+            if not pool:
+                return []
+            return [max(pool, key=lambda p: (p.power, p.toughness))]
+        return []
 
     def _maybe_cast_commander(self, game, me):
         on_field = any(p.card is me.commander_card for p in me.battlefield)

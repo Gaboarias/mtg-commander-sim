@@ -206,6 +206,40 @@ def test_counter_modifiers():
     assert creat.counters["+1/+1"] == 7
 
 
+# -- P2.4 anthem (efecto continuo) modifica poder/resistencia -------------- #
+def test_anthem_boosts_creatures():
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = _game([a, b])
+    creat = g.move_to_battlefield(creature("Bicho", "1G", 2, 2), a)
+    assert (creat.power, creat.toughness) == (2, 2)
+    g.move_to_battlefield(cards.anthem("Estandarte", "2W", 1, 1, ("W",)), a)
+    assert (creat.power, creat.toughness) == (3, 3)   # anthem propio
+    # no afecta al rival
+    enemy = g.move_to_battlefield(creature("Rival", "1R", 2, 2), b)
+    assert (enemy.power, enemy.toughness) == (2, 2)
+
+
+# -- P2.2 hexproof no puede ser objetivo de removal rival ------------------ #
+def test_hexproof_not_targetable_by_opponent():
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = _game([a, b])
+    safe = g.move_to_battlefield(
+        creature("Escurridizo", "1G", 3, 3, kw=("hexproof",)), b)
+    plain = g.move_to_battlefield(creature("Normal", "1G", 4, 4), b)
+    # a (rival) no puede apuntar a la criatura con hexproof
+    assert not g.can_target(a, safe)
+    assert g.can_target(a, plain)
+    legal = g.legal_creature_targets(a)
+    assert safe not in legal and plain in legal
+    # su propio controlador si puede apuntarla
+    assert g.can_target(b, safe)
+    # el removal dirigido no destruye una hexproof si es el unico objetivo
+    cards.destroy_target(g, a, [safe])
+    assert safe in b.battlefield
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

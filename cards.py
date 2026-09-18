@@ -72,8 +72,22 @@ def make_token(game, player, name, power, toughness, kw=(), subtypes=()):
 # Efectos reutilizables
 # --------------------------------------------------------------------------- #
 
+def anthem(name, cost, dp, dt, color_id, tags=("engine",)):
+    """Efecto continuo (P2.4): +dp/+dt a las criaturas de su controlador."""
+    def mod(source_perm, target_perm):
+        if (target_perm.controller is source_perm.controller
+                and target_perm.is_creature()):
+            return (dp, dt)
+        return (0, 0)
+    c = Card(name, {"enchantment"}, parse_cost(cost),
+             color_id=set(color_id), tags=set(tags))
+    c.static_mod = mod
+    return c
+
+
 def destroy_biggest(game, ctrl, targets):
-    """Destruye la criatura mas grande de un oponente."""
+    """Destruye la criatura mas grande de un oponente (sin sistema de objetivos;
+    lo usan efectos que no 'apuntan')."""
     victims = []
     for o in game.opponents(ctrl):
         victims.extend(o.creatures())
@@ -81,6 +95,21 @@ def destroy_biggest(game, ctrl, targets):
         return
     biggest = max(victims, key=lambda p: (p.power, p.toughness))
     game.destroy(biggest, "removal")
+
+
+def destroy_target(game, ctrl, targets):
+    """Removal DIRIGIDO (P2.2): destruye el objetivo si sigue siendo legal
+    al resolver (revalida hexproof/ward)."""
+    if not targets:
+        return
+    perm = targets[0]
+    # el objetivo debe seguir en el campo y ser legal
+    if perm not in perm.controller.battlefield:
+        return
+    if not game.can_target(ctrl, perm):
+        game.log(f"{ctrl.name}: removal fizzlea (objetivo protegido)")
+        return
+    game.destroy(perm, "removal")
 
 
 def wrath(game, ctrl, targets):
@@ -418,7 +447,8 @@ def GrayMerchant():
 
 def GoForTheThroat():
     return Card("Go for the Throat", {"instant"}, parse_cost("1B"),
-                on_cast_resolve=destroy_biggest, tags={"removal"}, color_id={B})
+                on_cast_resolve=destroy_target, tags={"removal"}, color_id={B},
+                target_spec="opp_creature")
 
 
 def NightsWhisper():

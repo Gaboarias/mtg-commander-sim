@@ -61,6 +61,7 @@ def lorehold():
     d.append(cards.KarmicGuide())
     d.append(cards.CronistaEspectral())
     d.append(cards.MerodeadorDeTumbas())
+    d.append(cards.anthem("Estandarte de Basalto", "2W", 1, 1, (W,)))  # P2.4 anthem
     # criaturas de relleno tematicas
     d.append(creature("Historiador de Guerra", "1R", 2, 2, color_id=(R,)))
     d.append(creature("Cronista Lorehold", "2W", 2, 3, color_id=(W,)))
@@ -83,8 +84,8 @@ def lorehold():
 def _boros_removal():
     from engine import Card, parse_cost
     return Card("Justicia Angelical", {"instant"}, parse_cost("1W"),
-                on_cast_resolve=cards.destroy_biggest, tags={"removal"},
-                color_id={W})
+                on_cast_resolve=cards.destroy_target, tags={"removal"},
+                color_id={W}, target_spec="opp_creature")
 
 
 def _boros_wipe():
