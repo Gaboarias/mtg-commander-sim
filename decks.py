@@ -179,13 +179,30 @@ DECKS = {
 }
 
 # Ejemplos publicos que ve un usuario nuevo (temas de precon). Reutilizan los
-# mazos de arriba, ya probados, presentados bajo tres temas reconocibles.
-#   Strixhaven -> Lorehold (colegio Lorehold, R/W)
-#   Marvel     -> Kang (Kang el Conquistador, mono-negro)
-#   Vieja guardia -> Simic clasico de contadores (G/U)
-DECKS["strixhaven"] = lorehold
+# 99 ya probados pero con comandantes PROPIOS y distintos, para no repetir los
+# comandantes de los decks del usuario (Quintorius, Ezuri, Omo...).
+#   Strixhaven    -> R/W academico
+#   Marvel        -> Kang (mono-negro)
+#   Vieja guardia -> Simic clasico (G/U)
+
+def strixhaven():
+    deck, _cmd = lorehold()          # reutiliza los 99 R/W
+    commander = creature("Decana de Strixhaven", "2RW", 3, 4, legendary=True,
+                         kw=("vigilance",), tags=("engine",), color_id=(R, W))
+    return deck, commander
+
+
+def vieja_guardia():
+    deck, _cmd = tricky()            # reutiliza los 99 G/U
+    commander = creature("Guardiana de la Vieja Escuela", "2GU", 3, 4,
+                         legendary=True, kw=("trample",), tags=("engine",),
+                         color_id=(G, U))
+    return deck, commander
+
+
+DECKS["strixhaven"] = strixhaven
 DECKS["marvel"] = kang
-DECKS["vieja-guardia"] = tricky
+DECKS["vieja-guardia"] = vieja_guardia
 
 EXAMPLES = ["strixhaven", "marvel", "vieja-guardia"]
 EXAMPLE_THEME = {
