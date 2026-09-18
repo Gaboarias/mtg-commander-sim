@@ -70,13 +70,68 @@ class InteractiveGame:
         self.human_index = max(0, min(int(human_index), self.n - 1))
         self.g = Game(self.players, seed=int(seed), max_turns=max_turns,
                       trace=False)
-        self.phase = "waiting"      # waiting | main | defense | over
+        self.phase = "mulligan"     # mulligan | main | defense | over
         self.attacked = False
         self.winner = None
         self.mode = None            # None | "defense"
         self._attacker = None       # jugador que ataca (durante defensa)
         self._declared = []         # atacantes declarados (Permanent)
+        self.mulls = 0              # mulligans que llevás (para el londrino)
+        self._ai_mulligans()        # los rivales hacen mulligan solos
+        # el humano decide en la fase "mulligan" (ver mulligan()/keep())
+
+    # -- mulligan (regla de Commander: primer mulligan gratis) ------------ #
+    def _draw7(self, p):
+        p.library.extend(p.hand)
+        p.hand = []
+        self.g.rng.shuffle(p.library)
+        for _ in range(7):
+            if p.library:
+                p.hand.append(p.library.pop())
+
+    def _ai_mulligans(self, max_mulls=3):
+        for p in self.players:
+            if p is self.human():
+                continue
+            mulls = 0
+            while (mulls < max_mulls and p.policy is not None
+                   and hasattr(p.policy, "should_mulligan")
+                   and p.policy.should_mulligan(p.hand, p)):
+                self._draw7(p)
+                mulls += 1
+            for _ in range(max(0, mulls - 1)):   # primer mulligan gratis
+                if not p.hand:
+                    break
+                card = self.g._bottom_choice(p)
+                p.hand.remove(card)
+                p.library.insert(0, card)
+
+    def mulligan(self):
+        """El humano hace un mulligan (roba 7 nuevas). El primero es gratis."""
+        if self.phase != "mulligan":
+            return self.state()
+        self._draw7(self.human())
+        self.mulls += 1
+        return self.state()
+
+    def keep(self, bottom_indices=None):
+        """Se queda con la mano. Pone (mulligans-1) cartas al fondo (Commander:
+        el primer mulligan no cuesta)."""
+        if self.phase != "mulligan":
+            return self.state()
+        me = self.human()
+        to_bottom = max(0, self.mulls - 1)
+        chosen = [i for i in sorted(set(bottom_indices or []), reverse=True)
+                  if 0 <= i < len(me.hand)][:to_bottom]
+        for i in chosen:
+            me.library.insert(0, me.hand.pop(i))
+        while len(me.hand) > 7 - to_bottom and me.hand:   # completar si faltó
+            card = self.g._bottom_choice(me)
+            me.hand.remove(card)
+            me.library.insert(0, card)
+        self.phase = "waiting"
         self._advance_to_human()
+        return self.state()
 
     # -- helpers ---------------------------------------------------------- #
     def human(self):
@@ -451,5 +506,8 @@ class InteractiveGame:
             "players": players,
             "legal": self.legal(),
             "combat": self._defense_state() if self.mode == "defense" else None,
+            "mulligan": ({"mulls": self.mulls, "to_bottom": max(0, self.mulls - 1),
+                          "lands": sum(1 for c in self.human().hand if c.is_land())}
+                         if self.phase == "mulligan" else None),
             "log": self.g.log_lines[-14:],
         }

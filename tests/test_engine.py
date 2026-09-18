@@ -292,7 +292,8 @@ def test_interactive_manual_turn():
     defs = [("Tu deck",) + decks.build("marvel"),
             ("Rival",) + decks.build("strixhaven")]
     ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
-    st = ig.state()
+    assert ig.state()["phase"] == "mulligan"        # arranca en mulligan
+    st = ig.keep([])                                 # me quedo con la mano
     assert st["phase"] == "main" and st["active"] == 0
     assert "hand_cards" in st["players"][0]        # el humano ve su mano
     assert "hand_cards" not in st["players"][1]     # el rival no
@@ -315,6 +316,7 @@ def test_interactive_defense_window():
         ig = interactive.from_registered(
             [{"key": "marvel"}, {"key": "strixhaven"}, {"key": "old-guard"}],
             human_index=0, seed=seed)
+        ig.keep([])                                    # pasar el mulligan
         for _ in range(40):
             st = ig.state()
             if st["phase"] == "over":

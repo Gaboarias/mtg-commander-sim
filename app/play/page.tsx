@@ -38,9 +38,11 @@ type Combat = {
   blockers: { uid: number; name: string; power: number; toughness: number }[];
   responses: { i: number; name: string; cost: string; target_spec?: string | null; targets?: TargetOpt[] }[];
 };
+type Mulligan = { mulls: number; to_bottom: number; lands: number };
 type GameState = {
   turn: number; active: number; human_index: number; phase: string; attacked: boolean;
-  winner: string | null; players: PlayerState[]; legal: Legal; combat: Combat | null; log: string[];
+  winner: string | null; players: PlayerState[]; legal: Legal; combat: Combat | null;
+  mulligan: Mulligan | null; log: string[];
 };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -71,6 +73,8 @@ def act(kind, arg_json):
     elif kind == 'activate': g.activate(a.get('uid'), a.get('index', 0))
     elif kind == 'respond': g.respond(a.get('i'), a.get('target_uid'))
     elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
+    elif kind == 'mulligan': g.mulligan()
+    elif kind == 'keep': g.keep(a.get('bottom', []))
     return json.dumps(g.state())
 def export_game():
     return json.dumps(_IG['g'].export())
@@ -96,6 +100,7 @@ export default function Play() {
   const infoReq = useRef<Set<string>>(new Set());  // nombres ya pedidos
   const [assign, setAssign] = useState<Record<number, number>>({});  // bloqueador -> atacante
   const [targeting, setTargeting] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; targets: TargetOpt[] } | null>(null);
+  const [bottom, setBottom] = useState<number[]>([]);  // cartas al fondo tras mulligan
 
   useEffect(() => {
     const mine: Pickable[] = listDecks().map((d: SavedDeck) => ({
@@ -196,6 +201,7 @@ export default function Play() {
       setState(JSON.parse(raw));
       if (kind === "attack" || kind === "end") setPicked(new Set());
       if (kind === "defend") setAssign({});
+      if (kind === "mulligan" || kind === "keep") setBottom([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -445,6 +451,55 @@ export default function Play() {
               </p>
             </motion.div>
           )}
+
+          {state.mulligan && (() => {
+            const m = state.mulligan;
+            const hand = state.players[meIdx]?.hand_cards || [];
+            const enough = bottom.length === m.to_bottom;
+            return (
+              <div className="card">
+                <h2>🤚 Mano inicial{m.mulls > 0 ? ` · mulligan ${m.mulls}` : ""}</h2>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  {m.lands} tierra{m.lands === 1 ? "" : "s"} en mano.
+                  {m.lands <= 1 && <b style={{ color: "#e0684f" }}> Pocas tierras — conviene mulligan.</b>}
+                  {" "}Regla Commander: el primer mulligan es <b>gratis</b>; después ponés 1 carta al fondo por cada mulligan extra.
+                </p>
+                {m.to_bottom > 0 && (
+                  <p className="muted">Elegí <b>{m.to_bottom}</b> carta{m.to_bottom === 1 ? "" : "s"} para el fondo ({bottom.length}/{m.to_bottom}).</p>
+                )}
+                <div className="hand">
+                  {hand.map((hc) => {
+                    const sel = bottom.includes(hc.i);
+                    return (
+                      <div key={hc.i} className={`handcard ${sel ? "playable" : ""}`}>
+                        <div className="hc-art" title="Tocar para ver / elegir"
+                          onClick={() => {
+                            if (m.to_bottom > 0) {
+                              setBottom((b) => b.includes(hc.i) ? b.filter((x) => x !== hc.i)
+                                : b.length < m.to_bottom ? [...b, hc.i] : b);
+                            } else { inspectCard(hc); }
+                          }}
+                          style={art[hc.name] ? { backgroundImage: `url(${art[hc.name]})` } : undefined}>
+                          {!art[hc.name] && <span>{hc.name}</span>}
+                          {hc.cost && <span className="hc-cost">{hc.cost}</span>}
+                          {sel && <span className="cm-counter" style={{ left: "auto", right: 2 }}>↓ fondo</span>}
+                        </div>
+                        <div className="hc-foot">
+                          <span className="hc-name" onClick={() => inspectCard(hc)}>{hc.name}{hc.is_land ? " 🏞" : ""}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="act-block">
+                  <button className="ghost" onClick={() => doAct("mulligan")}>🔄 Mulligan</button>
+                  <button className="go" onClick={() => doAct("keep", { bottom })} disabled={m.to_bottom > 0 && !enough}>
+                    ✅ Mantener{m.to_bottom > 0 ? ` (fondo: ${bottom.length}/${m.to_bottom})` : ""}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
 
           {myTurn && (() => {
             const landIdx = new Set((legal?.lands || []).map((l) => l.i));
