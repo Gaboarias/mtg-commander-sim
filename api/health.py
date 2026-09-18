@@ -5,9 +5,12 @@ mazos, las funciones Python y el import del motor funcionan (el problema seria
 de red, Scryfall/MTGJSON). Si da 500, el bundling del motor esta fallando.
 """
 import json
+import os
 import sys
 import traceback
 from http.server import BaseHTTPRequestHandler
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # api/ en el path
 
 
 class handler(BaseHTTPRequestHandler):

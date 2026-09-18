@@ -3,9 +3,12 @@
 (Nombre distinto de los modulos de la raiz para no colisionar en el import.)
 """
 import json
+import os
+import sys
 from http.server import BaseHTTPRequestHandler
 
-from _sim import deck_list, coverage_report
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # api/ en el path
+from _sim import deck_list, coverage_report  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):

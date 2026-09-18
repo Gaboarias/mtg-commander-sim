@@ -4,10 +4,13 @@
 Devuelve winrates (n partidas) o el registro de una partida (log=1).
 """
 import json
+import os
+import sys
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-from _sim import simulate, game_log
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # api/ en el path
+from _sim import simulate, game_log  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):

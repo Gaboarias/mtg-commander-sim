@@ -6,9 +6,12 @@ Body JSON:
                         "opponent":"tricky", "n":200}
 """
 import json
+import os
+import sys
 from http.server import BaseHTTPRequestHandler
 
-from _sim import resolve_decklist, simulate_custom
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # api/ en el path
+from _sim import resolve_decklist, simulate_custom  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):

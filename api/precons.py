@@ -2,10 +2,13 @@
    GET /api/precons?load=NAME  -> ese precon como decklist de texto
 """
 import json
+import os
+import sys
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-from _precon import list_precons, precon_to_text
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # api/ en el path
+from _precon import list_precons, precon_to_text  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):
