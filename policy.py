@@ -151,12 +151,23 @@ class Policy:
         opps = game.opponents(me)
         if not opps:
             return []
-        # atacar al jugador con menos vidas
+        attackers = [p for p in me.creatures() if p.can_attack()]
+        if not attackers:
+            return []
+        # jugador con menos vidas como objetivo principal
         target = min(opps, key=lambda o: o.life)
+        # planeswalkers rivales (amenazas a derribar)
+        pws = [perm for o in opps for perm in o.battlefield
+               if "planeswalker" in perm.card.types]
         result = []
-        for perm in me.creatures():
-            if perm.can_attack():
-                result.append((perm, target))
+        pw_i = 0
+        for i, atk in enumerate(attackers):
+            # manda ~la mitad de los atacantes a un planeswalker rival si existe
+            if pws and i % 2 == 1:
+                result.append((atk, pws[pw_i % len(pws)]))
+                pw_i += 1
+            else:
+                result.append((atk, target))
         return result
 
     # -- bloqueo ---------------------------------------------------------- #
@@ -180,9 +191,10 @@ class Policy:
                 # preferir uno que mate al atacante y sobreviva
                 if b.power >= atk.toughness and b.toughness > atk.power:
                     break
-            # bloquear solo si somos agresivos o si el dano acumulado nos mata
-            total_incoming = sum(a.power for a in incoming)
-            if best is not None and (total_incoming >= me.life or
+            # amenaza a la vida: solo cuenta el dano dirigido al JUGADOR
+            # (los atacantes a un planeswalker no restan vida)
+            life_incoming = sum(a.power for a in incoming if a.attacking is me)
+            if best is not None and (life_incoming >= me.life or
                                      (best.power >= atk.toughness)):
                 result.append((atk, best))
                 used.add(best.uid)

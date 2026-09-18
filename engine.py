@@ -764,6 +764,12 @@ class Game:
         return True
 
     # -- combate ---------------------------------------------------------- #
+    def _def_player(self, attacker: Permanent) -> "Player":
+        """Jugador que defiende contra `attacker`: el jugador atacado, o el
+        controlador del planeswalker atacado."""
+        d = attacker.attacking
+        return d if isinstance(d, Player) else d.controller
+
     def combat(self, p: "Player"):
         self.emit("begin_combat", player=p)
         self.resolve_stack()
@@ -773,8 +779,16 @@ class Game:
         attackers = p.policy.declare_attackers(self, p) if p.policy else []
         declared = []
         for perm, defender in attackers:
-            if not perm.can_attack() or defender.lost:
+            if not perm.can_attack():
                 continue
+            # el defensor puede ser un jugador o un planeswalker rival
+            if isinstance(defender, Player):
+                if defender.lost:
+                    continue
+            else:  # planeswalker
+                if (defender.controller.lost
+                        or defender not in defender.controller.battlefield):
+                    continue
             perm.attacking = defender
             if not perm.has("vigilance"):
                 perm.tapped = True
@@ -789,9 +803,10 @@ class Game:
         if not declared:
             return
 
-        # declarar bloqueadores por cada defensor
+        # declarar bloqueadores: agrupar por el jugador que defiende (dueno del
+        # jugador o del planeswalker atacado)
         for defender in self.opponents(p):
-            incoming = [a for a in declared if a.attacking is defender]
+            incoming = [a for a in declared if self._def_player(a) is defender]
             if not incoming or not defender.policy:
                 continue
             blocks = defender.policy.declare_blockers(self, defender, incoming)

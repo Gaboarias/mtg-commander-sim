@@ -348,6 +348,22 @@ def test_planeswalker_loyalty_and_minus_four():
     assert pw.counters["loyalty"] == 1
 
 
+def test_combat_can_attack_planeswalker():
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = _game([a, b])
+    pw = g.move_to_battlefield(cards.QuintoriusPlaneswalker(), b)  # lealtad 4
+    atk1 = g.move_to_battlefield(creature("Uno", "1R", 3, 3), a)
+    atk2 = g.move_to_battlefield(creature("Dos", "1R", 2, 2), a)
+    for p in (atk1, atk2):
+        p.summoning_sick = False
+    b_life = b.life
+    g.combat(a)  # la politica manda ~mitad al jugador, ~mitad al planeswalker
+    # el planeswalker recibio dano (perdio lealtad) y el jugador tambien
+    assert pw.counters["loyalty"] < 4
+    assert b.life < b_life
+
+
 def test_planeswalker_dies_at_zero_loyalty():
     a = _mk_player("a")
     b = _mk_player("b")

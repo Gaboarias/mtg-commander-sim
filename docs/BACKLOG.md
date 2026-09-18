@@ -55,10 +55,11 @@ Hoy el disparador roba 1 y descarta la ultima carta de la mano. Deberia:
 > **Estado: P2.1–P2.5 IMPLEMENTADAS** (ver tests en `tests/test_engine.py`).
 > - P2.1 ventana de prioridad en `Game.cast` + `policy.respond` + `Counterspell`.
 > - P2.2 `Game.can_target`/`legal_creature_targets`, hexproof/ward, removal dirigido.
-> - P2.3 lealtad + `activate_loyalty` (una por turno) + daño resta lealtad + SBA a 0.
+> - P2.3 lealtad + `activate_loyalty` (una por turno) + la IA puede **atacar
+>   planeswalkers** (daño redirigido que resta lealtad) + SBA a 0.
 >   En esta build Quintorius sigue siendo comandante criatura (motor de Espíritus
 >   del P1.1); el planeswalker con `-4` se agregó como carta aparte
->   (`Quintorius, Loremaster`). Falta pulir el ataque dirigido a PWs por la IA.
+>   (`Quintorius, Loremaster`).
 > - P2.4 `Permanent.power/toughness` suman `static_mod` (anthems/capas).
 > - P2.5 `Game(mulligan=True)` regla de Londres + `policy.should_mulligan`.
 
