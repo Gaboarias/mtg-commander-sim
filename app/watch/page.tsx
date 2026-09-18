@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { listDecks, type SavedDeck } from "../localDecks";
 
 type RegDeck = { key: string; commander: string; identity: string[]; theme?: string };
@@ -22,11 +23,16 @@ type PlayerState = {
 type Step = { turn: number; active: number; label: string; stack: string[]; players: PlayerState[] };
 type Replay = { players: string[]; winner: string; turns: number; steps: Step[]; images: Record<string, string> };
 
-function CardMini({ perm, art }: { perm: Perm; art?: string }) {
+function CardMini({ perm, art, reduce }: { perm: Perm; art?: string; reduce: boolean }) {
   const plus = perm.counters["+1/+1"] || 0;
   return (
-    <div
-      className={`cardmini ${perm.tapped ? "tapped" : ""} ${perm.attacking ? "atk" : ""}`}
+    <motion.div
+      layout={!reduce}
+      initial={reduce ? false : { opacity: 0, scale: 0.6, y: -8 }}
+      animate={{ opacity: 1, scale: 1, y: 0, rotate: perm.tapped ? 9 : 0 }}
+      exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.5, y: 10 }}
+      transition={{ type: "spring", stiffness: 420, damping: 30 }}
+      className={`cardmini ${perm.attacking ? "atk" : ""}`}
       title={perm.name}
     >
       {art ? (
@@ -44,18 +50,26 @@ function CardMini({ perm, art }: { perm: Perm; art?: string }) {
         </div>
       )}
       {plus > 0 && <span className="cm-counter">+{plus}</span>}
-    </div>
+    </motion.div>
   );
 }
 
-function Board({ p, active, art }: { p: PlayerState; active: boolean; art: Record<string, string> }) {
+function Board({ p, active, art, reduce }: { p: PlayerState; active: boolean; art: Record<string, string>; reduce: boolean }) {
   const lands = p.battlefield.filter((x) => x.is_land);
   const nonlands = p.battlefield.filter((x) => !x.is_land);
   return (
-    <div className={`seat ${active ? "active" : ""} ${p.lost ? "dead" : ""}`}>
+    <motion.div layout={!reduce} className={`seat ${active ? "active" : ""} ${p.lost ? "dead" : ""}`}>
       <div className="seat-head">
         <span className="seat-name">{active ? "▶ " : ""}{p.name}</span>
-        <span className={`life ${p.life <= 10 ? "low" : ""}`}>♥ {p.life}</span>
+        <motion.span
+          key={p.life}
+          initial={reduce ? false : { scale: 1.35 }}
+          animate={{ scale: 1 }}
+          transition={{ duration: 0.35 }}
+          className={`life ${p.life <= 10 ? "low" : ""}`}
+        >
+          ♥ {p.life}
+        </motion.span>
       </div>
       <div className="seat-meta">
         <span>✋ {p.hand}</span>
@@ -64,17 +78,21 @@ function Board({ p, active, art }: { p: PlayerState; active: boolean; art: Recor
         <span title="comandante">👑 {p.commander.join(", ") || "—"}</span>
       </div>
       {nonlands.length > 0 && (
-        <div className="row-cards">
-          {nonlands.map((pm) => <CardMini key={pm.uid} perm={pm} art={art[pm.name]} />)}
-        </div>
+        <motion.div layout={!reduce} className="row-cards">
+          <AnimatePresence>
+            {nonlands.map((pm) => <CardMini key={pm.uid} perm={pm} art={art[pm.name]} reduce={reduce} />)}
+          </AnimatePresence>
+        </motion.div>
       )}
       {lands.length > 0 && (
-        <div className="row-cards lands">
-          {lands.map((pm) => <CardMini key={pm.uid} perm={pm} art={art[pm.name]} />)}
-        </div>
+        <motion.div layout={!reduce} className="row-cards lands">
+          <AnimatePresence>
+            {lands.map((pm) => <CardMini key={pm.uid} perm={pm} art={art[pm.name]} reduce={reduce} />)}
+          </AnimatePresence>
+        </motion.div>
       )}
       {p.battlefield.length === 0 && <p className="muted empty">sin permanentes</p>}
-    </div>
+    </motion.div>
   );
 }
 
@@ -88,6 +106,7 @@ export default function Watch() {
   const [replay, setReplay] = useState<Replay | null>(null);
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const reduce = useReducedMotion() ?? false;
 
   useEffect(() => {
     const mine: Pickable[] = listDecks().map((d: SavedDeck) => ({
@@ -151,7 +170,7 @@ export default function Watch() {
     <div className="wrap">
       <header>
         <h1>🎬 Ver una partida</h1>
-        <p>Elegí de 2 a 6 decks y mirá cómo la IA juega la mesa, turno a turno.</p>
+        <p>Elegí de 2 a 6 decks y mirá cómo el sistema juega la mesa, turno a turno.</p>
       </header>
 
       <div className="card">
@@ -207,18 +226,36 @@ export default function Watch() {
 
           <div className="seats" data-n={step.players.length}>
             {step.players.map((p, i) => (
-              <Board key={p.name} p={p} active={i === step.active} art={replay.images} />
+              <Board key={p.name} p={p} active={i === step.active} art={replay.images} reduce={reduce} />
             ))}
           </div>
 
           {idx === last && (
             <p className="win-line">🏆 Gana <b>{replay.winner}</b> en {replay.turns} turnos.</p>
           )}
+
+          <details className="legend">
+            <summary>¿Qué significa cada cosa? (nomenclatura)</summary>
+            <div className="legend-grid">
+              <span>▶ jugador en turno</span>
+              <span>♥ vida (roja si ≤ 10)</span>
+              <span>✋ cartas en mano</span>
+              <span>📚 cartas en biblioteca</span>
+              <span>⚰ cartas en cementerio</span>
+              <span>👑 comandante</span>
+              <span>🂠 carta rotada = tapeada (girada)</span>
+              <span><b className="k-atk">borde rojo</b> = atacando</span>
+              <span><b className="k-pt">2/3</b> = fuerza/resistencia</span>
+              <span><b className="k-dmg">−N</b> = daño recibido este turno</span>
+              <span><b className="k-cnt">+N</b> = contadores +1/+1</span>
+              <span>ficha de color = carta sin arte (casera)</span>
+            </div>
+          </details>
         </div>
       )}
 
       <footer>
-        La partida la juega la IA (nivel elegido). Las cartas con arte real vienen
+        La partida la juega el sistema (dificultad elegida). Las cartas con arte real vienen
         de Scryfall; las cartas de ejemplo caseras usan una ficha simple.
         Para ver decks reales con arte, importalos en el <Link href="/deck">editor</Link> y guardalos.
       </footer>

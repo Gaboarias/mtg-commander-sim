@@ -354,8 +354,8 @@ export default function Home() {
       )}
 
       <footer>
-        Los resultados son estimaciones de muchas partidas jugadas por una IA
-        simple. Las cartas con efecto programado usan su habilidad; el resto se
+        Los resultados son estimaciones de muchas partidas jugadas por el
+        sistema. Las cartas con efecto programado usan su habilidad; el resto se
         juega con sus datos reales (coste, fuerza, resistencia).
       </footer>
     </div>

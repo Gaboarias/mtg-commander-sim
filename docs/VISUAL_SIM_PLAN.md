@@ -15,7 +15,7 @@ Progresión en 3 fases. Cada fase deja construida la base de la siguiente
 
 ---
 
-## Fase 1 — Ver jugar a la IA (replay visual)
+## Fase 1 — Ver jugar al sistema (replay visual)
 
 **Qué:** elegís decks y semilla → el motor juega → se ve el tablero animado
 turno a turno con una línea de tiempo (play/pausa, ir a turno N).
@@ -25,9 +25,9 @@ turno a turno con una línea de tiempo (play/pausa, ir a turno N).
 - **Herramientas:** las actuales. **Sin base de datos.**
 - **Esfuerzo:** M. **Riesgo:** bajo.
 
-## Fase 2 — Jugar vos vs la IA
+## Fase 2 — Jugar vos vs el sistema
 
-**Qué:** hacés clic (jugar tierra, lanzar, atacar, bloquear); la IA responde.
+**Qué:** hacés clic (jugar tierra, lanzar, atacar, bloquear); el sistema responde.
 
 - **Motor:** modo "esperar acción del humano" en las ventanas de prioridad
   (hoy juega solo).
