@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 const LINKS = [
   { href: "/", label: "Simulador" },
   { href: "/watch", label: "Ver partida" },
+  { href: "/play", label: "Jugar" },
   { href: "/deck", label: "Editor de decks" },
 ];
 

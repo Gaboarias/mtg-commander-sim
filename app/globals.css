@@ -342,3 +342,10 @@ textarea:focus { border-color: var(--accent-2) !important; }
 .seat-meta .cmdr-dmg, .seat-meta .poison { font-variant-numeric: tabular-nums; }
 .seat-meta .cmdr-dmg.fatal, .seat-meta .poison.fatal { color: #e0684f; font-weight: 700; }
 .legend-grid .k-cmdr { color: var(--text); }
+
+/* --- Jugar (Fase 2) --------------------------------------------------- */
+.act-block { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.act-block .act-label { color: var(--muted); font-size: .85rem; margin-right: 2px; }
+.act-block .ghost, .act-block .go { padding: 6px 12px; }
+.cardmini.sel-able { outline: 1px dashed rgba(216,178,58,.6); outline-offset: 1px; }
+.cardmini.sel { outline: 2px solid var(--accent); box-shadow: 0 0 0 2px rgba(216,178,58,.5); }

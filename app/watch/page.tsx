@@ -2,114 +2,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { useReducedMotion } from "framer-motion";
 import { listDecks, type SavedDeck } from "../localDecks";
+import { Seat, type PlayerState } from "../board";
 
 type RegDeck = { key: string; commander: string; identity: string[]; theme?: string };
 type MatchSpec =
   | { kind: "registered"; key: string; name: string }
   | { kind: "custom"; name: string; text: string };
 type Pickable = { id: string; label: string; tag: string; spec: MatchSpec; mine: boolean };
-
-type Perm = {
-  uid: number; name: string; tapped: boolean; power: number | null; toughness: number | null;
-  damage: number; counters: Record<string, number>; is_land: boolean; is_creature: boolean;
-  is_token: boolean; attacking: boolean; sick: boolean;
-};
-type PlayerState = {
-  name: string; life: number; lost: boolean; hand: number; library: number;
-  commander: string[]; cmdr_tax: number; cmdr_damage?: Record<string, number>;
-  poison?: number; graveyard: string[]; battlefield: Perm[];
-};
 type Step = { turn: number; active: number; label: string; stack: string[]; players: PlayerState[] };
 type Replay = { players: string[]; winner: string; turns: number; steps: Step[]; images: Record<string, string> };
-
-function CardMini({ perm, art, reduce }: { perm: Perm; art?: string; reduce: boolean }) {
-  const plus = perm.counters["+1/+1"] || 0;
-  return (
-    <motion.div
-      layout={!reduce}
-      initial={reduce ? false : { opacity: 0, scale: 0.6, y: -8 }}
-      animate={{ opacity: 1, scale: 1, y: 0, rotate: perm.tapped ? 9 : 0 }}
-      exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.5, y: 10 }}
-      transition={{ type: "spring", stiffness: 420, damping: 30 }}
-      className={`cardmini ${perm.attacking ? "atk" : ""}`}
-      title={perm.name}
-    >
-      {art ? (
-        <div className="art" style={{ backgroundImage: `url(${art})` }} />
-      ) : (
-        <div className={`art ph ${perm.is_land ? "land" : perm.is_creature ? "crea" : "other"}`}>
-          <span>{perm.name}</span>
-        </div>
-      )}
-      <div className="cm-name">{perm.name}</div>
-      {perm.is_creature && (
-        <div className="cm-pt">
-          {perm.power}/{perm.toughness}
-          {perm.damage > 0 ? <span className="dmg"> −{perm.damage}</span> : null}
-        </div>
-      )}
-      {plus > 0 && <span className="cm-counter">+{plus}</span>}
-    </motion.div>
-  );
-}
-
-function Board({ p, active, art, reduce }: { p: PlayerState; active: boolean; art: Record<string, string>; reduce: boolean }) {
-  const lands = p.battlefield.filter((x) => x.is_land);
-  const nonlands = p.battlefield.filter((x) => !x.is_land);
-  const maxCmdr = Math.max(0, ...Object.values(p.cmdr_damage || {}));
-  return (
-    <motion.div layout={!reduce} className={`seat ${active ? "active" : ""} ${p.lost ? "dead" : ""}`}>
-      <div className="seat-head">
-        <span className="seat-name">
-          {p.lost ? "☠ " : active ? "▶ " : ""}{p.name}
-          {p.lost && <span className="dead-badge">eliminado</span>}
-        </span>
-        <motion.span
-          key={p.life}
-          initial={reduce ? false : { scale: 1.35 }}
-          animate={{ scale: 1 }}
-          transition={{ duration: 0.35 }}
-          className={`life ${p.life <= 10 ? "low" : ""}`}
-        >
-          ♥ {p.life}
-        </motion.span>
-      </div>
-      <div className="seat-meta">
-        <span>✋ {p.hand}</span>
-        <span>📚 {p.library}</span>
-        <span>⚰ {p.graveyard.length}</span>
-        <span title="comandante">👑 {p.commander.join(", ") || "—"}</span>
-        {maxCmdr > 0 && (
-          <span className={`cmdr-dmg ${maxCmdr >= 21 ? "fatal" : ""}`} title="daño de comandante recibido (21 elimina)">
-            🗡 {maxCmdr}/21
-          </span>
-        )}
-        {(p.poison || 0) > 0 && (
-          <span className={`poison ${(p.poison || 0) >= 10 ? "fatal" : ""}`} title="veneno (10 elimina)">
-            ☣ {p.poison}/10
-          </span>
-        )}
-      </div>
-      {nonlands.length > 0 && (
-        <motion.div layout={!reduce} className="row-cards">
-          <AnimatePresence>
-            {nonlands.map((pm) => <CardMini key={pm.uid} perm={pm} art={art[pm.name]} reduce={reduce} />)}
-          </AnimatePresence>
-        </motion.div>
-      )}
-      {lands.length > 0 && (
-        <motion.div layout={!reduce} className="row-cards lands">
-          <AnimatePresence>
-            {lands.map((pm) => <CardMini key={pm.uid} perm={pm} art={art[pm.name]} reduce={reduce} />)}
-          </AnimatePresence>
-        </motion.div>
-      )}
-      {p.battlefield.length === 0 && <p className="muted empty">sin permanentes</p>}
-    </motion.div>
-  );
-}
 
 export default function Watch() {
   const [pickables, setPickables] = useState<Pickable[]>([]);
@@ -241,7 +144,7 @@ export default function Watch() {
 
           <div className="seats" data-n={step.players.length}>
             {step.players.map((p, i) => (
-              <Board key={p.name} p={p} active={i === step.active} art={replay.images} reduce={reduce} />
+              <Seat key={p.name} p={p} active={i === step.active} art={replay.images} reduce={reduce} />
             ))}
           </div>
 

@@ -1,0 +1,121 @@
+"use client";
+
+import { motion, AnimatePresence } from "framer-motion";
+
+export type Perm = {
+  uid: number; name: string; tapped: boolean; power: number | null; toughness: number | null;
+  damage: number; counters: Record<string, number>; is_land: boolean; is_creature: boolean;
+  is_token: boolean; attacking: boolean; sick: boolean;
+};
+export type PlayerState = {
+  name: string; life: number; lost: boolean; hand: number; library: number;
+  commander: string[]; cmdr_tax: number; cmdr_damage?: Record<string, number>;
+  poison?: number; graveyard: string[]; battlefield: Perm[];
+  hand_cards?: { i: number; name: string; is_land: boolean; cost: string }[];
+};
+
+export function CardMini({
+  perm, art, reduce, selectable, selected, onClick,
+}: {
+  perm: Perm; art?: string; reduce: boolean;
+  selectable?: boolean; selected?: boolean; onClick?: () => void;
+}) {
+  const plus = perm.counters["+1/+1"] || 0;
+  return (
+    <motion.div
+      layout={!reduce}
+      initial={reduce ? false : { opacity: 0, scale: 0.6, y: -8 }}
+      animate={{ opacity: 1, scale: 1, y: 0, rotate: perm.tapped ? 9 : 0 }}
+      exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.5, y: 10 }}
+      transition={{ type: "spring", stiffness: 420, damping: 30 }}
+      className={`cardmini ${perm.attacking ? "atk" : ""} ${selectable ? "sel-able" : ""} ${selected ? "sel" : ""}`}
+      title={perm.name}
+      onClick={onClick}
+      style={onClick ? { cursor: "pointer" } : undefined}
+    >
+      {art ? (
+        <div className="art" style={{ backgroundImage: `url(${art})` }} />
+      ) : (
+        <div className={`art ph ${perm.is_land ? "land" : perm.is_creature ? "crea" : "other"}`}>
+          <span>{perm.name}</span>
+        </div>
+      )}
+      <div className="cm-name">{perm.name}</div>
+      {perm.is_creature && (
+        <div className="cm-pt">
+          {perm.power}/{perm.toughness}
+          {perm.damage > 0 ? <span className="dmg"> −{perm.damage}</span> : null}
+        </div>
+      )}
+      {plus > 0 && <span className="cm-counter">+{plus}</span>}
+    </motion.div>
+  );
+}
+
+export function Seat({
+  p, active, art, reduce, selectableUids, selectedUids, onCard,
+}: {
+  p: PlayerState; active: boolean; art: Record<string, string>; reduce: boolean;
+  selectableUids?: Set<number>; selectedUids?: Set<number>; onCard?: (uid: number) => void;
+}) {
+  const lands = p.battlefield.filter((x) => x.is_land);
+  const nonlands = p.battlefield.filter((x) => !x.is_land);
+  const maxCmdr = Math.max(0, ...Object.values(p.cmdr_damage || {}));
+  return (
+    <motion.div layout={!reduce} className={`seat ${active ? "active" : ""} ${p.lost ? "dead" : ""}`}>
+      <div className="seat-head">
+        <span className="seat-name">
+          {p.lost ? "☠ " : active ? "▶ " : ""}{p.name}
+          {p.lost && <span className="dead-badge">eliminado</span>}
+        </span>
+        <motion.span
+          key={p.life}
+          initial={reduce ? false : { scale: 1.35 }}
+          animate={{ scale: 1 }}
+          transition={{ duration: 0.35 }}
+          className={`life ${p.life <= 10 ? "low" : ""}`}
+        >
+          ♥ {p.life}
+        </motion.span>
+      </div>
+      <div className="seat-meta">
+        <span>✋ {p.hand}</span>
+        <span>📚 {p.library}</span>
+        <span>⚰ {p.graveyard.length}</span>
+        <span title="comandante">👑 {p.commander.join(", ") || "—"}</span>
+        {maxCmdr > 0 && (
+          <span className={`cmdr-dmg ${maxCmdr >= 21 ? "fatal" : ""}`} title="daño de comandante recibido (21 elimina)">
+            🗡 {maxCmdr}/21
+          </span>
+        )}
+        {(p.poison || 0) > 0 && (
+          <span className={`poison ${(p.poison || 0) >= 10 ? "fatal" : ""}`} title="veneno (10 elimina)">
+            ☣ {p.poison}/10
+          </span>
+        )}
+      </div>
+      {nonlands.length > 0 && (
+        <motion.div layout={!reduce} className="row-cards">
+          <AnimatePresence>
+            {nonlands.map((pm) => (
+              <CardMini
+                key={pm.uid} perm={pm} art={art[pm.name]} reduce={reduce}
+                selectable={selectableUids?.has(pm.uid)}
+                selected={selectedUids?.has(pm.uid)}
+                onClick={onCard && selectableUids?.has(pm.uid) ? () => onCard(pm.uid) : undefined}
+              />
+            ))}
+          </AnimatePresence>
+        </motion.div>
+      )}
+      {lands.length > 0 && (
+        <motion.div layout={!reduce} className="row-cards lands">
+          <AnimatePresence>
+            {lands.map((pm) => <CardMini key={pm.uid} perm={pm} art={art[pm.name]} reduce={reduce} />)}
+          </AnimatePresence>
+        </motion.div>
+      )}
+      {p.battlefield.length === 0 && <p className="muted empty">sin permanentes</p>}
+    </motion.div>
+  );
+}

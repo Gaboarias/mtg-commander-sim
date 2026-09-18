@@ -14,6 +14,20 @@ import run
 from engine import Game, Cost
 
 
+def from_registered(specs, human_index=0, seed=0, level="intermedio"):
+    """Construye una partida interactiva desde decks REGISTRADOS (de ejemplo).
+    `specs`: lista de {"key": <clave>, "name": <opcional>}. Lo usa la web
+    (Pyodide) para no tener que armar los mazos en JS."""
+    import decks
+    defs = []
+    for s in specs:
+        key = s["key"] if isinstance(s, dict) else s
+        name = s.get("name") if isinstance(s, dict) else None
+        deck, cmd = decks.build(key)
+        defs.append((name or cmd.name, deck, cmd))
+    return InteractiveGame(defs, human_index=human_index, seed=seed, level=level)
+
+
 def _cost_str(card):
     c = card.cost
     if c is None:
