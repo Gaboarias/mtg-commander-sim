@@ -102,6 +102,24 @@ def _int_or_zero(v):
         return 0
 
 
+def _derive_tags(oracle_text, types):
+    """Deriva tags aproximados del texto de la carta (para efectos genericos)."""
+    t = (oracle_text or "").lower()
+    tags = set()
+    if "creature" in types:
+        tags.add("creature")
+    if re.search(r"draw (a|two|three|\w+) cards?", t):
+        tags.add("draw")
+    if re.search(r"destroy all|exile all|destroy each|each player sacrifices",
+                 t):
+        tags.add("wipe")
+    elif re.search(r"destroy target|exile target", t):
+        tags.add("removal")
+    if re.search(r"search your library for.*land", t):
+        tags.add("ramp")
+    return tags
+
+
 def build_card_from_data(data: dict) -> Card:
     """Construye una Card desde un dict tipo Scryfall (name, mana_cost,
     type_line, power, toughness, keywords, color_identity)."""
@@ -128,11 +146,9 @@ def build_card_from_data(data: dict) -> Card:
         color_id=color_id,
     )
 
-    # tags minimos para que la IA la considere
-    tags = set()
-    if "creature" in card.types:
-        tags.add("creature")
-    card.tags = tags
+    # tags: de creatura + derivados (aprox) del texto de la carta, para que la
+    # capa de efectos genericos funcione tambien con cartas de Scryfall
+    card.tags = _derive_tags(data.get("oracle_text", ""), card.types)
 
     # tierras: producen mana segun su identidad de color (para que la base
     # de mana importada funcione). Sin identidad -> incoloro.
@@ -141,7 +157,7 @@ def build_card_from_data(data: dict) -> Card:
         opts = {c: 1 for c in colors}
         card.produces = (lambda perm, pl, _o=opts: dict(_o))
         card.enters_tapped = bool(data.get("enters_tapped"))
-    return card
+    return cards.attach_generic_effects(card)
 
 
 # --------------------------------------------------------------------------- #

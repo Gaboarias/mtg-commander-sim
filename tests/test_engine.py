@@ -506,6 +506,33 @@ def test_preset_decks_registered():
         assert len(deck) == 99 and cmd is not None
 
 
+# -- capa de efectos genericos por tag (#3A) ------------------------------- #
+def test_generic_effects_from_tags_and_oracle():
+    import cardsdb
+    # 'draw' derivado del texto -> roba 2 al resolver
+    div = cardsdb.build_card_from_data(
+        {"name": "Divination", "mana_cost": "{2}{U}", "type_line": "Sorcery",
+         "oracle_text": "Draw two cards."})
+    assert "draw" in div.tags and div.on_cast_resolve is not None
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = _game([a, b])
+    h0 = len(a.hand)
+    div.on_cast_resolve(g, a, [])
+    assert len(a.hand) == h0 + 2
+
+    # 'removal' derivado -> tiene efecto; una carta sin nada no
+    mur = cardsdb.build_card_from_data(
+        {"name": "Murder", "mana_cost": "{1}{B}{B}", "type_line": "Instant",
+         "oracle_text": "Destroy target creature."})
+    assert "removal" in mur.tags and mur.on_cast_resolve is not None
+    vanilla = cardsdb.build_card_from_data(
+        {"name": "Grizzly Bears", "mana_cost": "{1}{G}",
+         "type_line": "Creature — Bear", "power": "2", "toughness": "2",
+         "oracle_text": ""})
+    assert vanilla.on_etb is None and vanilla.on_cast_resolve is None
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

@@ -19,6 +19,7 @@ type Row = {
   qty: number;
   source: "registry" | "basic" | "scryfall" | "missing";
   implemented: boolean;
+  generic?: boolean;
   type: string;
   cost: string;
   pt: string;
@@ -388,7 +389,14 @@ export default function DeckPage() {
                   <td>{c.cost}</td>
                   <td className="muted">{c.type}</td>
                   <td>{c.pt}</td>
-                  <td><Tag r={c} /></td>
+                  <td>
+                    <Tag r={c} />
+                    {c.generic && (
+                      <span style={{ background: "#5a4a2a", padding: "2px 6px", borderRadius: 6, fontSize: ".68rem", marginLeft: 4 }}>
+                        aprox
+                      </span>
+                    )}
+                  </td>
                   <td>
                     <button className="ghost" style={{ padding: "4px 8px" }} onClick={() => remove(i)}>✕</button>
                   </td>

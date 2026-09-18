@@ -80,7 +80,11 @@ def _card_row(name, qty, card):
     if card is None:
         return {"name": name, "qty": qty, "source": "missing",
                 "implemented": False, "type": "?", "cost": "?", "pt": ""}
-    source = ("registry" if cardsdb.is_implemented(name)
+    exact = cardsdb.is_implemented(name)
+    generic = (not exact) and bool(
+        card.on_etb or card.on_cast_resolve or card.on_death or card.triggers
+        or card.static_mod or card.loyalty_abilities or card.counter_modifier)
+    source = ("registry" if exact
               else "basic" if "basic" in card.supertypes
               else "scryfall")
     cost = ""
@@ -91,7 +95,7 @@ def _card_row(name, qty, card):
     pt = f"{card.power}/{card.toughness}" if "creature" in card.types else ""
     colors = sorted(card.identity())
     return {"name": card.name, "qty": qty, "source": source,
-            "implemented": cardsdb.is_implemented(name),
+            "implemented": exact, "generic": generic,
             "type": types, "cost": cost, "pt": pt, "colors": colors}
 
 

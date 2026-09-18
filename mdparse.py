@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 
 from engine import Card, parse_cost, W, U, B, R, G, C, KEYWORDS
-from cards import land
+from cards import land, attach_generic_effects
 import cardsdb
 
 _COLOR = {"W": W, "U": U, "B": B, "R": R, "G": G, "C": C}
@@ -70,8 +70,9 @@ def _build_card_row(name, coste, pt, kws, tags):
     cost = parse_cost(_clean_cost(coste)) if coste.strip() else None
     kw = {k for k in kws.split()} & KEYWORDS
     tagset = {t for t in tags.split()}
-    return Card(name=name, types=types, cost=cost, power=power, toughness=tough,
+    card = Card(name=name, types=types, cost=cost, power=power, toughness=tough,
                 keywords=kw, tags=tagset)
+    return attach_generic_effects(card)
 
 
 def _build_land_row(name, produce, tapeada):

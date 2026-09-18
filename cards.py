@@ -149,6 +149,74 @@ def dmg_all_opponents(n):
 
 
 # --------------------------------------------------------------------------- #
+# Efectos GENERICOS por tag (para cartas no programadas) — aproximados
+# --------------------------------------------------------------------------- #
+
+def _g_wipe(game, ctrl):
+    wrath(game, ctrl, None)
+
+
+def _g_removal(game, ctrl):
+    pool = game.legal_creature_targets(ctrl)   # respeta hexproof
+    if pool:
+        game.destroy(max(pool, key=lambda p: (p.power, p.toughness)), "removal generico")
+
+
+def _g_draw(game, ctrl):
+    ctrl.draw(2, game)
+
+
+def _g_ramp(game, ctrl):
+    # busca una tierra basica en la biblioteca y la pone tapeada (rampeo)
+    for i, c in enumerate(ctrl.library):
+        if c.is_land() and "basic" in c.supertypes:
+            ctrl.library.pop(i)
+            perm = game.move_to_battlefield(c, ctrl)
+            perm.tapped = True
+            return
+
+
+def _g_gy_exile(game, ctrl):
+    if ctrl.graveyard:
+        game.leave_graveyard(ctrl, ctrl.graveyard[0], dest="exile")
+
+
+# prioridad: el efecto mas definitorio primero
+_GENERIC = [
+    ("wipe", _g_wipe),
+    ("removal", _g_removal),
+    ("draw", _g_draw),
+    ("ramp", _g_ramp),
+    ("gy_exile", _g_gy_exile),
+]
+
+
+def attach_generic_effects(card):
+    """Si la carta NO tiene efecto propio, le pone uno GENERICO segun su tag.
+    Instantaneos/conjuros: al resolver. Permanentes: al entrar (ETB).
+    No toca cartas que ya traen ganchos (las del registro)."""
+    if (card.on_etb or card.on_cast_resolve or card.on_death or
+            card.triggers or card.static_mod or card.loyalty_abilities or
+            card.counter_modifier):
+        return card
+    eff = None
+    for tag, fn in _GENERIC:
+        if tag in card.tags:
+            # el ramp de una roca ya se cubre con `produces`; no fetchear
+            if tag == "ramp" and card.produces is not None:
+                continue
+            eff = fn
+            break
+    if eff is None:
+        return card
+    if {"instant", "sorcery"} & card.types:
+        card.on_cast_resolve = (lambda g, ctrl, targets, _e=eff: _e(g, ctrl))
+    elif {"creature", "artifact", "enchantment"} & card.types:
+        card.on_etb = (lambda g, ctrl, perm, _e=eff: _e(g, ctrl))
+    return card
+
+
+# --------------------------------------------------------------------------- #
 # LOREHOLD (R/W) — Espiritus cuando cartas dejan tu cementerio
 # --------------------------------------------------------------------------- #
 
