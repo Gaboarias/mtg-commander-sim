@@ -35,6 +35,10 @@ type Resolved = {
   implemented: number;
   missing: string[];
   scryfall_online: boolean;
+  game_changers?: string[];
+  bracket_estimate?: number;
+  bracket_label?: string;
+  bracket_declared?: number | null;
 };
 
 const SAMPLE = `Commander
@@ -615,6 +619,44 @@ export default function DeckPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {resolved && (
+        <div className="card">
+          <h2>🏅 Poder del deck (bracket)</h2>
+          <div className="row" style={{ gap: 24, alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontFamily: "var(--font-display)", fontSize: "2rem", fontWeight: 700, color: "var(--accent)" }}>
+                Bracket {resolved.bracket_declared ?? resolved.bracket_estimate}
+              </div>
+              <div className="muted" style={{ fontSize: ".85rem" }}>
+                {resolved.bracket_declared
+                  ? "declarado en la lista"
+                  : `estimado · ${resolved.bracket_label}`}
+              </div>
+            </div>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ marginBottom: 6 }}>
+                <strong>{resolved.game_changers?.length || 0}</strong> Game Changers
+              </div>
+              <div className="row" style={{ gap: 6 }}>
+                {(resolved.game_changers || []).map((g) => (
+                  <span key={g} style={{ background: "#5a4a2a", color: "#f0e2c0", padding: "3px 9px", borderRadius: 999, fontSize: ".78rem" }}>
+                    {g}
+                  </span>
+                ))}
+                {(resolved.game_changers || []).length === 0 && (
+                  <span className="muted">ninguno detectado</span>
+                )}
+              </div>
+            </div>
+          </div>
+          <p className="muted" style={{ marginTop: 12, fontSize: ".8rem" }}>
+            La lista de Game Changers es curada (subconjunto de la oficial de WotC,
+            que se actualiza); el bracket estimado es una guía por cantidad de
+            Game Changers, no considera combos ni negación masiva de tierras.
+          </p>
         </div>
       )}
 

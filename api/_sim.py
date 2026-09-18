@@ -12,8 +12,10 @@ if _ROOT not in sys.path:
 import decks          # noqa: E402
 import run            # noqa: E402
 import coverage       # noqa: E402
+import re            # noqa: E402
 import cardsdb        # noqa: E402
 import decklist       # noqa: E402
+import gamechangers   # noqa: E402
 from engine import Game, Player, COLORS  # noqa: E402
 from policy import Policy        # noqa: E402
 
@@ -134,6 +136,13 @@ def resolve_decklist(text):
         # auto-sugerir comandante: primera legendaria criatura/planeswalker
         if suggested is None and row.get("can_command"):
             suggested = row["name"]
+    # Game Changers + estimacion de bracket (#4)
+    all_names = ([cmd_name] if cmd_name else []) + [n for _, n in parsed["cards"]]
+    gcs = gamechangers.find_in(all_names)
+    est_bracket, est_label = gamechangers.bracket_hint(len(gcs))
+    m = re.search(r"bracket[:\s]+([1-5])", text or "", re.IGNORECASE)
+    declared_bracket = int(m.group(1)) if m else None
+
     return {
         "commander": commander,
         "commander_name": cmd_name,
@@ -143,6 +152,10 @@ def resolve_decklist(text):
         "implemented": implemented,
         "missing": missing,
         "scryfall_online": _scry is not None,
+        "game_changers": gcs,
+        "bracket_estimate": est_bracket,
+        "bracket_label": est_label,
+        "bracket_declared": declared_bracket,
     }
 
 
