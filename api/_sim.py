@@ -209,18 +209,71 @@ def _lvl(level):
 
 
 def match(specs, n=120, level="intermedio"):
-    """Simula una mesa de 2 a 6 decks. Devuelve winrate por deck."""
+    """Simula una mesa de 2 a 6 decks. Devuelve winrate por deck + notas
+    (analitica en bulk) + partidas (para exportar)."""
+    from collections import Counter
+    from engine import Game
+
     n = max(1, min(int(n), 500))
     level = _lvl(level)
     deck_defs, max_turns = _build_deck_defs(specs)
-    wins = run.many_defs(deck_defs, n=n, max_turns=max_turns, level=level)
-    results = [{"deck": label, "wins": wins.get(label, 0),
-                "pct": round(100 * wins.get(label, 0) / n, 1)}
-               for label, _d, _c in deck_defs]
+    labels = [lbl for lbl, _d, _c in deck_defs]
+    nplayers = len(deck_defs)
+    deck_by_label = {lbl: deck for lbl, deck, _c in deck_defs}
+
+    wins = Counter()
+    turns_total = 0
+    games = []
+    cmd_turns = {l: [] for l in labels}
+    cast_counts = {l: Counter() for l in labels}
+
+    for i in range(n):
+        players = run.build_players_from_defs(deck_defs, level=level)
+        g = Game(players, seed=i, max_turns=max_turns)
+        w = g.play()
+        wins[w] += 1
+        turns_total += g.turn
+        games.append({"seed": i, "winner": w, "turns": g.turn})
+        for p in players:
+            st = p.stats
+            if st["commander_turn"] is not None:
+                cmd_turns[p.name].append(st["commander_turn"])
+            cast_counts[p.name].update(st["cast_counts"])
+
+    results = [{"deck": lbl, "wins": wins.get(lbl, 0),
+                "pct": round(100 * wins.get(lbl, 0) / n, 1)} for lbl in labels]
     results.sort(key=lambda r: -r["pct"])
     results.append({"deck": "sin definir", "wins": wins.get("EMPATE", 0),
                     "pct": round(100 * wins.get("EMPATE", 0) / n, 1)})
-    return {"n": n, "players": len(deck_defs), "level": level, "results": results}
+
+    # notas por deck: turno del comandante y cartas que rara vez se juegan
+    deck_notes = []
+    for lbl in labels:
+        cts = cmd_turns[lbl]
+        cmd_avg = round(sum(cts) / len(cts) / nplayers, 1) if cts else None
+        seen_names = set()
+        rates = []
+        for c in deck_by_label[lbl]:
+            if c.is_land() or c.cost is None or c.name in seen_names:
+                continue
+            seen_names.add(c.name)
+            rates.append((c.name, round(100 * cast_counts[lbl].get(c.name, 0) / n)))
+        rates.sort(key=lambda x: x[1])
+        slow = [{"name": nm, "pct": p} for nm, p in rates[:6] if p < 50]
+        deck_notes.append({
+            "deck": lbl,
+            "commander_avg_turn": cmd_avg,
+            "commander_pct": round(100 * len(cts) / n),
+            "slow_cards": slow,
+        })
+
+    notes = {
+        "avg_rounds": round(turns_total / n / nplayers, 1),
+        "decided_pct": round(100 * (n - wins.get("EMPATE", 0)) / n),
+        "decks": deck_notes,
+    }
+    return {"n": n, "players": nplayers, "level": level, "results": results,
+            "notes": notes, "games": games}
 
 
 def match_log(specs, level="intermedio"):

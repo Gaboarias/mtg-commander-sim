@@ -8,6 +8,7 @@ Python puro, sin dependencias externas.
 from __future__ import annotations
 
 import random
+from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
@@ -246,6 +247,8 @@ class Player:
         self.draws_this_turn = 0     # se reinicia cada turno (para efectos "2do robo")
         self.lost = False
         self.policy = policy
+        # telemetria de la partida (para analitica en bulk)
+        self.stats = {"commander_turn": None, "cast_counts": Counter()}
 
     # -- preparacion ------------------------------------------------------ #
     def setup(self, rng: random.Random):
@@ -676,6 +679,12 @@ class Game:
                 player.hand.remove(card)
 
         self.log(f"{player.name} lanza {card.name}")
+        # telemetria: registrar el lanzamiento y el turno del comandante
+        st = getattr(player, "stats", None)
+        if st is not None:
+            st["cast_counts"][card.name] += 1
+            if card is player.commander_card and st["commander_turn"] is None:
+                st["commander_turn"] = self.turn
         self.emit("cast", player=player, card=card)
 
         def _resolve(g):

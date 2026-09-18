@@ -13,6 +13,11 @@ type MatchSpec =
   | { kind: "custom"; name: string; text: string };
 type Pickable = { id: string; label: string; tag: string; colors: string[]; spec: MatchSpec; mine: boolean };
 type Res = { deck: string; wins: number; pct: number };
+type SlowCard = { name: string; pct: number };
+type DeckNote = { deck: string; commander_avg_turn: number | null; commander_pct: number; slow_cards: SlowCard[] };
+type Notes = { avg_rounds: number; decided_pct: number; decks: DeckNote[] };
+type GameRow = { seed: number; winner: string; turns: number };
+type MatchResult = { players: number; n: number; results: Res[]; notes?: Notes; games?: GameRow[]; level?: string };
 
 function Pips({ ids }: { ids: string[] }) {
   if (!ids || ids.length === 0) return null;
@@ -31,7 +36,7 @@ export default function Home() {
   const [n, setN] = useState(120);
   const [level, setLevel] = useState("intermedio");
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ players: number; n: number; results: Res[] } | null>(null);
+  const [result, setResult] = useState<MatchResult | null>(null);
   const [log, setLog] = useState<{ winner: string; turns: number; log: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mineCount, setMineCount] = useState(0);
@@ -112,6 +117,31 @@ export default function Home() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function download(name: string, text: string, type: string) {
+    const blob = new Blob([text], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportJSON() {
+    if (!result) return;
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    download(`mesa-${stamp}.json`, JSON.stringify(result, null, 2), "application/json");
+  }
+
+  function exportCSV() {
+    if (!result?.games) return;
+    const rows = [["partida", "ganador", "turnos"]];
+    result.games.forEach((g) => rows.push([String(g.seed + 1), g.winner, String(g.turns)]));
+    const csv = rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    download(`partidas-${stamp}.csv`, csv, "text/csv");
   }
 
   const reduce = useReducedMotion();
@@ -235,6 +265,60 @@ export default function Home() {
           ))}
           <p className="muted" style={{ marginTop: 8 }}>
             «sin definir» = partidas que llegaron al límite sin un ganador claro.
+          </p>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="ghost" onClick={exportJSON}>⬇ Exportar todo (JSON)</button>
+            <button className="ghost" onClick={exportCSV}>⬇ Exportar partidas (CSV)</button>
+          </div>
+        </motion.div>
+      )}
+
+      {result?.notes && (
+        <motion.div
+          className="card"
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={reduce ? { duration: 0 } : { duration: 0.3, delay: 0.1 }}
+        >
+          <h2>📝 Notas de la mesa</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Duración media: <b>{result.notes.avg_rounds}</b> rondas ·{" "}
+            {result.notes.decided_pct}% de las partidas tuvieron ganador.
+          </p>
+          {result.notes.decks.map((d) => (
+            <div key={d.deck} className="note-block">
+              <div className="note-head">
+                <span className="swatch" style={{ background: colorOf(d.deck) }} />
+                <b>{d.deck}</b>
+              </div>
+              <p className="muted" style={{ margin: "4px 0" }}>
+                {d.commander_avg_turn != null ? (
+                  <>Comandante en juego hacia la ronda <b>{d.commander_avg_turn}</b> ({d.commander_pct}% de las partidas).</>
+                ) : (
+                  <>El comandante casi nunca llegó a la mesa ({d.commander_pct}%).</>
+                )}
+              </p>
+              {d.slow_cards.length > 0 ? (
+                <p className="muted" style={{ margin: "4px 0" }}>
+                  Cartas que rara vez se jugaron:{" "}
+                  {d.slow_cards.map((s, i) => (
+                    <span key={s.name}>
+                      {i > 0 ? ", " : ""}
+                      <b>{s.name}</b> ({s.pct}%)
+                    </span>
+                  ))}
+                  .
+                </p>
+              ) : (
+                <p className="muted" style={{ margin: "4px 0" }}>
+                  El deck desplegó su plan de forma pareja.
+                </p>
+              )}
+            </div>
+          ))}
+          <p className="muted" style={{ marginTop: 8 }}>
+            El % indica en cuántas partidas se llegó a lanzar la carta. Uno bajo
+            suele señalar un coste alto, poca rampa, o que depende de otras piezas.
           </p>
         </motion.div>
       )}
