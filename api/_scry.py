@@ -29,9 +29,29 @@ def _post(identifiers):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _front_face(name):
+    """'Dusk // Dawn' -> 'Dusk'. Sirve para reintentar contra Scryfall cuando el
+    nombre combinado no matchea."""
+    return re.split(r"\s*//\s*", name)[0].strip() if "//" in name else name
+
+
+def _index(out, card):
+    """Indexa una carta devuelta por Scryfall bajo su nombre completo Y bajo el
+    de cada cara (asi 'Dusk // Dawn', 'Dusk' o 'Dawn' resuelven a la misma)."""
+    full = card.get("name", "")
+    if full:
+        out[_norm(full)] = card
+    for face in (card.get("card_faces") or []):
+        fn = face.get("name")
+        if fn:
+            out.setdefault(_norm(fn), card)
+
+
 def resolve_many(names):
     """names: iterable de nombres. Devuelve {nombre_norm: data} para los
-    encontrados. Los faltantes simplemente no aparecen."""
+    encontrados. Los faltantes simplemente no aparecen. Maneja cartas de doble
+    cara / split (Dusk // Dawn) indexando por nombre completo y por cara, y
+    reintentando por la cara frontal cuando el nombre combinado no matchea."""
     uniq = []
     seen = set()
     for n in names:
@@ -42,17 +62,23 @@ def resolve_many(names):
     out = {}
     for i in range(0, len(uniq), 75):
         chunk = uniq[i:i + 75]
-        idents = [{"name": n} for n in chunk]
         try:
-            data = _post(idents)
+            data = _post([{"name": n} for n in chunk])
         except Exception:  # noqa: BLE001 (red caida / rate limit)
             continue
         for card in data.get("data", []):
-            # cartas de doble cara: usar la cara frontal si hace falta
-            if not card.get("type_line") and card.get("card_faces"):
-                face = card["card_faces"][0]
-                card = {**card, **face}
-            out[_norm(card.get("name", ""))] = card
+            _index(out, card)
+
+    # segunda pasada: nombres con '//' que no matchearon -> probar la cara frontal
+    retry = [n for n in uniq if "//" in n and _norm(n) not in out]
+    for i in range(0, len(retry), 75):
+        chunk = retry[i:i + 75]
+        try:
+            data = _post([{"name": _front_face(n)} for n in chunk])
+        except Exception:  # noqa: BLE001
+            continue
+        for card in data.get("data", []):
+            _index(out, card)   # el nombre completo devuelto vuelve a mapear "Dusk // Dawn"
     return out
 
 

@@ -284,6 +284,28 @@ def test_build_card_from_scryfall_data():
     assert c.identity() == {"W"}
 
 
+def test_build_split_card_uses_front_face():
+    # split/DFC: type_line y mana_cost vienen combinados con '//'; hay que usar
+    # la cara frontal (castable), sin perder el nombre completo.
+    import cardsdb
+    data = {
+        "name": "Dusk // Dawn",
+        "mana_cost": "{3}{W}{W} // {3}{W}{W}",
+        "type_line": "Sorcery // Sorcery",
+        "color_identity": ["W"],
+        "card_faces": [
+            {"name": "Dusk", "mana_cost": "{3}{W}{W}", "type_line": "Sorcery",
+             "oracle_text": "Destroy all creatures with power 3 or greater."},
+            {"name": "Dawn", "mana_cost": "{3}{W}{W}", "type_line": "Sorcery"},
+        ],
+    }
+    c = cardsdb.build_card_from_data(data)
+    assert c.name == "Dusk // Dawn"        # conserva el nombre completo
+    assert "sorcery" in c.types            # tipo de la cara frontal, no '//'
+    assert c.cost.cmc == 5                 # {3}{W}{W}, no el doble
+    assert c.identity() == {"W"}
+
+
 # -- P2.1 Counterspell contrarresta un hechizo en la pila ------------------ #
 def test_counterspell_counters_a_spell():
     a = _mk_player("a")

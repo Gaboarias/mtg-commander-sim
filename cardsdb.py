@@ -120,9 +120,29 @@ def _derive_tags(oracle_text, types):
     return tags
 
 
+def _prefer_front_face(data: dict) -> dict:
+    """Cartas de doble cara / split / adventure: Scryfall trae `type_line` y
+    `mana_cost` combinados con '//' (o vacios) y los datos reales por cara en
+    `card_faces`. Tomamos la cara frontal (la que se lanza) para esos campos,
+    manteniendo el nombre completo y la identidad de color del nivel superior."""
+    faces = data.get("card_faces")
+    if not faces:
+        return data
+    front = faces[0]
+    merged = dict(data)
+    for key in ("type_line", "mana_cost", "power", "toughness", "oracle_text"):
+        v = merged.get(key)
+        if v in (None, "", []) or (isinstance(v, str) and "//" in v):
+            fv = front.get(key)
+            if fv not in (None, "", []):
+                merged[key] = fv
+    return merged
+
+
 def build_card_from_data(data: dict) -> Card:
     """Construye una Card desde un dict tipo Scryfall (name, mana_cost,
     type_line, power, toughness, keywords, color_identity)."""
+    data = _prefer_front_face(data)
     name = data.get("name", "?")
     types, supertypes, subtypes = parse_type_line(data.get("type_line", ""))
     color_id = {_COLOR_MAP[c] for c in data.get("color_identity", [])
