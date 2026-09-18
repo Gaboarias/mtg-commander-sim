@@ -118,6 +118,7 @@ def tricky():
     d.append(creature("Serpiente de Kraken", "4U", 5, 5, color_id=(U,)))
     d.append(rock("Simic Signet", "2", [G, U]))
     d.append(rock("Sol Ring", "1", [C, C]))
+    d.append(cards.Counterspell())        # P2.1 instantaneo de respuesta
     d.append(_tricky_draw())
     d.append(land("Breeding Pool", [G, U]))
     d.append(land("Templo de Mistica", [G, U], tapped=True))

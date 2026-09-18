@@ -19,18 +19,19 @@ from policy import Policy
 DEFAULT_MATCHUP = ["lorehold", "tricky", "kang"]
 
 
-def _build_game(keys, seed=0, log=False, max_turns=60):
+def _build_game(keys, seed=0, log=False, max_turns=60, mulligan=False):
     players = []
     for i, key in enumerate(keys):
         deck, commander = decks.build(key)
         p = Player(f"{key}", deck, commander, policy=Policy())
         players.append(p)
-    return Game(players, seed=seed, log=log, max_turns=max_turns)
+    return Game(players, seed=seed, log=log, max_turns=max_turns,
+                mulligan=mulligan)
 
 
-def one(keys, seed=0, log=False):
+def one(keys, seed=0, log=False, mulligan=False):
     """Corre UNA partida reproducible. Misma semilla => misma partida."""
-    g = _build_game(keys, seed=seed, log=log)
+    g = _build_game(keys, seed=seed, log=log, mulligan=mulligan)
     return g.play()
 
 
@@ -56,10 +57,10 @@ def many_defs(deck_defs, n=200):
     return wins
 
 
-def many(keys, n=200, verbose=True):
+def many(keys, n=200, verbose=True, mulligan=False):
     wins = Counter()
     for i in range(n):
-        winner = one(keys, seed=i, log=False)
+        winner = one(keys, seed=i, log=False, mulligan=mulligan)
         wins[winner] += 1
     if verbose:
         print(f"\n=== {' vs '.join(keys)}  ({n} partidas) ===")
@@ -74,10 +75,14 @@ def many(keys, n=200, verbose=True):
 def main(argv):
     args = list(argv)
     log = False
+    mulligan = False
     n = 200
     if "--log" in args:
         log = True
         args.remove("--log")
+    if "--mull" in args:
+        mulligan = True
+        args.remove("--mull")
     if "-n" in args:
         i = args.index("-n")
         n = int(args[i + 1])
@@ -90,10 +95,10 @@ def main(argv):
             return 1
 
     if log:
-        winner = one(keys, seed=0, log=True)
+        winner = one(keys, seed=0, log=True, mulligan=mulligan)
         print(f"\nGanador: {winner}")
     else:
-        many(keys, n=n)
+        many(keys, n=n, mulligan=mulligan)
     return 0
 
 

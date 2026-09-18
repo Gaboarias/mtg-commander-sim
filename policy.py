@@ -91,6 +91,35 @@ class Policy:
         return [c for c in list(me.hand)
                 if not c.is_land() and c.cost is not None]
 
+    # -- respuesta con instantaneos (P2.1) -------------------------------- #
+    def respond(self, game, me, top):
+        """Ventana de prioridad: decide si lanzar un instantaneo en respuesta
+        al tope de la pila. Hoy solo contrarresta hechizos amenazantes."""
+        if getattr(top, "controller", None) is me:
+            return False
+        if str(getattr(top, "label", "")).startswith("trigger"):
+            return False
+        card = getattr(top, "source", None)
+        if card is None or not hasattr(card, "types") or card.is_land():
+            return False
+        # solo vale la pena contrarrestar amenazas
+        worth = bool(card.types & {"creature", "planeswalker"}) or \
+            bool(card.tags & {"engine", "wipe", "removal"})
+        if not worth:
+            return False
+        counter = next((c for c in me.hand
+                        if "counter" in c.tags and me.can_pay(c.cost)), None)
+        if counter is None:
+            return False
+        game.cast(me, counter, targets=[top])
+        return True
+
+    # -- mulligan (P2.5) -------------------------------------------------- #
+    def should_mulligan(self, hand):
+        """Mulligan con manos extremas: 0-1 o 6-7 tierras."""
+        lands = sum(1 for c in hand if c.is_land())
+        return lands <= 1 or lands >= 6
+
     # -- descarte --------------------------------------------------------- #
     def choose_discard(self, game, me):
         """Descarta la carta de MENOR puntuacion (prefiere tierras extra)."""

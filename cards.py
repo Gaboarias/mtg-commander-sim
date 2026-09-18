@@ -481,3 +481,25 @@ def CommandTower():
     c = Card("Command Tower", {"land"}, None)
     c.produces = lambda perm, pl: {col: 1 for col in (pl.identity() or {C})}
     return c
+
+
+# --------------------------------------------------------------------------- #
+# INSTANTANEOS de respuesta (P2.1)
+# --------------------------------------------------------------------------- #
+
+def Counterspell():
+    def eff(game, ctrl, targets):
+        if not targets:
+            return
+        obj = targets[0]
+        if obj in game.stack:
+            game.stack.remove(obj)
+            card = obj.source
+            name = getattr(card, "name", "?")
+            if card is not None and not card.is_land():
+                obj.controller.graveyard.append(card)
+                game.emit("to_graveyard", player=obj.controller, card=card)
+            game.log(f"{ctrl.name}: Counterspell contrarresta {name}")
+    return Card("Counterspell", {"instant"}, parse_cost("UU"),
+                on_cast_resolve=eff, tags={"counter"}, color_id={U},
+                target_spec="stack_spell")

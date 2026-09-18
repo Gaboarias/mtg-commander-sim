@@ -386,7 +386,7 @@ class Game:
     SELF_SCOPED = {"upkeep", "end_step", "draw", "landfall", "cast", "begin_combat"}
 
     def __init__(self, players: list, seed: int = 0, max_turns: int = 60,
-                 log: bool = False):
+                 log: bool = False, mulligan: bool = False):
         self.players = players
         self.rng = random.Random(seed)
         self.max_turns = max_turns
@@ -395,8 +395,44 @@ class Game:
         self.turn = 0
         self.active_index = 0
         self.stack: list = []
+        self._in_priority = False    # evita recursion al lanzar en respuesta
         for p in players:
             p.setup(self.rng)
+        if mulligan:
+            for p in players:
+                self._mulligan(p)
+
+    # -- mulligan (regla de Londres, P2.5) -------------------------------- #
+    def _mulligan(self, p: "Player", max_mulls: int = 3):
+        mulls = 0
+        while (mulls < max_mulls and p.policy is not None
+               and hasattr(p.policy, "should_mulligan")
+               and p.policy.should_mulligan(p.hand)):
+            p.library.extend(p.hand)
+            p.hand = []
+            self.rng.shuffle(p.library)
+            for _ in range(7):
+                if p.library:
+                    p.hand.append(p.library.pop())
+            mulls += 1
+        # Londres: por cada mulligan, poner una carta al fondo
+        for _ in range(mulls):
+            if not p.hand:
+                break
+            card = self._bottom_choice(p)
+            p.hand.remove(card)
+            p.library.insert(0, card)   # el fondo (pop() saca del final = tope)
+        if mulls:
+            self.log(f"{p.name} hizo {mulls} mulligan(s)")
+
+    def _bottom_choice(self, p: "Player"):
+        lands = [c for c in p.hand if c.is_land()]
+        if len(lands) > 3:
+            return lands[0]
+        nonlands = [c for c in p.hand if not c.is_land()]
+        if nonlands:
+            return max(nonlands, key=lambda c: c.cost.cmc if c.cost else 0)
+        return p.hand[0]
 
     # -- logging ---------------------------------------------------------- #
     def log(self, msg: str):
@@ -644,8 +680,45 @@ class Game:
 
         self.stack.append(StackObject(player, _resolve, source=card,
                                       targets=targets, label=f"spell:{card.name}"))
-        self.resolve_stack()
+        if self._in_priority:
+            return True   # lanzado en respuesta: el bucle externo lo resolvera
+        self._run_priority_and_resolve()
         return True
+
+    def _respond_order(self):
+        """Jugadores que pueden responder al tope de la pila (los oponentes de
+        quien controla el tope), en orden de turno."""
+        top = self.stack[-1]
+        n = len(self.players)
+        order = []
+        for k in range(n):
+            pl = self.players[(self.active_index + k) % n]
+            if pl is not top.controller and not pl.lost:
+                order.append(pl)
+        return order
+
+    def _run_priority_and_resolve(self):
+        """Ventana de prioridad (P2.1): tras poner algo en la pila, cada
+        oponente puede responder (instantaneos). Cuando todos pasan, resuelve
+        el tope. Repite hasta vaciar la pila."""
+        self._in_priority = True
+        try:
+            while self.stack:
+                responded = False
+                for pl in self._respond_order():
+                    pol = pl.policy
+                    if pol is not None and hasattr(pol, "respond"):
+                        if pol.respond(self, pl, self.stack[-1]):
+                            responded = True
+                            break
+                if responded:
+                    continue
+                top = self.stack.pop()
+                if not top.controller.lost:
+                    top.resolve(self)
+                self.sba()
+        finally:
+            self._in_priority = False
 
     def play_land(self, player: "Player", card: Card) -> bool:
         if player.lands_played >= 1:

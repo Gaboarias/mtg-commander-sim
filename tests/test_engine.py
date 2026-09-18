@@ -284,6 +284,49 @@ def test_build_card_from_scryfall_data():
     assert c.identity() == {"W"}
 
 
+# -- P2.1 Counterspell contrarresta un hechizo en la pila ------------------ #
+def test_counterspell_counters_a_spell():
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = _game([a, b])
+    # b tiene con que responder: 2 Islas + Counterspell en mano
+    for _ in range(2):
+        g.move_to_battlefield(land("Island", [U], basic=True), b)
+    b.hand = [cards.Counterspell()]
+    # a lanza una criatura (mana suficiente)
+    for _ in range(2):
+        g.move_to_battlefield(land("Forest", [G], basic=True), a)
+    cr = creature("Bicho Gordo", "1G", 5, 5)
+    a.hand = [cr]
+    g.cast(a, cr)
+    # la criatura fue contrarrestada
+    assert cr not in [p.card for p in a.battlefield]
+    assert cr in a.graveyard
+    assert any(c.name == "Counterspell" for c in b.graveyard)
+
+
+# -- P2.5 mulligan (regla de Londres) -------------------------------------- #
+def test_mulligan_decision():
+    pol = Policy()
+    lands = [land("Forest", [G], basic=True) for _ in range(7)]
+    spells = [creature("X", "1G", 1, 1) for _ in range(7)]
+    # 0 tierras y 7 tierras -> mulligan; 3 tierras -> no
+    assert pol.should_mulligan(spells)             # 0 tierras
+    assert pol.should_mulligan(lands)              # 7 tierras
+    mixed = lands[:3] + spells[:4]
+    assert not pol.should_mulligan(mixed)          # 3 tierras
+
+
+def test_game_with_mulligan_keeps_seven_and_conserves_cards():
+    a = _mk_player("a")
+    b = _mk_player("b")
+    g = Game([a, b], seed=7, mulligan=True)
+    for p in (a, b):
+        # Londres: se roban 7 pero se ponen N al fondo -> mano = 7 - N (<=3 mull)
+        assert 4 <= len(p.hand) <= 7
+        assert len(p.hand) + len(p.library) == 99   # nada se pierde
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
