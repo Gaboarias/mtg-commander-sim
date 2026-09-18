@@ -240,6 +240,50 @@ def test_hexproof_not_targetable_by_opponent():
     assert safe in b.battlefield
 
 
+# -- import de decklist: parser + registro (offline) ----------------------- #
+def test_decklist_parse_and_build():
+    import decklist
+    txt = """Commander
+1 Kang, el Embaucador
+Deck
+1 Gray Merchant of Asphodel
+1x Go for the Throat (C21) 12
+2 Swamp
+1 Sol Ring
+// nota
+Sideboard
+1 Island
+"""
+    parsed = decklist.parse_decklist(txt)
+    assert parsed["commander"] == "Kang, el Embaucador"
+    names = [n for _, n in parsed["cards"]]
+    assert "Go for the Throat" in names   # se limpia el (SET) 12
+    assert "Island" not in names          # sideboard ignorado
+    deck, cmd, report = decklist.build_deck(parsed, fetch=None)
+    assert len(deck) == 99
+    assert cmd.name == "Kang, el Embaucador"
+    assert report["unresolved"] == []     # Sol Ring ahora esta registrado
+
+
+def test_cardsdb_resolve():
+    import cardsdb
+    assert cardsdb.is_implemented("gray merchant of asphodel")
+    assert cardsdb.resolve("Sol Ring").name == "Sol Ring"
+    assert cardsdb.resolve("Forest").is_land()
+    assert cardsdb.resolve("Carta Inexistente 123", fetch=None) is None
+
+
+def test_build_card_from_scryfall_data():
+    import cardsdb
+    data = {"name": "Serra Angel", "mana_cost": "{3}{W}{W}",
+            "type_line": "Creature — Angel", "power": "4", "toughness": "4",
+            "keywords": ["Flying", "Vigilance"], "color_identity": ["W"]}
+    c = cardsdb.build_card_from_data(data)
+    assert c.cost.cmc == 5 and c.power == 4 and c.toughness == 4
+    assert "flying" in c.keywords and "vigilance" in c.keywords
+    assert c.identity() == {"W"}
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

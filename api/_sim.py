@@ -12,10 +12,18 @@ if _ROOT not in sys.path:
 import decks          # noqa: E402
 import run            # noqa: E402
 import coverage       # noqa: E402
-from engine import Game, Player  # noqa: E402
+import cardsdb        # noqa: E402
+import decklist       # noqa: E402
+from engine import Game, Player, COLORS  # noqa: E402
 from policy import Policy        # noqa: E402
 
+try:
+    import _scry      # cliente Scryfall (solo en Vercel con red)
+except Exception:     # noqa: BLE001
+    _scry = None
+
 MAX_N = 2000          # tope de partidas por request (serverless timeout)
+MAX_CARDS = 200       # tope de entradas de decklist
 
 
 def deck_list():
@@ -55,3 +63,98 @@ def coverage_report():
     rows = coverage.report(verbose=False)
     return {"coverage": [{"deck": name, "implemented": impl, "vanilla": van}
                          for name, impl, van in rows]}
+
+
+# --------------------------------------------------------------------------- #
+# Import / edicion de decks (Scryfall en Vercel)
+# --------------------------------------------------------------------------- #
+
+def _make_fetch(names):
+    if _scry is None:
+        return None
+    return _scry.make_fetch([n for n in names if n])
+
+
+def _card_row(name, qty, card):
+    """Descriptor para la tabla editable del frontend."""
+    if card is None:
+        return {"name": name, "qty": qty, "source": "missing",
+                "implemented": False, "type": "?", "cost": "?", "pt": ""}
+    source = ("registry" if cardsdb.is_implemented(name)
+              else "basic" if "basic" in card.supertypes
+              else "scryfall")
+    cost = ""
+    if card.cost is not None:
+        cost = (str(card.cost.generic) if card.cost.generic else "") + \
+               "".join(card.cost.pips)
+    types = " ".join(sorted(card.types))
+    pt = f"{card.power}/{card.toughness}" if "creature" in card.types else ""
+    colors = sorted(card.identity())
+    return {"name": card.name, "qty": qty, "source": source,
+            "implemented": cardsdb.is_implemented(name),
+            "type": types, "cost": cost, "pt": pt, "colors": colors}
+
+
+def resolve_decklist(text):
+    """Parsea una lista y resuelve cada carta (registro + Scryfall). Devuelve
+    la tabla editable, el comandante y un resumen de cobertura."""
+    parsed = decklist.parse_decklist(text or "")
+    if len(parsed["cards"]) > MAX_CARDS:
+        raise ValueError(f"demasiadas cartas (max {MAX_CARDS})")
+    names = ([parsed["commander"]] if parsed["commander"] else []) + \
+            [n for _, n in parsed["cards"]]
+    fetch = _make_fetch(names)
+
+    cmd_name = parsed.get("commander")
+    cmd_card = cardsdb.resolve(cmd_name, fetch) if cmd_name else None
+    commander = None
+    if cmd_card is not None:
+        commander = _card_row(cmd_name, 1, cmd_card)
+
+    rows = []
+    missing = []
+    implemented = 0
+    total = 0
+    for qty, name in parsed["cards"]:
+        card = cardsdb.resolve(name, fetch)
+        rows.append(_card_row(name, qty, card))
+        total += qty
+        if card is None:
+            missing.append(name)
+        elif cardsdb.is_implemented(name):
+            implemented += qty
+    return {
+        "commander": commander,
+        "commander_name": cmd_name,
+        "cards": rows,
+        "total": total,
+        "implemented": implemented,
+        "missing": missing,
+        "scryfall_online": _scry is not None,
+    }
+
+
+def simulate_custom(cards_list, commander_name, opponent, n):
+    """Simula un deck editado (lista de {name, qty}) contra un mazo registrado."""
+    if opponent not in decks.DECKS:
+        raise ValueError(f"oponente desconocido: {opponent}")
+    n = max(1, min(int(n), MAX_N))
+    entries = [(int(c.get("qty", 1)), c["name"]) for c in cards_list
+               if c.get("name")]
+    parsed = {"commander": commander_name, "cards": entries}
+    names = [commander_name] + [name for _, name in entries]
+    fetch = _make_fetch(names)
+    deck, cmd, report = decklist.build_deck(parsed, fetch=fetch)
+
+    odeck, ocmd = decks.build(opponent)
+    defs = [("importado", deck, cmd), (opponent, odeck, ocmd)]
+    wins = run.many_defs(defs, n=n)
+    results = [
+        {"deck": "importado", "wins": wins.get("importado", 0),
+         "pct": round(100 * wins.get("importado", 0) / n, 1)},
+        {"deck": opponent, "wins": wins.get(opponent, 0),
+         "pct": round(100 * wins.get(opponent, 0) / n, 1)},
+        {"deck": "EMPATE", "wins": wins.get("EMPATE", 0),
+         "pct": round(100 * wins.get("EMPATE", 0) / n, 1)},
+    ]
+    return {"n": n, "opponent": opponent, "results": results, "report": report}

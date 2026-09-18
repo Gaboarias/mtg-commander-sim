@@ -1,0 +1,297 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+
+type Row = {
+  name: string;
+  qty: number;
+  source: "registry" | "basic" | "scryfall" | "missing";
+  implemented: boolean;
+  type: string;
+  cost: string;
+  pt: string;
+  colors?: string[];
+};
+type Resolved = {
+  commander: Row | null;
+  commander_name: string | null;
+  cards: Row[];
+  total: number;
+  implemented: number;
+  missing: string[];
+  scryfall_online: boolean;
+};
+type SimResult = { deck: string; wins: number; pct: number };
+
+const OPPONENTS = ["kang", "tricky", "lorehold"];
+const SAMPLE = `Commander
+1 Kang, el Embaucador
+
+Deck
+1 Gray Merchant of Asphodel
+1 Go for the Throat
+1 Night's Whisper
+1 Damnation
+1 Sol Ring
+1 Arcane Signet
+1 Command Tower
+30 Swamp`;
+
+function Tag({ r }: { r: Row }) {
+  const map: Record<string, [string, string]> = {
+    registry: ["#2f6b3a", "efecto"],
+    basic: ["#3a3f4a", "básica"],
+    scryfall: ["#3a5a8a", "stats reales"],
+    missing: ["#7a3030", "no resuelta"],
+  };
+  const [bg, label] = map[r.source] || ["#3a3f4a", r.source];
+  return (
+    <span style={{ background: bg, padding: "2px 7px", borderRadius: 6, fontSize: ".72rem" }}>
+      {label}
+    </span>
+  );
+}
+
+export default function DeckPage() {
+  const [text, setText] = useState(SAMPLE);
+  const [resolved, setResolved] = useState<Resolved | null>(null);
+  const [opponent, setOpponent] = useState("tricky");
+  const [n, setN] = useState(200);
+  const [busy, setBusy] = useState(false);
+  const [sim, setSim] = useState<{ n: number; opponent: string; results: SimResult[] } | null>(null);
+  const [lastPct, setLastPct] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function resolve() {
+    setBusy(true);
+    setError(null);
+    setSim(null);
+    try {
+      const r = await fetch("/api/deck", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "resolve", list: text }),
+      });
+      const d = await r.json();
+      if (d.error) setError(d.error);
+      else setResolved(d);
+    } catch {
+      setError("Error al resolver la lista.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function setQty(i: number, q: number) {
+    if (!resolved) return;
+    const cards = resolved.cards.slice();
+    cards[i] = { ...cards[i], qty: Math.max(0, q) };
+    setResolved({ ...resolved, cards });
+  }
+  function remove(i: number) {
+    if (!resolved) return;
+    const cards = resolved.cards.filter((_, j) => j !== i);
+    setResolved({ ...resolved, cards });
+  }
+
+  async function simulate() {
+    if (!resolved?.commander_name) {
+      setError("Falta el comandante (marca uno con *CMDR* o sección Commander).");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const cards = resolved.cards.filter((c) => c.qty > 0).map((c) => ({ name: c.name, qty: c.qty }));
+      const r = await fetch("/api/deck", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "simulate",
+          cards,
+          commander: resolved.commander_name,
+          opponent,
+          n,
+        }),
+      });
+      const d = await r.json();
+      if (d.error) {
+        setError(d.error);
+      } else {
+        if (sim) {
+          const prev = sim.results.find((x) => x.deck === "importado");
+          setLastPct(prev ? prev.pct : null);
+        }
+        setSim(d);
+      }
+    } catch {
+      setError("Error al simular.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const myPct = sim?.results.find((r) => r.deck === "importado")?.pct ?? null;
+  const delta = myPct != null && lastPct != null ? +(myPct - lastPct).toFixed(1) : null;
+  const totalQty = resolved ? resolved.cards.reduce((s, c) => s + c.qty, 0) : 0;
+
+  return (
+    <div className="wrap">
+      <header>
+        <h1>🛠️ Editor de decks</h1>
+        <p>
+          Pegá tu lista (Moxfield / Archidekt / texto), resolvé las cartas, editá
+          cantidades y <strong>probá variaciones</strong> midiendo la tasa de
+          victoria. <Link href="/">← volver al simulador</Link>
+        </p>
+      </header>
+
+      <div className="card">
+        <h2>1 · Pegá la lista</h2>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          spellCheck={false}
+          style={{
+            width: "100%", minHeight: 180, background: "#0a0c10",
+            color: "#c8cdd8", border: "1px solid var(--border)", borderRadius: 10,
+            padding: 12, fontFamily: "ui-monospace, monospace", fontSize: ".85rem",
+          }}
+        />
+        <div className="row" style={{ marginTop: 12 }}>
+          <button className="go" onClick={resolve} disabled={busy}>
+            {busy ? "Resolviendo…" : "Resolver cartas"}
+          </button>
+          {resolved && (
+            <span className="muted">
+              {totalQty} cartas · {resolved.implemented} con efecto ·{" "}
+              {resolved.missing.length} sin resolver
+            </span>
+          )}
+        </div>
+        {error && <p className="err">⚠ {error}</p>}
+        {resolved && !resolved.scryfall_online && (
+          <p className="muted">
+            Scryfall no disponible en este entorno: solo resuelven cartas
+            registradas y básicas. En Vercel se resuelven todas.
+          </p>
+        )}
+      </div>
+
+      {resolved && (
+        <div className="card">
+          <h2>2 · Editá el mazo</h2>
+          {resolved.commander ? (
+            <p>
+              <strong>Comandante:</strong> {resolved.commander.name}{" "}
+              <Tag r={resolved.commander} />
+            </p>
+          ) : (
+            <p className="err">Sin comandante resuelto.</p>
+          )}
+          <table>
+            <thead>
+              <tr>
+                <th>Cant.</th>
+                <th>Carta</th>
+                <th>Coste</th>
+                <th>Tipo</th>
+                <th>P/T</th>
+                <th>Estado</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {resolved.cards.map((c, i) => (
+                <tr key={i} style={{ opacity: c.qty === 0 ? 0.4 : 1 }}>
+                  <td>
+                    <input
+                      type="number"
+                      min={0}
+                      value={c.qty}
+                      onChange={(e) => setQty(i, Number(e.target.value))}
+                      style={{ width: 56 }}
+                    />
+                  </td>
+                  <td>{c.name}</td>
+                  <td>{c.cost}</td>
+                  <td className="muted">{c.type}</td>
+                  <td>{c.pt}</td>
+                  <td><Tag r={c} /></td>
+                  <td>
+                    <button className="ghost" style={{ padding: "4px 8px" }} onClick={() => remove(i)}>
+                      ✕
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {resolved && (
+        <div className="card">
+          <h2>3 · Probar variación</h2>
+          <div className="row">
+            <label>
+              Rival&nbsp;
+              <select
+                value={opponent}
+                onChange={(e) => setOpponent(e.target.value)}
+                style={{
+                  background: "var(--panel-2)", color: "var(--text)",
+                  border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px",
+                }}
+              >
+                {OPPONENTS.map((o) => (
+                  <option key={o} value={o}>{o}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Partidas&nbsp;
+              <input type="number" min={1} max={2000} value={n}
+                onChange={(e) => setN(Number(e.target.value))} />
+            </label>
+            <button className="go" onClick={simulate} disabled={busy}>
+              {busy ? "Corriendo…" : "Simular"}
+            </button>
+          </div>
+
+          {sim && (
+            <div style={{ marginTop: 16 }}>
+              {sim.results.map((r) => (
+                <div className="bar-row" key={r.deck}>
+                  <div className="bar-head">
+                    <span className="deck">{r.deck}</span>
+                    <span>{r.pct}% <span className="muted">({r.wins})</span></span>
+                  </div>
+                  <div className="bar-track">
+                    <div className="bar-fill" style={{ width: `${r.pct}%` }} />
+                  </div>
+                </div>
+              ))}
+              {delta != null && (
+                <p style={{ marginTop: 8 }}>
+                  Cambio vs corrida anterior del deck importado:{" "}
+                  <strong style={{ color: delta >= 0 ? "var(--g)" : "var(--r)" }}>
+                    {delta >= 0 ? "+" : ""}{delta} pts
+                  </strong>
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <footer>
+        Las cartas con efecto programado se simulan con sus habilidades; el resto
+        usa stats reales de Scryfall (coste, P/T, tipos, keywords) — combate,
+        maná y curva son fieles aunque el efecto especial no esté. No se inventan
+        datos de cartas.
+      </footer>
+    </div>
+  );
+}

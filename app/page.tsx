@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 type Deck = { key: string; commander: string; identity: string[] };
 type Cov = { deck: string; implemented: number; vanilla: number };
@@ -92,6 +93,10 @@ export default function Home() {
           Motor de simulacion de <strong>Magic: The Gathering</strong> (formato
           Commander) en Python puro. Elegi 2 a 4 mazos, corre miles de partidas y
           medi la tasa de victoria — o mira una partida turno a turno.
+        </p>
+        <p>
+          <Link href="/deck">🛠️ Editor de decks →</Link> — importá tu lista
+          (Moxfield/Archidekt), editá cartas y probá variaciones.
         </p>
       </header>
 

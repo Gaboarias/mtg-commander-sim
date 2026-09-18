@@ -67,6 +67,39 @@ Vercel (abajo) o usá `vercel dev` con el CLI de Vercel instalado.
 `vercel.json` fija `includeFiles: "*.py"` para que las funciones serverless
 empaqueten el motor (los `.py` de la raíz) junto al handler.
 
+## Importar y editar decks (precon / propios)
+
+La app permite **cargar una lista de mazo**, editar cartas y **probar
+variaciones** midiendo la tasa de victoria (`/deck` en la web).
+
+**De dónde sale la info de cartas:**
+
+| Fuente | Qué aporta |
+|---|---|
+| [Scryfall](https://scryfall.com/docs/api) `/cards/collection` | Datos reales de cada carta (coste, tipos, P/T, keywords, colores). Se llama en runtime desde la función serverless (Vercel), hasta 75 cartas por request. |
+| [MTGJSON](https://mtgjson.com/data-models/deck/) `/api/v5/decks/` | Listas **precon completas** de Commander (para poblar un catálogo). |
+| Moxfield / Archidekt | Export de texto del deck propio (`1 Nombre de Carta`). |
+
+**Cómo funciona la cobertura:** las cartas con **efecto programado** (registro en
+`cardsdb.py`) se simulan con sus habilidades; el resto se construye con **stats
+reales de Scryfall** (vainilla pero con coste/P/T/tipos/keywords correctos), así
+combate, maná y curva son fieles aunque el efecto especial no esté. **No se
+inventan datos** (regla del proyecto): lo que no está registrado se resuelve por
+Scryfall o queda marcado como no resuelto.
+
+**Piezas:**
+- `cardsdb.py` — registro nombre→carta implementada + `build_card_from_data`
+  (dict tipo Scryfall → `Card`). Puro y testeable sin red.
+- `decklist.py` — parser de listas (Moxfield/Archidekt/texto) y armado a 99.
+- `api/_scry.py` — cliente Scryfall (stdlib, corre en Vercel).
+- `api/deck.py` — `POST /api/deck` con `action: "resolve"` (tabla editable) y
+  `action: "simulate"` (winrate del deck editado vs un mazo registrado).
+- `app/deck/` — UI: pegar lista → tabla editable → probar variación.
+
+> Nota: la resolución vía Scryfall requiere salida a internet. En Vercel
+> funciona; en entornos de red restringida solo resuelven las cartas
+> registradas y las tierras básicas.
+
 ## Cómo agregar cartas
 
 Ver [`docs/ADDING_CARDS.md`](docs/ADDING_CARDS.md). Resumen: una entrada en

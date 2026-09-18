@@ -34,6 +34,28 @@ def one(keys, seed=0, log=False):
     return g.play()
 
 
+# --- decks arbitrarios (import / edicion) --------------------------------- #
+
+def build_players_from_defs(deck_defs):
+    """deck_defs: lista de (label, deck_list, commander_card)."""
+    return [Player(label, deck, cmd, policy=Policy())
+            for label, deck, cmd in deck_defs]
+
+
+def play_defs(deck_defs, seed=0, log=False, max_turns=60):
+    players = build_players_from_defs(deck_defs)
+    return Game(players, seed=seed, log=log, max_turns=max_turns)
+
+
+def many_defs(deck_defs, n=200):
+    """Corre n partidas entre decks ya construidos. Devuelve Counter de wins."""
+    wins = Counter()
+    for i in range(n):
+        g = play_defs(deck_defs, seed=i)
+        wins[g.play()] += 1
+    return wins
+
+
 def many(keys, n=200, verbose=True):
     wins = Counter()
     for i in range(n):

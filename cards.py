@@ -459,3 +459,25 @@ def NightsWhisper():
 def DamnationWipe():
     return Card("Damnation", {"sorcery"}, parse_cost("2BB"),
                 on_cast_resolve=wrath, tags={"wipe"}, color_id={B})
+
+
+# --------------------------------------------------------------------------- #
+# STAPLES incoloros (en casi todos los decks) — registrados para import offline
+# --------------------------------------------------------------------------- #
+
+def SolRing():
+    return Card("Sol Ring", {"artifact"}, parse_cost("1"),
+                produces=lambda perm, pl: {C: 2}, tags={"ramp"})
+
+
+def ArcaneSignet():
+    # 1 mana de cualquier color de la identidad de tu comandante
+    return Card("Arcane Signet", {"artifact"}, parse_cost("2"),
+                produces=lambda perm, pl: {c: 1 for c in (pl.identity() or {C})},
+                tags={"ramp"})
+
+
+def CommandTower():
+    c = Card("Command Tower", {"land"}, None)
+    c.produces = lambda perm, pl: {col: 1 for col in (pl.identity() or {C})}
+    return c
