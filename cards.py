@@ -245,8 +245,8 @@ def _quintorius_lgy(game, perm, **kw):
     Espiritu 3/2."""
     if kw.get("player") is not perm.controller:
         return
-    make_token(game, perm.controller, "Espiritu", 3, 2)
-    game.log(f"{perm.controller.name}: Quintorius crea un Espiritu 3/2")
+    make_token(game, perm.controller, "Spirit", 3, 2)
+    game.log(f"{perm.controller.name}: Quintorius crea un Spirit 3/2")
 
 
 def _quintorius_upkeep(game, perm, **kw):
@@ -261,7 +261,7 @@ def _quintorius_upkeep(game, perm, **kw):
 
 
 def Quintorius():
-    c = creature("Quintorius, Historiador", "2RW", 3, 4, legendary=True,
+    c = creature("Quintorius, Field Historian", "2RW", 3, 4, legendary=True,
                  tags=("engine",), color_id=(R, W))
     def etb(game, ctrl, perm):     # siembra el cementerio al entrar
         mill(game, ctrl, 2)
@@ -278,9 +278,9 @@ def _hofri_watch(game, hofri_perm, **kw):
     if dead is hofri_perm or not dead.is_creature() or dead.is_token:
         return
     ctrl = hofri_perm.controller
-    make_token(game, ctrl, dead.name + " (Espiritu)",
+    make_token(game, ctrl, dead.name + " (Spirit)",
                dead.card.power + 1, dead.card.toughness + 1, kw=("haste",))
-    game.log(f"{ctrl.name}: Hofri devuelve {dead.name} como Espiritu")
+    game.log(f"{ctrl.name}: Hofri devuelve {dead.name} como Spirit")
 
 
 def Hofri():
@@ -303,8 +303,8 @@ def QuintoriusPlaneswalker():
     """Planeswalker Lorehold (P2.3): +1 crea un Espiritu 3/2; -4 hace 4 a cada
     oponente. (Es una carta distinta del comandante criatura Quintorius.)"""
     def plus(game, ctrl, perm):
-        make_token(game, ctrl, "Espiritu", 3, 2)
-        game.log(f"{ctrl.name}: PW crea un Espiritu 3/2")
+        make_token(game, ctrl, "Spirit", 3, 2)
+        game.log(f"{ctrl.name}: PW crea un Spirit 3/2")
 
     def ultimate(game, ctrl, perm):
         for o in game.opponents(ctrl):
@@ -344,7 +344,7 @@ def CronistaEspectral():
     # auto-molienda barata: siembra el cementerio para el motor de Espiritus
     def etb(game, ctrl, perm):
         mill(game, ctrl, 3)
-    c = creature("Cronista Espectral", "1W", 1, 2, tags=("engine",), color_id=(W,))
+    c = creature("Spectral Chronicler", "1W", 1, 2, tags=("engine",), color_id=(W,))
     c.on_etb = etb
     return c
 
@@ -352,7 +352,7 @@ def CronistaEspectral():
 def MerodeadorDeTumbas():
     def etb(game, ctrl, perm):
         mill(game, ctrl, 2)
-    c = creature("Merodeador de Tumbas", "1R", 2, 1, tags=("engine",), color_id=(R,))
+    c = creature("Graveyard Prowler", "1R", 2, 1, tags=("engine",), color_id=(R,))
     c.on_etb = etb
     return c
 
@@ -524,7 +524,7 @@ def _kang_draw(game, perm, **kw):
 
 
 def Kang():
-    c = creature("Kang, el Embaucador", "2B", 2, 2, kw=("menace",),
+    c = creature("Kang, the Trickster", "2B", 2, 2, kw=("menace",),
                  legendary=True, tags=("engine",), color_id=(B,))
     c.triggers = {"attacks": _kang_attacks, "draw": _kang_draw}
     return c

@@ -152,10 +152,10 @@ def test_quintorius_makes_spirit_on_leave_graveyard():
     b = _mk_player("b")
     g = _game([a, b])
     g.move_to_battlefield(cards.Quintorius(), a)  # ETB siembra cementerio
-    before = sum(1 for p in a.battlefield if p.name == "Espiritu")
+    before = sum(1 for p in a.battlefield if p.name == "Spirit")
     g.emit("upkeep", player=a)  # upkeep exilia del cementerio -> leaves_graveyard
     g.resolve_stack()
-    after = sum(1 for p in a.battlefield if p.name == "Espiritu")
+    after = sum(1 for p in a.battlefield if p.name == "Spirit")
     assert after > before
 
 
@@ -244,7 +244,7 @@ def test_hexproof_not_targetable_by_opponent():
 def test_decklist_parse_and_build():
     import decklist
     txt = """Commander
-1 Kang, el Embaucador
+1 Kang, the Trickster
 Deck
 1 Gray Merchant of Asphodel
 1x Go for the Throat (C21) 12
@@ -255,13 +255,13 @@ Sideboard
 1 Island
 """
     parsed = decklist.parse_decklist(txt)
-    assert parsed["commander"] == "Kang, el Embaucador"
+    assert parsed["commander"] == "Kang, the Trickster"
     names = [n for _, n in parsed["cards"]]
     assert "Go for the Throat" in names   # se limpia el (SET) 12
     assert "Island" not in names          # sideboard ignorado
     deck, cmd, report = decklist.build_deck(parsed, fetch=None)
     assert len(deck) == 99
-    assert cmd.name == "Kang, el Embaucador"
+    assert cmd.name == "Kang, the Trickster"
     assert report["unresolved"] == []     # Sol Ring ahora esta registrado
 
 
@@ -337,7 +337,7 @@ def test_planeswalker_loyalty_and_minus_four():
     # +1 crea Espiritu y sube lealtad
     assert g.activate_loyalty(pw, 0) is True
     assert pw.counters["loyalty"] == 5
-    assert any(p.name == "Espiritu" for p in a.battlefield)
+    assert any(p.name == "Spirit" for p in a.battlefield)
     # una sola activacion por turno
     assert g.activate_loyalty(pw, 1) is False
     # nuevo turno: se puede activar el -4
@@ -480,11 +480,11 @@ def test_mdparse_builds_and_uses_registry():
 def test_moxfield_commander_at_end():
     import decklist
     # Moxfield crudo: comandante al final tras una linea en blanco, sin encabezado
-    raw = "1 Sol Ring\n1 Command Tower\n30 Swamp\n\n1 Kang, el Embaucador"
+    raw = "1 Sol Ring\n1 Command Tower\n30 Swamp\n\n1 Kang, the Trickster"
     p = decklist.parse_decklist(raw)
-    assert p["commander"] == "Kang, el Embaucador"
+    assert p["commander"] == "Kang, the Trickster"
     names = [n for _, n in p["cards"]]
-    assert "Kang, el Embaucador" not in names  # no queda duplicado en el mazo
+    assert "Kang, the Trickster" not in names  # no queda duplicado en el mazo
     assert "Sol Ring" in names
 
 
