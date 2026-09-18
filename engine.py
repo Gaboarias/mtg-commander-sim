@@ -855,14 +855,13 @@ class Game:
         self.emit("begin_combat", player=p)
         self.resolve_stack()
 
-    def _resolve_combat(self, p: "Player", attackers: list):
-        """Aplica los atacantes declarados (por la política o por un humano):
-        dispara 'attacks', deja bloquear a los rivales y resuelve el daño."""
+    def _declare_attackers(self, p: "Player", attackers: list) -> list:
+        """Marca los atacantes válidos, los tapea (sin vigilancia) y dispara
+        'attacks'. Devuelve la lista de Permanent que efectivamente atacan."""
         declared = []
         for perm, defender in attackers:
             if not perm.can_attack():
                 continue
-            # el defensor puede ser un jugador o un planeswalker rival
             if isinstance(defender, Player):
                 if defender.lost:
                     continue
@@ -874,51 +873,59 @@ class Game:
             if not perm.has("vigilance"):
                 perm.tapped = True
             declared.append(perm)
-            # "attacks" se dispara DIRECTO sobre el atacante (no via emit)
             cb = perm.card.triggers.get("attacks")
             if cb:
                 self.stack.append(StackObject(
                     p, (lambda g, _cb=cb, _perm=perm, _d=defender: _cb(g, _perm, defender=_d)),
                     source=perm, label=f"attacks:{perm.name}"))
         self.resolve_stack()
-        if not declared:
-            return
+        return declared
 
-        # declarar bloqueadores: agrupar por el jugador que defiende (dueno del
-        # jugador o del planeswalker atacado)
-        for defender in self.opponents(p):
-            incoming = [a for a in declared if self._def_player(a) is defender]
-            if not incoming or not defender.policy:
+    def _apply_block_pairs(self, incoming: list, pairs: list):
+        """pairs: [(atacante, bloqueador), ...] ya como Permanent."""
+        for attacker, blocker in pairs:
+            if attacker not in incoming:
                 continue
-            blocks = defender.policy.declare_blockers(self, defender, incoming)
-            for attacker, blocker in blocks:
-                if attacker not in incoming:
-                    continue
-                if blocker.tapped or not blocker.is_creature():
-                    continue
-                attacker.blocked_by.append(blocker)
-                blocker.blocking.append(attacker)
-        # validar amenaza (menace: exige 2+ bloqueadores)
+            if blocker.tapped or not blocker.is_creature() or blocker.attacking:
+                continue
+            attacker.blocked_by.append(blocker)
+            blocker.blocking.append(attacker)
+
+    def _ai_block(self, defender: "Player", declared: list):
+        """Deja que la política de `defender` bloquee a sus atacantes."""
+        incoming = [a for a in declared if self._def_player(a) is defender]
+        if not incoming or not defender.policy:
+            return
+        pairs = defender.policy.declare_blockers(self, defender, incoming)
+        self._apply_block_pairs(incoming, pairs)
+
+    def _finish_combat(self, declared: list):
+        """Valida amenaza, aplica daño (primer golpe + normal) y limpia."""
         for a in declared:
             if a.has("menace") and 0 < len(a.blocked_by) < 2:
                 for b in a.blocked_by:
                     b.blocking.remove(a)
                 a.blocked_by = []
-
-        # primer golpe
         self._combat_damage(declared, first_strike=True)
         self.sba()
-        # dano normal
         self._combat_damage(declared, first_strike=False)
         self.sba()
-
-        # limpiar marcas de combate
         for a in declared:
             a.attacking = None
             for b in a.blocked_by:
                 if a in b.blocking:
                     b.blocking.remove(a)
             a.blocked_by = []
+
+    def _resolve_combat(self, p: "Player", attackers: list):
+        """Aplica los atacantes declarados (por la política o por un humano):
+        dispara 'attacks', deja bloquear a los rivales y resuelve el daño."""
+        declared = self._declare_attackers(p, attackers)
+        if not declared:
+            return
+        for defender in self.opponents(p):
+            self._ai_block(defender, declared)
+        self._finish_combat(declared)
 
     def _combat_damage(self, attackers: list, first_strike: bool):
         """first_strike=True: solo first_strike y double_strike.

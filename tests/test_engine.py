@@ -305,6 +305,37 @@ def test_interactive_manual_turn():
     json.dumps(st)                                  # serializable para la web
 
 
+def test_interactive_defense_window():
+    # Fase 2: cuando un rival me ataca, la partida se pausa en "defense" y puedo
+    # resolver (tomar el daño / bloquear) y continuar.
+    import json
+    import interactive
+    found = False
+    for seed in range(0, 10):
+        ig = interactive.from_registered(
+            [{"key": "marvel"}, {"key": "strixhaven"}, {"key": "old-guard"}],
+            human_index=0, seed=seed)
+        for _ in range(40):
+            st = ig.state()
+            if st["phase"] == "over":
+                break
+            if st["phase"] == "defense":
+                c = st["combat"]
+                assert c and c["attackers"] and "from" in c
+                json.dumps(st)
+                life0 = st["players"][0]["life"]
+                st2 = ig.resolve_defense([])       # tomo el daño
+                assert st2["phase"] in ("main", "over")
+                assert st2["players"][0]["life"] <= life0
+                found = True
+                break
+            if st["phase"] == "main":
+                ig.end_turn()
+        if found:
+            break
+    assert found, "no se alcanzó ninguna ventana de defensa"
+
+
 def test_trace_records_serializable_steps():
     # Fase 1: con trace=True el motor graba snapshots del estado por evento.
     import json

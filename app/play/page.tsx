@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { Seat, type PlayerState, type Perm } from "../board";
 
 const PY_VERSION = "0.26.4";
@@ -26,9 +26,16 @@ type Inspect = {
   name: string; cost?: string; types?: string[]; power?: number | null;
   toughness?: number | null; keywords?: string[]; abilities?: string[];
 };
+type CombatAtk = { uid: number; name: string; power: number; toughness: number; commander: boolean; from: string };
+type Combat = {
+  from: string; incoming_damage: number;
+  attackers: CombatAtk[];
+  blockers: { uid: number; name: string; power: number; toughness: number }[];
+  responses: { i: number; name: string; cost: string }[];
+};
 type GameState = {
   turn: number; active: number; human_index: number; phase: string; attacked: boolean;
-  winner: string | null; players: PlayerState[]; legal: Legal; log: string[];
+  winner: string | null; players: PlayerState[]; legal: Legal; combat: Combat | null; log: string[];
 };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -54,6 +61,9 @@ def act(kind, arg_json):
     elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'))
     elif kind == 'attack': g.attack(a.get('uids', []))
     elif kind == 'end': g.end_turn()
+    elif kind == 'activate': g.activate(a.get('uid'), a.get('index', 0))
+    elif kind == 'respond': g.respond(a.get('i'))
+    elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
     return json.dumps(g.state())
 `;
 
@@ -75,6 +85,7 @@ export default function Play() {
   const [info, setInfo] = useState<Record<string, CardInfo>>({});
   const [inspect, setInspect] = useState<Inspect | null>(null);
   const infoReq = useRef<Set<string>>(new Set());  // nombres ya pedidos
+  const [assign, setAssign] = useState<Record<number, number>>({});  // bloqueador -> atacante
 
   useEffect(() => {
     fetch("/api/catalog").then((r) => r.json()).then((d) => {
@@ -130,6 +141,7 @@ export default function Play() {
       act.destroy?.();
       setState(JSON.parse(raw));
       if (kind === "attack" || kind === "end") setPicked(new Set());
+      if (kind === "defend") setAssign({});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -263,6 +275,77 @@ export default function Play() {
               <p className="win-line">🏆 {state.winner === "EMPATE" ? "Empate (límite de turnos)." : <>Gana <b>{state.winner}</b>.</>}</p>
             )}
           </div>
+
+          {state.combat && (
+            <motion.div className="card defense"
+              initial={reduce ? false : { opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 24 }}>
+              <h2 className="def-title">
+                <motion.span className="alert"
+                  animate={reduce ? {} : { scale: [1, 1.15, 1] }}
+                  transition={{ repeat: Infinity, duration: 1.1 }}>⚔</motion.span>
+                {state.combat.from} te ataca — {state.combat.incoming_damage} de daño en camino
+              </h2>
+              <div className="def-attackers">
+                {state.combat.attackers.map((a) => (
+                  <div key={a.uid} className={`atk-chip ${assign && Object.values(assign).includes(a.uid) ? "blocked" : ""}`}>
+                    {a.commander ? "👑 " : ""}{a.name} <b>{a.power}/{a.toughness}</b>
+                    <span className="muted">{Object.values(assign).includes(a.uid) ? " · bloqueado" : " · sin bloquear"}</span>
+                  </div>
+                ))}
+              </div>
+
+              {state.combat.responses.length > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Responder (instantáneo):</span>
+                  {state.combat.responses.map((r) => (
+                    <button key={r.i} className="ghost" onClick={() => doAct("respond", { i: r.i })}>
+                      ⚡ {r.name} <span className="muted">{r.cost}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {state.combat.blockers.length > 0 ? (
+                <div className="def-blockers">
+                  <span className="act-label">Tus bloqueadores:</span>
+                  {state.combat.blockers.map((b) => (
+                    <div key={b.uid} className="blk-row">
+                      <span>{b.name} <b>{b.power}/{b.toughness}</b></span>
+                      <select value={assign[b.uid] ?? ""}
+                        onChange={(e) => setAssign((m) => {
+                          const v = e.target.value;
+                          const n = { ...m };
+                          if (v === "") delete n[b.uid]; else n[b.uid] = Number(v);
+                          return n;
+                        })}
+                        style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 8px" }}>
+                        <option value="">— no bloquea —</option>
+                        {state.combat!.attackers.map((a) => (
+                          <option key={a.uid} value={a.uid}>bloquea a {a.name} ({a.power}/{a.toughness})</option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">No tenés criaturas para bloquear.</p>
+              )}
+
+              <div className="act-block">
+                <button className="go" onClick={() => doAct("defend", {
+                  pairs: Object.entries(assign).map(([blk, atk]) => ({ blocker: Number(blk), attacker: atk })),
+                })}>
+                  {Object.keys(assign).length > 0 ? "Confirmar bloqueos ✔" : "Recibir el ataque ✔"}
+                </button>
+              </div>
+              <p className="muted" style={{ fontSize: ".8rem" }}>
+                Antes de resolver el daño podés lanzar un instantáneo y asignar bloqueos.
+                El registro completo queda en el relato de abajo.
+              </p>
+            </motion.div>
+          )}
 
           {myTurn && (() => {
             const landIdx = new Set((legal?.lands || []).map((l) => l.i));

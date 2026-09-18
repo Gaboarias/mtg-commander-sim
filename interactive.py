@@ -44,9 +44,12 @@ class InteractiveGame:
         self.human_index = max(0, min(int(human_index), self.n - 1))
         self.g = Game(self.players, seed=int(seed), max_turns=max_turns,
                       trace=False)
-        self.phase = "waiting"      # waiting | main | over
+        self.phase = "waiting"      # waiting | main | defense | over
         self.attacked = False
         self.winner = None
+        self.mode = None            # None | "defense"
+        self._attacker = None       # jugador que ataca (durante defensa)
+        self._declared = []         # atacantes declarados (Permanent)
         self._advance_to_human()
 
     # -- helpers ---------------------------------------------------------- #
@@ -59,7 +62,8 @@ class InteractiveGame:
         self.phase = "over"
 
     def _advance_to_human(self):
-        """Corre turnos rivales hasta que sea el turno del humano (o termine)."""
+        """Corre turnos rivales hasta que sea el turno del humano, se pause por
+        una defensa, o termine la partida."""
         while True:
             if len(self.g.alive()) <= 1 or self.g.turn >= self.g.max_turns:
                 self._finish()
@@ -77,8 +81,118 @@ class InteractiveGame:
                 self.phase = "main"
                 self.attacked = False
                 return
-            self.g.run_turn()
-            self.g.sba()
+            if self._ai_turn(p):     # pausó porque me atacan
+                return
+
+    # -- turno rival, con pausa en mi defensa ---------------------------- #
+    def _ai_turn(self, p):
+        self.g.begin_turn(p)
+        self.g.sba()
+        if p.lost:
+            return False
+        if p.policy:
+            p.policy.main_phase(self.g, p, second=False)
+            self.g.resolve_stack()
+        self.g.sba()
+        if not p.lost and self.g.opponents(p):
+            if self._ai_combat(p):
+                return True
+        self._ai_after_combat(p)
+        return False
+
+    def _ai_combat(self, p):
+        self.g._begin_combat(p)
+        if not self.g.opponents(p):
+            return False
+        attackers = p.policy.declare_attackers(self.g, p) if p.policy else []
+        declared = self.g._declare_attackers(p, attackers)
+        if not declared:
+            return False
+        me = self.human()
+        incoming = [a for a in declared if self.g._def_player(a) is me]
+        if incoming and not me.lost:
+            self._attacker = p
+            self._declared = declared
+            self.mode = "defense"
+            self.phase = "defense"
+            return True
+        for d in self.g.opponents(p):
+            self.g._ai_block(d, declared)
+        self.g._finish_combat(declared)
+        self.g.sba()
+        return False
+
+    def _ai_after_combat(self, p):
+        self.g.sba()
+        if not p.lost and p.policy:
+            p.policy.main_phase(self.g, p, second=True)
+            self.g.resolve_stack()
+        self.g.sba()
+        self.g.end_turn(p)
+        self.g.sba()
+
+    # -- acciones de defensa (respuesta a un ataque) --------------------- #
+    def _defense_incoming(self):
+        me = self.human()
+        return [a for a in self._declared
+                if a in a.controller.battlefield and self.g._def_player(a) is me]
+
+    def _auto_targets_def(self, card):
+        ts = getattr(card, "target_spec", None)
+        if ts == "opp_creature":
+            legal = [a for a in self._defense_incoming()
+                     if self.g.can_target(self.human(), a)]
+            return [max(legal, key=lambda x: (x.power, x.toughness))] if legal else []
+        return self._auto_targets(card)
+
+    def respond(self, i):
+        """Lanza un instantáneo / carta con destello desde la mano en defensa."""
+        if self.mode != "defense":
+            return self.state()
+        me = self.human()
+        if 0 <= i < len(me.hand):
+            c = me.hand[i]
+            fast = ("instant" in c.types) or ("flash" in c.keywords)
+            if fast and c.cost is not None and me.can_pay(c.cost):
+                self.g.cast(me, c, targets=self._auto_targets_def(c))
+                self.g.sba()
+                if len(self.g.alive()) <= 1:
+                    self.mode = None
+                    self._finish()
+        return self.state()
+
+    def resolve_defense(self, pairs=None):
+        """Aplica los bloqueos elegidos (pairs: [{attacker,blocker}]) y el daño;
+        después completa el turno del atacante y sigue."""
+        if self.mode != "defense":
+            return self.state()
+        me = self.human()
+        p = self._attacker
+        declared = [a for a in self._declared if a in a.controller.battlefield]
+        incoming = [a for a in declared if self.g._def_player(a) is me]
+        amap = {a.uid: a for a in incoming}
+        bmap = {pm.uid: pm for pm in me.creatures()}
+        human_pairs = []
+        for pr in (pairs or []):
+            a = amap.get(pr.get("attacker"))
+            b = bmap.get(pr.get("blocker"))
+            if a is not None and b is not None:
+                human_pairs.append((a, b))
+        self.g._apply_block_pairs(incoming, human_pairs)
+        for d in self.g.opponents(p):
+            if d is me:
+                continue
+            self.g._ai_block(d, declared)
+        self.g._finish_combat(declared)
+        self.g.sba()
+        self.mode = None
+        self._declared = []
+        if len(self.g.alive()) <= 1:
+            self._finish()
+            return self.state()
+        self._ai_after_combat(p)
+        self._advance_to_human()
+        return self.state()
 
     def _my_turn(self):
         return self.phase == "main" and self.g.active_index == self.human_index
@@ -213,6 +327,32 @@ class InteractiveGame:
                 "can_attack": self._my_turn() and not self.attacked,
                 "can_end": self._my_turn()}
 
+    def _defense_state(self):
+        """Datos de la ventana de defensa: quién me ataca, con qué puedo bloquear
+        y qué instantáneos puedo lanzar en respuesta."""
+        me = self.human()
+        incoming = self._defense_incoming()
+        attackers = [{
+            "uid": a.uid, "name": a.name, "power": a.power, "toughness": a.toughness,
+            "commander": a.card is a.controller.commander_card,
+            "from": a.controller.name,
+        } for a in incoming]
+        blockers = [{
+            "uid": pm.uid, "name": pm.name, "power": pm.power, "toughness": pm.toughness,
+        } for pm in me.creatures() if not pm.tapped]
+        responses = [{
+            "i": i, "name": c.name, "cost": _cost_str(c),
+        } for i, c in enumerate(me.hand)
+            if (("instant" in c.types) or ("flash" in c.keywords))
+            and c.cost is not None and me.can_pay(c.cost)]
+        return {
+            "from": self._attacker.name if self._attacker else "",
+            "attackers": attackers,
+            "blockers": blockers,
+            "responses": responses,
+            "incoming_damage": sum(a["power"] for a in attackers),
+        }
+
     def state(self):
         players = []
         for i, pl in enumerate(self.players):
@@ -237,5 +377,6 @@ class InteractiveGame:
             "winner": self.winner,
             "players": players,
             "legal": self.legal(),
+            "combat": self._defense_state() if self.mode == "defense" else None,
             "log": self.g.log_lines[-14:],
         }

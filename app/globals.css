@@ -372,3 +372,13 @@ textarea:focus { border-color: var(--accent-2) !important; }
 .inspect .oracle { white-space: pre-wrap; font-size: .85rem; line-height: 1.4; margin: 8px 0; }
 .inspect .abil { margin: 8px 0; padding-left: 18px; font-size: .85rem; }
 .inspect .abil li { margin: 3px 0; }
+
+/* ventana de defensa (respuesta a ataques) */
+.card.defense { border-color: rgba(224,104,79,.6); box-shadow: 0 0 0 1px rgba(224,104,79,.4), var(--shadow); }
+.def-title { display: flex; align-items: center; gap: 8px; color: #e0684f; }
+.def-title .alert { display: inline-block; }
+.def-attackers { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.atk-chip { border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; background: var(--panel-2); font-size: .88rem; }
+.atk-chip.blocked { border-color: rgba(216,178,58,.6); }
+.def-blockers { margin: 10px 0; }
+.blk-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; max-width: 460px; margin: 6px 0; }
