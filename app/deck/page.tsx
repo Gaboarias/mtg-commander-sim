@@ -265,6 +265,59 @@ export default function DeckPage() {
     resolve(next);
   }
 
+  const [cmdName, setCmdName] = useState("");
+
+  function _lineName(line: string): string {
+    const m = line.match(/^\s*\d+\s*x?\s+(.+?)\s*$/);
+    let n = m ? m[1] : line.trim();
+    n = n
+      .replace(/\s*\([^)]*\)\s*[\dA-Za-z-]*\s*$/, "") // (SET) 123
+      .replace(/\*(cmdr|commander|comandante)\*/i, "")
+      .trim();
+    return n;
+  }
+
+  // arma una lista con seccion Commander poniendo `name` de comandante y
+  // quitando UNA copia de esa carta del resto
+  function buildWithCommander(name: string): string {
+    const rest: string[] = [];
+    let removed = false;
+    for (const raw of text.split("\n")) {
+      const l = raw.trim();
+      if (!l) continue;
+      if (/^(commander|comandante|deck|mainboard|sideboard|maybeboard)\b/i.test(l)) continue;
+      if (!removed && _lineName(l).toLowerCase() === name.toLowerCase()) {
+        removed = true;
+        continue;
+      }
+      rest.push(raw);
+    }
+    return `Commander\n1 ${name}\n\nDeck\n${rest.join("\n")}`;
+  }
+
+  function markFirstAsCommander() {
+    for (const raw of text.split("\n")) {
+      const l = raw.trim();
+      if (!l || l.startsWith("#") || l.startsWith("//")) continue;
+      if (/^(commander|comandante|deck|mainboard|sideboard|maybeboard)\b/i.test(l)) continue;
+      const name = _lineName(l);
+      if (!name) continue;
+      const next = buildWithCommander(name);
+      setText(next);
+      resolve(next);
+      return;
+    }
+  }
+
+  function markNamedCommander() {
+    const name = cmdName.trim();
+    if (!name) return;
+    const next = buildWithCommander(name);
+    setText(next);
+    setCmdName("");
+    resolve(next);
+  }
+
   function replaceCard(oldName: string, newName: string) {
     if (!newName || oldName === newName) return;
     const next = text.split(oldName).join(newName);
@@ -448,10 +501,30 @@ export default function DeckPage() {
             {busy ? "Revisando…" : "Revisar cartas"}
           </button>
           <span className="muted">
-            pegá tu lista (Moxfield / Archidekt / «1 Nombre») con su comandante
+            pegá tu lista (Moxfield / Archidekt / «1 Nombre»)
           </span>
         </div>
         {error && <p className="err">⚠ {error}</p>}
+        <div className="row" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
+          <span className="muted">¿No marca el comandante?</span>
+          <button className="ghost" style={{ padding: "6px 12px" }} onClick={markFirstAsCommander}>
+            La 1ª carta es el comandante
+          </button>
+          <span className="muted">o</span>
+          <input
+            placeholder="nombre del comandante"
+            value={cmdName}
+            onChange={(e) => setCmdName(e.target.value)}
+            style={{
+              background: "var(--panel-2)", color: "var(--text)",
+              border: "1px solid var(--border)", borderRadius: 8,
+              padding: "6px 10px", width: 200,
+            }}
+          />
+          <button className="ghost" style={{ padding: "6px 12px" }} onClick={markNamedCommander}>
+            Marcar
+          </button>
+        </div>
       </div>
 
       {resolved && !resolved.commander_name && (
