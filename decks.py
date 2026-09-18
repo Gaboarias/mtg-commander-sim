@@ -178,6 +178,33 @@ DECKS = {
     "kang": kang,
 }
 
+# Decks de ejemplo (arriba) + presets del usuario en presets/*.md
+DECK_SOURCE = {k: "ejemplo" for k in DECKS}
+
+
+def _register_presets():
+    """Registra cada presets/*.md (menos FORMATO.md) como un deck jugable."""
+    import os
+    import mdparse
+    pdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
+    if not os.path.isdir(pdir):
+        return
+    for fn in sorted(os.listdir(pdir)):
+        if not fn.endswith(".md") or fn.upper().startswith("FORMATO"):
+            continue
+        slug = fn[:-3]
+        path = os.path.join(pdir, fn)
+
+        def _loader(_p=path):
+            deck, commander, _ = mdparse.parse_md_deck(open(_p, encoding="utf-8").read())
+            return deck, commander
+
+        DECKS[slug] = _loader
+        DECK_SOURCE[slug] = "preset"
+
+
+_register_presets()
+
 
 def build(name):
     if name not in DECKS:

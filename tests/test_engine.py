@@ -444,6 +444,68 @@ def test_export_json(tmp_path=None):
     assert len(loaded["games"]) == 20 and "winrate" in loaded
 
 
+# -- importador de formato markdown (decks del usuario) -------------------- #
+def test_mdparse_builds_and_uses_registry():
+    import mdparse
+    txt = """## Comandante
+| n | Carta | Coste | P/T | Keywords | Tags |
+|---|---|---|---|---|---|
+| 1 | Omo, Queen of Vesuva | 2GU | 1/5 | | engine |
+
+## Criaturas
+| n | Carta | Coste | P/T | Keywords | Tags |
+|---|---|---|---|---|---|
+| 1 | Managorger Hydra | 2G | 1/1 | trample | creature |
+| 1 | Herd Baloth | 3G | 4/4 | | creature |
+
+## Tierras
+| n | Carta | Produce | Tapeada |
+|---|---|---|---|
+| 1 | Command Tower | [W U B R G] | no |
+| ? | Forest | [G] | no |
+
+---
+## Notas (se ignoran, aunque tengan ?)
+| 1 | Fantasma | ? | | | |
+"""
+    deck, cmd, rep = mdparse.parse_md_deck(txt)
+    assert cmd.name == "Omo, Queen of Vesuva"
+    assert len(deck) == 99
+    mh = next(c for c in deck if c.name == "Managorger Hydra")
+    assert mh.triggers            # usa la version implementada (efecto real)
+    hb = next(c for c in deck if c.name == "Herd Baloth")
+    assert hb.power == 4 and "creature" in hb.types   # vainilla con stats reales
+
+
+def test_mdparse_rejects_question_mark():
+    import mdparse
+    txt = """## Comandante
+| n | Carta | Coste | P/T | Keywords | Tags |
+|---|---|---|---|---|---|
+| 1 | Cmdr | 1G | 1/1 | | |
+
+## Criaturas
+| n | Carta | Coste | P/T | Keywords | Tags |
+|---|---|---|---|---|---|
+| 1 | Dudosa | ? | 2/2 | | creature |
+"""
+    raised = False
+    try:
+        mdparse.parse_md_deck(txt)
+    except ValueError:
+        raised = True
+    assert raised                 # falla ruidosamente ante ?, no adivina
+
+
+def test_preset_decks_registered():
+    import decks
+    # los presets del usuario se registran y arman a 99
+    for slug in ("tricky-terrain", "lorehold-spirit"):
+        assert slug in decks.DECKS
+        deck, cmd = decks.build(slug)
+        assert len(deck) == 99 and cmd is not None
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

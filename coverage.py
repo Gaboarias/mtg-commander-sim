@@ -16,13 +16,15 @@ def _is_basic(card):
 
 
 def _implemented(card):
+    """Efecto REAL implementado = tiene algun gancho de comportamiento.
+    Tener solo un `tag` (que la IA lee) NO cuenta como efecto."""
     if card.on_etb or card.on_death or card.on_cast_resolve:
         return True
     if card.triggers or card.activated:
         return True
-    if card.produces is not None and not _is_basic(card):
+    if card.static_mod or card.counter_modifier or card.loyalty_abilities:
         return True
-    if card.tags & AI_TAGS:
+    if card.produces is not None and not _is_basic(card):
         return True
     return False
 

@@ -8,7 +8,9 @@ MTGJSON:
   indice  https://mtgjson.com/api/v5/DeckList.json
   mazo    https://mtgjson.com/api/v5/decks/<fileName>.json
 """
+import gzip
 import json
+import urllib.error
 import urllib.request
 
 _INDEX = "https://mtgjson.com/api/v5/DeckList.json"
@@ -18,11 +20,23 @@ _UA = "mtg-commander-sim/1.0 (https://github.com/Gaboarias/mtg-commander-sim)"
 _cache_index = None
 
 
-def _get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": _UA,
-                                               "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=25) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+def _get(url, retries=2):
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": _UA, "Accept": "application/json",
+                              "Accept-Encoding": "gzip, identity"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read()
+                if resp.headers.get("Content-Encoding") == "gzip":
+                    raw = gzip.decompress(raw)
+                return json.loads(raw.decode("utf-8"))
+        except urllib.error.HTTPError as exc:  # noqa: PERF203
+            raise RuntimeError(f"HTTP {exc.code} en {url}") from exc
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+    raise RuntimeError(f"fallo de red en {url}: {last}")
 
 
 def list_precons():

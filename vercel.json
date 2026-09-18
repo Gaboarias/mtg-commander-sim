@@ -3,7 +3,7 @@
   "framework": "nextjs",
   "functions": {
     "api/*.py": {
-      "includeFiles": "*.py",
+      "includeFiles": "{*.py,presets/*.md}",
       "memory": 1024,
       "maxDuration": 60
     }

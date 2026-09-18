@@ -67,6 +67,35 @@ Vercel (abajo) o usá `vercel dev` con el CLI de Vercel instalado.
 `vercel.json` fija `includeFiles: "*.py"` para que las funciones serverless
 empaqueten el motor (los `.py` de la raíz) junto al handler.
 
+## Tus decks (presets) y el formato de tablas
+
+Los mazos propios viven como `.md` en `presets/` (formato en
+`presets/FORMATO.md`): una tabla por sección con
+`| n | Carta | Coste | P/T | Keywords | Tags |` y una tabla de tierras con
+`| n | Carta | Produce | Tapeada |`. `mdparse.py` los lee **offline** (sin
+Scryfall) y `decks.py` los registra como mazos jugables — aparecen solos en el
+simulador y como oponentes.
+
+Reglas del importador (`mdparse.py`):
+- Solo lee las tablas **antes del primer `---`** (lo de después son notas).
+- `## Comandante` define el comandante; `?` en una columna = **error ruidoso**
+  (no adivina); `n = ?` en básicas = rellena hasta 99.
+- Si la carta está implementada (registro `cardsdb`) y el tipo coincide, usa la
+  versión con **efecto**; si no, la arma **vainilla con los datos exactos** de la
+  tabla. `X` en el coste se trata como 0.
+- Nota: si la lista es parcial, el relleno de básicas infla las tierras (mana
+  flood). Para winrates fieles, exportá la lista completa.
+
+Para agregar un deck: dejá su `.md` en `presets/` con ese formato.
+
+### Cargar un precon desde Moxfield
+
+El desplegable de precons (MTGJSON) es una comodidad y puede fallar según la
+red del deploy. Alternativa siempre confiable: abrí el precon en Moxfield →
+**Export** → copiá el texto (`1 Nombre de Carta`) → pegalo en `/deck` →
+**Resolver**. Scryfall lo construye en Vercel. (La API de Moxfield no es pública
+y bloquea automatización, por eso no se consume directo.)
+
 ## Importar y editar decks (precon / propios)
 
 La app permite **cargar una lista de mazo**, editar cartas y **probar

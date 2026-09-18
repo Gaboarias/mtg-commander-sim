@@ -26,7 +26,6 @@ type Resolved = {
 };
 type SimResult = { deck: string; wins: number; pct: number };
 
-const OPPONENTS = ["kang", "tricky", "lorehold"];
 const SAMPLE = `Commander
 1 Kang, el Embaucador
 
@@ -67,6 +66,20 @@ export default function DeckPage() {
   const [precons, setPrecons] = useState<Precon[]>([]);
   const [preconMsg, setPreconMsg] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [opponents, setOpponents] = useState<string[]>(["kang", "tricky", "lorehold"]);
+
+  useEffect(() => {
+    fetch("/api/catalog")
+      .then((r) => r.json())
+      .then((d) => {
+        const keys = (d.decks || []).map((x: { key: string }) => x.key);
+        if (keys.length) {
+          setOpponents(keys);
+          setOpponent(keys.includes("tricky") ? "tricky" : keys[0]);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetch("/api/precons")
@@ -325,7 +338,7 @@ export default function DeckPage() {
                   border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px",
                 }}
               >
-                {OPPONENTS.map((o) => (
+                {opponents.map((o) => (
                   <option key={o} value={o}>{o}</option>
                 ))}
               </select>
