@@ -337,3 +337,8 @@ textarea:focus { border-color: var(--accent-2) !important; }
 .legend-grid .k-pt { color: var(--text); }
 .legend-grid .k-dmg { color: #ff9a86; }
 .legend-grid .k-cnt { color: var(--accent); }
+
+.dead-badge { margin-left: 6px; font-size: .62rem; background: #7a2b2b; color: #fff; border-radius: 999px; padding: 1px 7px; vertical-align: middle; font-weight: 700; }
+.seat-meta .cmdr-dmg, .seat-meta .poison { font-variant-numeric: tabular-nums; }
+.seat-meta .cmdr-dmg.fatal, .seat-meta .poison.fatal { color: #e0684f; font-weight: 700; }
+.legend-grid .k-cmdr { color: var(--text); }

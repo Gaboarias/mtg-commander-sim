@@ -489,6 +489,8 @@ class Game:
             "library": len(p.library),
             "commander": [c.name for c in p.command],
             "cmdr_tax": p.cmdr_tax,
+            "cmdr_damage": dict(p.cmdr_damage),   # daño de comandante RECIBIDO
+            "poison": p.poison,
             "graveyard": [c.name for c in p.graveyard],
             "battlefield": [self._perm_state(pm) for pm in p.battlefield],
         }

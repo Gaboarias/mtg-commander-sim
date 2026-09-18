@@ -18,7 +18,8 @@ type Perm = {
 };
 type PlayerState = {
   name: string; life: number; lost: boolean; hand: number; library: number;
-  commander: string[]; cmdr_tax: number; graveyard: string[]; battlefield: Perm[];
+  commander: string[]; cmdr_tax: number; cmdr_damage?: Record<string, number>;
+  poison?: number; graveyard: string[]; battlefield: Perm[];
 };
 type Step = { turn: number; active: number; label: string; stack: string[]; players: PlayerState[] };
 type Replay = { players: string[]; winner: string; turns: number; steps: Step[]; images: Record<string, string> };
@@ -57,10 +58,14 @@ function CardMini({ perm, art, reduce }: { perm: Perm; art?: string; reduce: boo
 function Board({ p, active, art, reduce }: { p: PlayerState; active: boolean; art: Record<string, string>; reduce: boolean }) {
   const lands = p.battlefield.filter((x) => x.is_land);
   const nonlands = p.battlefield.filter((x) => !x.is_land);
+  const maxCmdr = Math.max(0, ...Object.values(p.cmdr_damage || {}));
   return (
     <motion.div layout={!reduce} className={`seat ${active ? "active" : ""} ${p.lost ? "dead" : ""}`}>
       <div className="seat-head">
-        <span className="seat-name">{active ? "▶ " : ""}{p.name}</span>
+        <span className="seat-name">
+          {p.lost ? "☠ " : active ? "▶ " : ""}{p.name}
+          {p.lost && <span className="dead-badge">eliminado</span>}
+        </span>
         <motion.span
           key={p.life}
           initial={reduce ? false : { scale: 1.35 }}
@@ -76,6 +81,16 @@ function Board({ p, active, art, reduce }: { p: PlayerState; active: boolean; ar
         <span>📚 {p.library}</span>
         <span>⚰ {p.graveyard.length}</span>
         <span title="comandante">👑 {p.commander.join(", ") || "—"}</span>
+        {maxCmdr > 0 && (
+          <span className={`cmdr-dmg ${maxCmdr >= 21 ? "fatal" : ""}`} title="daño de comandante recibido (21 elimina)">
+            🗡 {maxCmdr}/21
+          </span>
+        )}
+        {(p.poison || 0) > 0 && (
+          <span className={`poison ${(p.poison || 0) >= 10 ? "fatal" : ""}`} title="veneno (10 elimina)">
+            ☣ {p.poison}/10
+          </span>
+        )}
       </div>
       {nonlands.length > 0 && (
         <motion.div layout={!reduce} className="row-cards">
@@ -243,6 +258,9 @@ export default function Watch() {
               <span>📚 cartas en biblioteca</span>
               <span>⚰ cartas en cementerio</span>
               <span>👑 comandante</span>
+              <span><b className="k-cmdr">🗡 N/21</b> = daño de comandante (21 elimina)</span>
+              <span><b className="k-cmdr">☣ N/10</b> = veneno (10 elimina)</span>
+              <span>☠ eliminado (por vida, daño de comandante o veneno)</span>
               <span>🂠 carta rotada = tapeada (girada)</span>
               <span><b className="k-atk">borde rojo</b> = atacando</span>
               <span><b className="k-pt">2/3</b> = fuerza/resistencia</span>
