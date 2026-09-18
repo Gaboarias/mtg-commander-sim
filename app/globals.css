@@ -382,3 +382,6 @@ textarea:focus { border-color: var(--accent-2) !important; }
 .atk-chip.blocked { border-color: rgba(216,178,58,.6); }
 .def-blockers { margin: 10px 0; }
 .blk-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; max-width: 460px; margin: 6px 0; }
+
+.target-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.target-list .ghost { text-align: left; }

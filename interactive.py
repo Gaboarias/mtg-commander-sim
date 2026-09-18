@@ -145,7 +145,7 @@ class InteractiveGame:
             return [max(legal, key=lambda x: (x.power, x.toughness))] if legal else []
         return self._auto_targets(card)
 
-    def respond(self, i):
+    def respond(self, i, target_uid=None):
         """Lanza un instantáneo / carta con destello desde la mano en defensa."""
         if self.mode != "defense":
             return self.state()
@@ -154,7 +154,9 @@ class InteractiveGame:
             c = me.hand[i]
             fast = ("instant" in c.types) or ("flash" in c.keywords)
             if fast and c.cost is not None and me.can_pay(c.cost):
-                self.g.cast(me, c, targets=self._auto_targets_def(c))
+                tgt = (self._chosen_target(c, target_uid)
+                       if target_uid is not None else self._auto_targets_def(c))
+                self.g.cast(me, c, targets=tgt)
                 self.g.sba()
                 if len(self.g.alive()) <= 1:
                     self.mode = None
@@ -204,7 +206,7 @@ class InteractiveGame:
         return None
 
     def _auto_targets(self, card):
-        """Objetivo automático para el MVP (después lo elige el humano)."""
+        """Objetivo automático (fallback si el humano no elige)."""
         p = self.human()
         ts = getattr(card, "target_spec", None)
         if ts == "opp_creature":
@@ -212,6 +214,37 @@ class InteractiveGame:
             return [max(pool, key=lambda x: (x.power, x.toughness))] if pool else []
         if ts == "stack_spell":
             return [self.g.stack[-1]] if self.g.stack else []
+        return None
+
+    def _find_any_perm(self, uid):
+        for pl in self.players:
+            for pm in pl.battlefield:
+                if pm.uid == uid:
+                    return pm
+        return None
+
+    def _targets_for(self, card):
+        """Objetivos legales que el humano puede elegir para `card`."""
+        ts = getattr(card, "target_spec", None)
+        if ts == "opp_creature":
+            return [{"uid": pm.uid, "name": pm.name, "power": pm.power,
+                     "toughness": pm.toughness, "from": pm.controller.name}
+                    for pm in self.g.legal_creature_targets(self.human())]
+        if ts == "stack_spell":
+            return [{"idx": k, "name": getattr(o.source, "name", "?")}
+                    for k, o in enumerate(self.g.stack)]
+        return []
+
+    def _chosen_target(self, card, target_uid):
+        """Traduce la elección del humano a la lista `targets` del motor."""
+        ts = getattr(card, "target_spec", None)
+        if target_uid is None:
+            return self._auto_targets(card)
+        if ts == "opp_creature":
+            pm = self._find_any_perm(target_uid)
+            return [pm] if (pm is not None and self.g.can_target(self.human(), pm)) else []
+        if ts == "stack_spell":
+            return [self.g.stack[target_uid]] if 0 <= target_uid < len(self.g.stack) else []
         return None
 
     # -- acciones del humano --------------------------------------------- #
@@ -224,7 +257,7 @@ class InteractiveGame:
             self.g.sba()
         return self.state()
 
-    def cast(self, i=None, zone="hand"):
+    def cast(self, i=None, zone="hand", target_uid=None):
         if not self._my_turn():
             return self.state()
         p = self.human()
@@ -242,7 +275,7 @@ class InteractiveGame:
                 card = p.hand[i]
         if card is not None:
             self.g.cast(p, card, from_command=bool(from_command),
-                        targets=self._auto_targets(card))
+                        targets=self._chosen_target(card, target_uid))
             self.g.sba()
         return self.state()
 
@@ -300,7 +333,9 @@ class InteractiveGame:
                         lands.append({"i": i, "name": c.name})
                 elif c.cost is not None and p.can_pay(c.cost):
                     casts.append({"i": i, "name": c.name, "zone": "hand",
-                                  "cost": _cost_str(c)})
+                                  "cost": _cost_str(c),
+                                  "target_spec": getattr(c, "target_spec", None),
+                                  "targets": self._targets_for(c)})
             for c in p.command:
                 pay = None if c.cost is None else Cost(c.cost.generic + p.cmdr_tax,
                                                        c.cost.pips)
@@ -342,6 +377,8 @@ class InteractiveGame:
         } for pm in me.creatures() if not pm.tapped]
         responses = [{
             "i": i, "name": c.name, "cost": _cost_str(c),
+            "target_spec": getattr(c, "target_spec", None),
+            "targets": self._targets_for(c),
         } for i, c in enumerate(me.hand)
             if (("instant" in c.types) or ("flash" in c.keywords))
             and c.cost is not None and me.can_pay(c.cost)]

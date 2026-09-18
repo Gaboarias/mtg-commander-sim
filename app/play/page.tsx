@@ -14,9 +14,11 @@ type HandCard = {
   keywords: string[]; abilities: string[];
 };
 type Activatable = { uid: number; name: string; loyalty: number; abilities: { i: number; cost: number }[] };
+type TargetOpt = { uid?: number; idx?: number; name: string; power?: number; toughness?: number; from?: string };
+type CastOpt = { i?: number; name: string; zone: string; cost: string; tax?: number; target_spec?: string | null; targets?: TargetOpt[] };
 type Legal = {
   lands: { i: number; name: string }[];
-  casts: { i?: number; name: string; zone: string; cost: string; tax?: number }[];
+  casts: CastOpt[];
   attackers: { uid: number; name: string; power: number; toughness: number }[];
   activatables: Activatable[];
   can_attack: boolean; can_end: boolean;
@@ -31,7 +33,7 @@ type Combat = {
   from: string; incoming_damage: number;
   attackers: CombatAtk[];
   blockers: { uid: number; name: string; power: number; toughness: number }[];
-  responses: { i: number; name: string; cost: string }[];
+  responses: { i: number; name: string; cost: string; target_spec?: string | null; targets?: TargetOpt[] }[];
 };
 type GameState = {
   turn: number; active: number; human_index: number; phase: string; attacked: boolean;
@@ -58,11 +60,11 @@ def new_game(specs_json, seed, level):
 def act(kind, arg_json):
     g = _IG['g']; a = json.loads(arg_json or '{}')
     if kind == 'land': g.play_land(a['i'])
-    elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'))
+    elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'), a.get('target_uid'))
     elif kind == 'attack': g.attack(a.get('uids', []))
     elif kind == 'end': g.end_turn()
     elif kind == 'activate': g.activate(a.get('uid'), a.get('index', 0))
-    elif kind == 'respond': g.respond(a.get('i'))
+    elif kind == 'respond': g.respond(a.get('i'), a.get('target_uid'))
     elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
     return json.dumps(g.state())
 `;
@@ -86,6 +88,7 @@ export default function Play() {
   const [inspect, setInspect] = useState<Inspect | null>(null);
   const infoReq = useRef<Set<string>>(new Set());  // nombres ya pedidos
   const [assign, setAssign] = useState<Record<number, number>>({});  // bloqueador -> atacante
+  const [targeting, setTargeting] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; targets: TargetOpt[] } | null>(null);
 
   useEffect(() => {
     fetch("/api/catalog").then((r) => r.json()).then((d) => {
@@ -186,6 +189,28 @@ export default function Play() {
       name: x.name, cost: x.cost, types: x.types, power: x.power,
       toughness: x.toughness, keywords: x.keywords, abilities: x.abilities,
     });
+  }
+
+  // lanzar: si la carta necesita objetivo y hay opciones, abrir el selector
+  function castCard(c: CastOpt) {
+    if (c.target_spec && c.targets && c.targets.length > 0) {
+      setTargeting({ kind: "cast", i: c.i, zone: c.zone, name: c.name, targets: c.targets });
+    } else {
+      doAct("cast", { i: c.i, zone: c.zone });
+    }
+  }
+  function respondCard(r: { i: number; name: string; target_spec?: string | null; targets?: TargetOpt[] }) {
+    if (r.target_spec && r.targets && r.targets.length > 0) {
+      setTargeting({ kind: "respond", i: r.i, name: r.name, targets: r.targets });
+    } else {
+      doAct("respond", { i: r.i });
+    }
+  }
+  function chooseTarget(t: TargetOpt) {
+    if (!targeting) return;
+    const tu = t.uid ?? t.idx;
+    doAct(targeting.kind, { i: targeting.i, zone: targeting.zone, target_uid: tu });
+    setTargeting(null);
   }
 
   const meIdx = state?.human_index ?? 0;
@@ -300,8 +325,8 @@ export default function Play() {
                 <div className="act-block">
                   <span className="act-label">Responder (instantáneo):</span>
                   {state.combat.responses.map((r) => (
-                    <button key={r.i} className="ghost" onClick={() => doAct("respond", { i: r.i })}>
-                      ⚡ {r.name} <span className="muted">{r.cost}</span>
+                    <button key={r.i} className="ghost" onClick={() => respondCard(r)}>
+                      ⚡ {r.name}{r.target_spec ? " 🎯" : ""} <span className="muted">{r.cost}</span>
                     </button>
                   ))}
                 </div>
@@ -349,7 +374,7 @@ export default function Play() {
 
           {myTurn && (() => {
             const landIdx = new Set((legal?.lands || []).map((l) => l.i));
-            const castIdx = new Set((legal?.casts || []).filter((c) => c.zone === "hand").map((c) => c.i));
+            const castMap = new Map((legal?.casts || []).filter((c) => c.zone === "hand").map((c) => [c.i, c]));
             const commandCasts = (legal?.casts || []).filter((c) => c.zone === "command");
             const hand = state.players[meIdx]?.hand_cards || [];
             return (
@@ -358,9 +383,9 @@ export default function Play() {
                 <div className="hand">
                   {hand.map((hc) => {
                     const canLand = landIdx.has(hc.i);
-                    const canCast = castIdx.has(hc.i);
+                    const castOpt = castMap.get(hc.i);
                     return (
-                      <div key={hc.i} className={`handcard ${canLand || canCast ? "playable" : ""}`}>
+                      <div key={hc.i} className={`handcard ${canLand || castOpt ? "playable" : ""}`}>
                         <div className="hc-art" onClick={() => inspectCard(hc)} title="Ver carta"
                           style={art[hc.name] ? { backgroundImage: `url(${art[hc.name]})` } : undefined}>
                           {!art[hc.name] && <span>{hc.name}</span>}
@@ -369,7 +394,9 @@ export default function Play() {
                         <div className="hc-foot">
                           <span className="hc-name" onClick={() => inspectCard(hc)}>{hc.name}</span>
                           {canLand && <button className="go tiny" onClick={() => doAct("land", { i: hc.i })}>Jugar</button>}
-                          {canCast && <button className="go tiny" onClick={() => doAct("cast", { i: hc.i, zone: "hand" })}>Lanzar</button>}
+                          {castOpt && <button className="go tiny" onClick={() => castCard(castOpt)}>
+                            Lanzar{castOpt.target_spec ? " 🎯" : ""}
+                          </button>}
                         </div>
                       </div>
                     );
@@ -381,8 +408,8 @@ export default function Play() {
                   <div className="act-block">
                     <span className="act-label">Zona de mando:</span>
                     {commandCasts.map((c, k) => (
-                      <button key={k} className="ghost" onClick={() => doAct("cast", { zone: "command" })}>
-                        👑 Lanzar {c.name} <span className="muted">{c.cost}{c.tax ? ` +${c.tax}` : ""}</span>
+                      <button key={k} className="ghost" onClick={() => castCard(c)}>
+                        👑 Lanzar {c.name}{c.target_spec ? " 🎯" : ""} <span className="muted">{c.cost}{c.tax ? ` +${c.tax}` : ""}</span>
                       </button>
                     ))}
                   </div>
@@ -423,6 +450,24 @@ export default function Play() {
             <div className="log">{(state.log || []).join("\n")}</div>
           </div>
         </>
+      )}
+
+      {targeting && (
+        <div className="inspect-back" onClick={() => setTargeting(null)}>
+          <div className="inspect" onClick={(e) => e.stopPropagation()}>
+            <button className="inspect-x" onClick={() => setTargeting(null)}>✕</button>
+            <h3>🎯 Objetivo de {targeting.name}</h3>
+            <p className="muted" style={{ marginTop: 2 }}>Elegí a qué apunta:</p>
+            <div className="target-list">
+              {targeting.targets.map((t, k) => (
+                <button key={k} className="ghost" onClick={() => chooseTarget(t)}>
+                  {t.name}{t.power != null ? ` ${t.power}/${t.toughness}` : ""}
+                  {t.from ? <span className="muted"> · {t.from}</span> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {inspect && (
