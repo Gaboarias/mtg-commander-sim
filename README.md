@@ -67,6 +67,15 @@ Vercel (abajo) o usá `vercel dev` con el CLI de Vercel instalado.
 `vercel.json` fija `includeFiles: "*.py"` para que las funciones serverless
 empaqueten el motor (los `.py` de la raíz) junto al handler.
 
+## Perfil de usuario (local, sin login)
+
+En `/deck` cada usuario tiene un **perfil local** (guardado en el navegador,
+sin cuentas ni backend): un nombre y una lista de **decks guardados**
+(`app/localDecks.ts`, `localStorage`). Puede guardar el deck que armó/editó,
+recargarlo cuando quiera y simularlo. Los decks viven solo en ese dispositivo
+(no sincronizan entre navegadores/personas); es la opción simple pedida. Para
+cuentas reales cross-device haría falta auth + DB (p. ej. Supabase), no incluido.
+
 ## Tus decks (presets) y el formato de tablas
 
 Los mazos propios viven como `.md` en `presets/` (formato en

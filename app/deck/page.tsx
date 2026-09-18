@@ -2,6 +2,15 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import {
+  getProfile,
+  setProfile as saveProfile,
+  listDecks,
+  saveDeck,
+  removeDeck,
+  storageAvailable,
+  type SavedDeck,
+} from "../localDecks";
 
 type Precon = { code: string; fileName: string; name: string; releaseDate: string };
 
@@ -67,6 +76,51 @@ export default function DeckPage() {
   const [preconMsg, setPreconMsg] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [opponents, setOpponents] = useState<string[]>(["kang", "tricky", "lorehold"]);
+  const [profile, setProfileState] = useState("");
+  const [savedDecks, setSavedDecks] = useState<SavedDeck[]>([]);
+  const [deckName, setDeckName] = useState("");
+  const [noStorage, setNoStorage] = useState(false);
+
+  useEffect(() => {
+    if (!storageAvailable()) {
+      setNoStorage(true);
+      return;
+    }
+    setProfileState(getProfile());
+    setSavedDecks(listDecks());
+  }, []);
+
+  function currentDeckText(): string {
+    if (!resolved) return text;
+    const lines = ["Commander"];
+    if (resolved.commander_name) lines.push(`1 ${resolved.commander_name}`);
+    lines.push("", "Deck");
+    for (const c of resolved.cards) if (c.qty > 0) lines.push(`${c.qty} ${c.name}`);
+    return lines.join("\n");
+  }
+
+  function onSaveDeck() {
+    const name =
+      deckName.trim() || resolved?.commander_name || "Mi deck";
+    setSavedDecks(saveDeck(name, currentDeckText()));
+    setDeckName("");
+  }
+
+  function onLoadSaved(d: SavedDeck) {
+    setText(d.text);
+    setResolved(null);
+    setSim(null);
+    setLastPct(null);
+  }
+
+  function onDeleteSaved(id: string) {
+    setSavedDecks(removeDeck(id));
+  }
+
+  function onProfileChange(v: string) {
+    setProfileState(v);
+    saveProfile(v);
+  }
 
   useEffect(() => {
     fetch("/api/catalog")
@@ -206,6 +260,84 @@ export default function DeckPage() {
           victoria. <Link href="/">← volver al simulador</Link>
         </p>
       </header>
+
+      <div className="card">
+        <h2>👤 Mi perfil (en este navegador)</h2>
+        {noStorage ? (
+          <p className="muted">
+            Tu navegador bloquea el almacenamiento local (modo privado?), así que
+            no puedo guardar decks acá. Igual podés pegar y simular.
+          </p>
+        ) : (
+          <>
+            <div className="row">
+              <label>
+                Nombre&nbsp;
+                <input
+                  value={profile}
+                  onChange={(e) => onProfileChange(e.target.value)}
+                  placeholder="tu nombre"
+                  style={{
+                    background: "var(--panel-2)", color: "var(--text)",
+                    border: "1px solid var(--border)", borderRadius: 8,
+                    padding: "8px 10px", width: 180,
+                  }}
+                />
+              </label>
+              <span className="muted">
+                Tus decks se guardan solo en este dispositivo.
+              </span>
+            </div>
+
+            <div className="row" style={{ marginTop: 12 }}>
+              <input
+                value={deckName}
+                onChange={(e) => setDeckName(e.target.value)}
+                placeholder={resolved?.commander_name || "nombre del deck"}
+                style={{
+                  background: "var(--panel-2)", color: "var(--text)",
+                  border: "1px solid var(--border)", borderRadius: 8,
+                  padding: "8px 10px", width: 220,
+                }}
+              />
+              <button className="go" onClick={onSaveDeck}>
+                Guardar deck actual
+              </button>
+              <span className="muted">
+                guarda lo que tengas en el cuadro / la tabla editada
+              </span>
+            </div>
+
+            {savedDecks.length > 0 && (
+              <table style={{ marginTop: 14 }}>
+                <thead>
+                  <tr><th>Deck guardado</th><th>Actualizado</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {savedDecks.map((d) => (
+                    <tr key={d.id}>
+                      <td>{d.name}</td>
+                      <td className="muted">
+                        {new Date(d.updatedAt).toLocaleDateString()}
+                      </td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <button className="ghost" style={{ padding: "4px 10px", marginRight: 6 }}
+                          onClick={() => onLoadSaved(d)}>
+                          Cargar
+                        </button>
+                        <button className="ghost" style={{ padding: "4px 8px" }}
+                          onClick={() => onDeleteSaved(d.id)}>
+                          ✕
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
+        )}
+      </div>
 
       <div className="card">
         <h2>0 · Cargar un precon oficial (opcional)</h2>
