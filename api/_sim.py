@@ -176,24 +176,33 @@ def _build_deck_defs(specs):
     return deck_defs, max_turns
 
 
-def match(specs, n=120):
+_LEVELS = ("novato", "intermedio", "avanzado")
+
+
+def _lvl(level):
+    return level if level in _LEVELS else "intermedio"
+
+
+def match(specs, n=120, level="intermedio"):
     """Simula una mesa de 2 a 6 decks. Devuelve winrate por deck."""
     n = max(1, min(int(n), 500))
+    level = _lvl(level)
     deck_defs, max_turns = _build_deck_defs(specs)
-    wins = run.many_defs(deck_defs, n=n, max_turns=max_turns)
+    wins = run.many_defs(deck_defs, n=n, max_turns=max_turns, level=level)
     results = [{"deck": label, "wins": wins.get(label, 0),
                 "pct": round(100 * wins.get(label, 0) / n, 1)}
                for label, _d, _c in deck_defs]
     results.sort(key=lambda r: -r["pct"])
     results.append({"deck": "sin definir", "wins": wins.get("EMPATE", 0),
                     "pct": round(100 * wins.get("EMPATE", 0) / n, 1)})
-    return {"n": n, "players": len(deck_defs), "results": results}
+    return {"n": n, "players": len(deck_defs), "level": level, "results": results}
 
 
-def match_log(specs):
+def match_log(specs, level="intermedio"):
     """Juega UNA partida de la mesa y devuelve el relato turno a turno."""
     deck_defs, max_turns = _build_deck_defs(specs)
-    g = run.play_defs(deck_defs, seed=0, log=False, max_turns=max_turns)
+    g = run.play_defs(deck_defs, seed=0, log=False, max_turns=max_turns,
+                      level=_lvl(level))
     winner = g.play()
     return {"players": len(deck_defs), "winner": winner, "turns": g.turn,
             "log": g.log_lines}

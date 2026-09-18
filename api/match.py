@@ -29,9 +29,10 @@ class handler(BaseHTTPRequestHandler):
             raw = self.rfile.read(length) if length else b"{}"
             req = json.loads(raw.decode("utf-8") or "{}")
             specs = req.get("decks", [])
+            level = req.get("level", "intermedio")
             if req.get("log"):
-                self._send(200, match_log(specs))
+                self._send(200, match_log(specs, level))
             else:
-                self._send(200, match(specs, req.get("n", 120)))
+                self._send(200, match(specs, req.get("n", 120), level))
         except Exception as exc:  # noqa: BLE001
             self._send(400, {"error": str(exc)})

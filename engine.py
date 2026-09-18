@@ -407,7 +407,7 @@ class Game:
         mulls = 0
         while (mulls < max_mulls and p.policy is not None
                and hasattr(p.policy, "should_mulligan")
-               and p.policy.should_mulligan(p.hand)):
+               and p.policy.should_mulligan(p.hand, p)):
             p.library.extend(p.hand)
             p.hand = []
             self.rng.shuffle(p.library)

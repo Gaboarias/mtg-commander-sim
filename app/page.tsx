@@ -29,6 +29,7 @@ export default function Home() {
   const [pickables, setPickables] = useState<Pickable[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [n, setN] = useState(120);
+  const [level, setLevel] = useState("intermedio");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ players: number; n: number; results: Res[] } | null>(null);
   const [log, setLog] = useState<{ winner: string; turns: number; log: string[] } | null>(null);
@@ -94,7 +95,7 @@ export default function Home() {
       const r = await fetch("/api/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(logMode ? { decks, log: true } : { decks, n }),
+        body: JSON.stringify(logMode ? { decks, level, log: true } : { decks, n, level }),
       });
       const raw = await r.text();
       let d;
@@ -166,6 +167,21 @@ export default function Home() {
         <h2>2 · Jugar</h2>
         <div className="row">
           <label>
+            Nivel de la IA&nbsp;
+            <select
+              value={level}
+              onChange={(e) => setLevel(e.target.value)}
+              style={{
+                background: "var(--panel-2)", color: "var(--text)",
+                border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px",
+              }}
+            >
+              <option value="novato">Novato</option>
+              <option value="intermedio">Intermedio</option>
+              <option value="avanzado">Avanzado</option>
+            </select>
+          </label>
+          <label>
             Partidas a simular&nbsp;
             <input
               type="number"
@@ -193,7 +209,7 @@ export default function Home() {
           transition={reduce ? { duration: 0 } : { duration: 0.3 }}
         >
           <h2>
-            Resultados · {result.players} decks · {result.n} partidas
+            Resultados · {result.players} decks · {result.n} partidas · IA {level}
           </h2>
           {result.results.map((r, i) => (
             <div className="bar-row" key={r.deck}>
