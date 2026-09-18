@@ -47,6 +47,78 @@ Deck
 1 Command Tower
 30 Swamp`;
 
+function MissingFixer({ name, onPick }: { name: string; onPick: (n: string) => void }) {
+  const [q, setQ] = useState(name);
+  const [sugg, setSugg] = useState<string[]>([]);
+  const [setCode, setSetCode] = useState("");
+  const [num, setNum] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function search() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/cardsearch?q=${encodeURIComponent(q)}`);
+      const d = await r.json();
+      if (d.error) setMsg(d.error);
+      else setSugg(d.suggestions || []);
+      if ((d.suggestions || []).length === 0) setMsg("Sin sugerencias.");
+    } catch {
+      setMsg("Error al buscar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function byNumber() {
+    if (!setCode || !num) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await fetch(
+        `/api/cardsearch?set=${encodeURIComponent(setCode)}&number=${encodeURIComponent(num)}`
+      );
+      const d = await r.json();
+      if (d.error || !d.name) setMsg(d.error || "no encontrada");
+      else onPick(d.name);
+    } catch {
+      setMsg("Error al buscar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const inp = {
+    background: "var(--panel-2)", color: "var(--text)",
+    border: "1px solid var(--border)", borderRadius: 8, padding: "6px 9px",
+  } as const;
+
+  return (
+    <div style={{ borderTop: "1px solid var(--border)", padding: "12px 0" }}>
+      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        <span className="err" style={{ minWidth: 140 }}>⚠ {name}</span>
+        <input value={q} onChange={(e) => setQ(e.target.value)} style={{ ...inp, width: 200 }} />
+        <button className="ghost" onClick={search} disabled={busy}>Buscar</button>
+        <span className="muted">o por set/#:</span>
+        <input placeholder="set" value={setCode} onChange={(e) => setSetCode(e.target.value)} style={{ ...inp, width: 64 }} />
+        <input placeholder="n°" value={num} onChange={(e) => setNum(e.target.value)} style={{ ...inp, width: 64 }} />
+        <button className="ghost" onClick={byNumber} disabled={busy}>Traer</button>
+      </div>
+      {sugg.length > 0 && (
+        <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+          {sugg.map((s) => (
+            <button key={s} className="ghost" style={{ padding: "4px 10px" }} onClick={() => onPick(s)}>
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+      {msg && <p className="muted" style={{ marginTop: 6 }}>{msg}</p>}
+    </div>
+  );
+}
+
 function Tag({ r }: { r: Row }) {
   const map: Record<string, [string, string]> = {
     registry: ["#2f6b3a", "con efecto"],
@@ -167,14 +239,22 @@ export default function DeckPage() {
     }
   }
 
-  async function resolve() {
+  function replaceCard(oldName: string, newName: string) {
+    if (!newName || oldName === newName) return;
+    const next = text.split(oldName).join(newName);
+    setText(next);
+    resolve(next);
+  }
+
+  async function resolve(listText?: string) {
+    const list = listText ?? text;
     setBusy(true);
     setError(null);
     try {
       const r = await fetch("/api/deck", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "resolve", list: text }),
+        body: JSON.stringify({ action: "resolve", list }),
       });
       const raw = await r.text();
       let d: { error?: string; [k: string]: unknown };
@@ -338,7 +418,7 @@ export default function DeckPage() {
           }}
         />
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="go" onClick={resolve} disabled={busy}>
+          <button className="go" onClick={() => resolve()} disabled={busy}>
             {busy ? "Revisando…" : "Revisar cartas"}
           </button>
           <span className="muted">
@@ -404,6 +484,20 @@ export default function DeckPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {resolved && resolved.missing.length > 0 && (
+        <div className="card">
+          <h2>⚠ Cartas no encontradas ({resolved.missing.length})</h2>
+          <p className="muted">
+            Corregí el nombre (buscá y elegí la sugerencia correcta) o traela por
+            código de set + número de colección. Al elegir, se reemplaza en la lista
+            y se vuelve a revisar.
+          </p>
+          {resolved.missing.map((m) => (
+            <MissingFixer key={m} name={m} onPick={(n) => replaceCard(m, n)} />
+          ))}
         </div>
       )}
 

@@ -8,8 +8,10 @@ Scryfall: mana_cost, type_line, power, toughness, keywords, color_identity).
 import json
 import re
 import urllib.request
+from urllib.parse import quote
 
 _ENDPOINT = "https://api.scryfall.com/cards/collection"
+_BASE = "https://api.scryfall.com"
 _UA = "mtg-commander-sim/1.0 (https://github.com/Gaboarias/mtg-commander-sim)"
 
 
@@ -60,3 +62,46 @@ def make_fetch(names):
     def fetch(name):
         return cache.get(_norm(name))
     return fetch
+
+
+# --------------------------------------------------------------------------- #
+# Correccion de cartas no encontradas (#5)
+# --------------------------------------------------------------------------- #
+
+def _get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": _UA,
+                                               "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def autocomplete(q):
+    """Sugerencias de nombre (hasta 20) para un texto parcial/con typo."""
+    if not q or not q.strip():
+        return []
+    try:
+        data = _get(_BASE + "/cards/autocomplete?q=" + quote(q.strip()))
+        return (data.get("data") or [])[:20]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def named_fuzzy(q):
+    """Mejor coincidencia difusa (una carta). Devuelve el dict o None."""
+    if not q or not q.strip():
+        return None
+    try:
+        return _get(_BASE + "/cards/named?fuzzy=" + quote(q.strip()))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def by_collector(setcode, number):
+    """Carta exacta por set + numero de coleccion. Devuelve el dict o None."""
+    if not setcode or not number:
+        return None
+    try:
+        return _get(f"{_BASE}/cards/{quote(str(setcode).strip().lower())}/"
+                    f"{quote(str(number).strip())}")
+    except Exception:  # noqa: BLE001
+        return None
