@@ -75,6 +75,7 @@ export default function DeckPage() {
   const [precons, setPrecons] = useState<Precon[]>([]);
   const [preconMsg, setPreconMsg] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [samples, setSamples] = useState<{ slug: string; name: string }[]>([]);
   const [opponents, setOpponents] = useState<string[]>(["kang", "tricky", "lorehold"]);
   const [profile, setProfileState] = useState("");
   const [savedDecks, setSavedDecks] = useState<SavedDeck[]>([]);
@@ -150,6 +151,38 @@ export default function DeckPage() {
       })
       .catch((e) => setPreconMsg(e instanceof Error ? e.message : String(e)));
   }, []);
+
+  useEffect(() => {
+    fetch("/api/samples")
+      .then((r) => r.json())
+      .then((d) => setSamples(d.samples || []))
+      .catch(() => {});
+  }, []);
+
+  async function loadSample(slug: string) {
+    if (!slug) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch(`/api/samples?load=${encodeURIComponent(slug)}`);
+      const raw = await r.text();
+      let d;
+      try {
+        d = JSON.parse(raw);
+      } catch {
+        throw new Error(`HTTP ${r.status}: ${raw.slice(0, 200)}`);
+      }
+      if (d.error) throw new Error(d.error);
+      setText(d.text);
+      setResolved(null);
+      setSim(null);
+      setLastPct(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function loadPrecon(fileName: string) {
     if (!fileName) return;
@@ -379,6 +412,25 @@ export default function DeckPage() {
             {preconMsg || "Cargando catálogo desde MTGJSON…"} (requiere internet;
             funciona en el deploy de Vercel)
           </p>
+        )}
+        {samples.length > 0 && (
+          <div className="row" style={{ marginTop: 12 }}>
+            <span className="muted">Decks de ejemplo:</span>
+            <select
+              onChange={(e) => loadSample(e.target.value)}
+              defaultValue=""
+              style={{
+                background: "var(--panel-2)", color: "var(--text)",
+                border: "1px solid var(--border)", borderRadius: 8,
+                padding: "8px 10px", maxWidth: 320,
+              }}
+            >
+              <option value="">— cargar un deck de ejemplo —</option>
+              {samples.map((s) => (
+                <option key={s.slug} value={s.slug}>{s.name}</option>
+              ))}
+            </select>
+          </div>
         )}
       </div>
 
