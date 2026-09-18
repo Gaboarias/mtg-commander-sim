@@ -170,13 +170,22 @@ def build_card_from_data(data: dict) -> Card:
     # capa de efectos genericos funcione tambien con cartas de Scryfall
     card.tags = _derive_tags(data.get("oracle_text", ""), card.types)
 
-    # tierras: producen mana segun su identidad de color (para que la base
-    # de mana importada funcione). Sin identidad -> incoloro.
+    # Produccion de mana: usar `produced_mana` de Scryfall (el mana REAL que
+    # produce la carta), no la identidad de color — las tierras no basicas son
+    # objetos incoloros y su identidad suele venir vacia. Aplica a tierras y a
+    # artefactos de mana (signets, rocas); las tierras basicas caen al fallback.
+    produced = [_COLOR_MAP[c] for c in (data.get("produced_mana") or [])
+                if c in _COLOR_MAP]
     if "land" in types:
-        colors = [c for c in (W, U, B, R, G) if c in color_id] or [C]
+        colors = produced or [c for c in (W, U, B, R, G) if c in color_id] or [C]
         opts = {c: 1 for c in colors}
         card.produces = (lambda perm, pl, _o=opts: dict(_o))
         card.enters_tapped = bool(data.get("enters_tapped"))
+    elif produced and "artifact" in types:
+        # roca de mana importada (Fellwar Stone, signets, etc.)
+        opts = {c: 1 for c in produced}
+        card.produces = (lambda perm, pl, _o=opts: dict(_o))
+        card.tags = card.tags | {"ramp"}
     return cards.attach_generic_effects(card)
 
 

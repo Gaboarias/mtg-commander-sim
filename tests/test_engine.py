@@ -355,6 +355,21 @@ def test_trace_records_serializable_steps():
     json.dumps(g.trace)   # debe ser serializable
 
 
+def test_land_uses_produced_mana():
+    # Las tierras no básicas / artifact lands tienen color_identity vacía pero
+    # producen color real (produced_mana). Debe usarse ese, no la identidad.
+    import cardsdb
+    tree = cardsdb.build_card_from_data({
+        "name": "Tree of Tales", "type_line": "Artifact Land",
+        "color_identity": [], "produced_mana": ["G"]})
+    assert tree.produces(None, None) == {"G": 1}      # antes daba {C}
+    rock = cardsdb.build_card_from_data({
+        "name": "Simic Signet", "type_line": "Artifact", "mana_cost": "{2}",
+        "color_identity": [], "produced_mana": ["G", "U"]})
+    assert rock.produces is not None
+    assert rock.produces(None, None) == {"G": 1, "U": 1}
+
+
 def test_build_split_card_uses_front_face():
     # split/DFC: type_line y mana_cost vienen combinados con '//'; hay que usar
     # la cara frontal (castable), sin perder el nombre completo.
