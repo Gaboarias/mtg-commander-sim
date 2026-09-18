@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+
+type Precon = { code: string; fileName: string; name: string; releaseDate: string };
 
 type Row = {
   name: string;
@@ -62,6 +64,41 @@ export default function DeckPage() {
   const [sim, setSim] = useState<{ n: number; opponent: string; results: SimResult[] } | null>(null);
   const [lastPct, setLastPct] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [precons, setPrecons] = useState<Precon[]>([]);
+  const [preconMsg, setPreconMsg] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+
+  useEffect(() => {
+    fetch("/api/precons")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.error) setPreconMsg(d.error);
+        else setPrecons(d.precons || []);
+      })
+      .catch(() => setPreconMsg("No se pudo cargar el catálogo de precons."));
+  }, []);
+
+  async function loadPrecon(fileName: string) {
+    if (!fileName) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch(`/api/precons?load=${encodeURIComponent(fileName)}`);
+      const d = await r.json();
+      if (d.error) {
+        setError(d.error);
+      } else {
+        setText(d.text);
+        setResolved(null);
+        setSim(null);
+        setLastPct(null);
+      }
+    } catch {
+      setError("No se pudo cargar el precon.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function resolve() {
     setBusy(true);
@@ -146,6 +183,49 @@ export default function DeckPage() {
           victoria. <Link href="/">← volver al simulador</Link>
         </p>
       </header>
+
+      <div className="card">
+        <h2>0 · Cargar un precon oficial (opcional)</h2>
+        {precons.length > 0 ? (
+          <div className="row">
+            <input
+              placeholder="filtrar por nombre…"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              style={{
+                background: "var(--panel-2)", color: "var(--text)",
+                border: "1px solid var(--border)", borderRadius: 8,
+                padding: "8px 10px", width: 200,
+              }}
+            />
+            <select
+              onChange={(e) => loadPrecon(e.target.value)}
+              defaultValue=""
+              style={{
+                background: "var(--panel-2)", color: "var(--text)",
+                border: "1px solid var(--border)", borderRadius: 8,
+                padding: "8px 10px", maxWidth: 380,
+              }}
+            >
+              <option value="">— elegí un precon ({precons.length}) —</option>
+              {precons
+                .filter((p) => p.name.toLowerCase().includes(filter.toLowerCase()))
+                .slice(0, 300)
+                .map((p) => (
+                  <option key={p.fileName} value={p.fileName}>
+                    {p.name} · {p.releaseDate}
+                  </option>
+                ))}
+            </select>
+            <span className="muted">se carga en el cuadro de abajo</span>
+          </div>
+        ) : (
+          <p className="muted">
+            {preconMsg || "Cargando catálogo desde MTGJSON…"} (requiere internet;
+            funciona en el deploy de Vercel)
+          </p>
+        )}
+      </div>
 
       <div className="card">
         <h2>1 · Pegá la lista</h2>
