@@ -83,12 +83,18 @@ export default function DeckPage() {
 
   useEffect(() => {
     fetch("/api/precons")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.error) setPreconMsg(d.error);
-        else setPrecons(d.precons || []);
+      .then(async (r) => {
+        const raw = await r.text();
+        let d;
+        try {
+          d = JSON.parse(raw);
+        } catch {
+          throw new Error(`HTTP ${r.status}: ${raw.slice(0, 200)}`);
+        }
+        if (d.error) throw new Error(d.error);
+        setPrecons(d.precons || []);
       })
-      .catch(() => setPreconMsg("No se pudo cargar el catálogo de precons."));
+      .catch((e) => setPreconMsg(e instanceof Error ? e.message : String(e)));
   }, []);
 
   async function loadPrecon(fileName: string) {
@@ -97,20 +103,40 @@ export default function DeckPage() {
     setError(null);
     try {
       const r = await fetch(`/api/precons?load=${encodeURIComponent(fileName)}`);
-      const d = await r.json();
-      if (d.error) {
-        setError(d.error);
-      } else {
-        setText(d.text);
-        setResolved(null);
-        setSim(null);
-        setLastPct(null);
+      const raw = await r.text();
+      let d;
+      try {
+        d = JSON.parse(raw);
+      } catch {
+        throw new Error(`HTTP ${r.status}: ${raw.slice(0, 200)}`);
       }
-    } catch {
-      setError("No se pudo cargar el precon.");
+      if (d.error) throw new Error(d.error);
+      setText(d.text);
+      setResolved(null);
+      setSim(null);
+      setLastPct(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function postJson(action: string, extra: object) {
+    const r = await fetch("/api/deck", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...extra }),
+    });
+    const raw = await r.text();
+    let d: { error?: string; [k: string]: unknown };
+    try {
+      d = JSON.parse(raw);
+    } catch {
+      throw new Error(`HTTP ${r.status} — respuesta no-JSON: ${raw.slice(0, 240)}`);
+    }
+    if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
   }
 
   async function resolve() {
@@ -118,16 +144,10 @@ export default function DeckPage() {
     setError(null);
     setSim(null);
     try {
-      const r = await fetch("/api/deck", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "resolve", list: text }),
-      });
-      const d = await r.json();
-      if (d.error) setError(d.error);
-      else setResolved(d);
-    } catch {
-      setError("Error al resolver la lista.");
+      const d = await postJson("resolve", { list: text });
+      setResolved(d as unknown as Resolved);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -154,29 +174,19 @@ export default function DeckPage() {
     setError(null);
     try {
       const cards = resolved.cards.filter((c) => c.qty > 0).map((c) => ({ name: c.name, qty: c.qty }));
-      const r = await fetch("/api/deck", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "simulate",
-          cards,
-          commander: resolved.commander_name,
-          opponent,
-          n,
-        }),
+      const d = await postJson("simulate", {
+        cards,
+        commander: resolved.commander_name,
+        opponent,
+        n,
       });
-      const d = await r.json();
-      if (d.error) {
-        setError(d.error);
-      } else {
-        if (sim) {
-          const prev = sim.results.find((x) => x.deck === "importado");
-          setLastPct(prev ? prev.pct : null);
-        }
-        setSim(d);
+      if (sim) {
+        const prev = sim.results.find((x) => x.deck === "importado");
+        setLastPct(prev ? prev.pct : null);
       }
-    } catch {
-      setError("Error al simular.");
+      setSim(d as unknown as { n: number; opponent: string; results: SimResult[] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
