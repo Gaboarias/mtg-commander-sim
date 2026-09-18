@@ -20,6 +20,7 @@ type Row = {
   source: "registry" | "basic" | "scryfall" | "missing";
   implemented: boolean;
   generic?: boolean;
+  can_command?: boolean;
   type: string;
   cost: string;
   pt: string;
@@ -28,6 +29,7 @@ type Row = {
 type Resolved = {
   commander: Row | null;
   commander_name: string | null;
+  commander_suggested?: string | null;
   cards: Row[];
   total: number;
   implemented: number;
@@ -239,6 +241,30 @@ export default function DeckPage() {
     }
   }
 
+  const [cmdChoice, setCmdChoice] = useState("");
+  useEffect(() => {
+    if (resolved && !resolved.commander_name) {
+      setCmdChoice(resolved.commander_suggested || resolved.cards[0]?.name || "");
+    }
+  }, [resolved]);
+
+  function setCommander(name: string) {
+    if (!resolved || !name) return;
+    const lines = ["Commander", `1 ${name}`, "", "Deck"];
+    let removed = false;
+    for (const c of resolved.cards) {
+      let qty = c.qty;
+      if (!removed && c.name === name) {
+        qty -= 1;
+        removed = true;
+      }
+      if (qty > 0) lines.push(`${qty} ${c.name}`);
+    }
+    const next = lines.join("\n");
+    setText(next);
+    resolve(next);
+  }
+
   function replaceCard(oldName: string, newName: string) {
     if (!newName || oldName === newName) return;
     const next = text.split(oldName).join(newName);
@@ -428,6 +454,38 @@ export default function DeckPage() {
         {error && <p className="err">⚠ {error}</p>}
       </div>
 
+      {resolved && !resolved.commander_name && (
+        <div className="card">
+          <h2>⚑ Elegí tu comandante</h2>
+          <p className="muted">
+            No detecté el comandante en la lista (Moxfield no siempre lo marca).
+            Elegí cuál es y lo pongo en la zona de mando:
+          </p>
+          <div className="row">
+            <select
+              value={cmdChoice}
+              onChange={(e) => setCmdChoice(e.target.value)}
+              style={{
+                background: "var(--panel-2)", color: "var(--text)",
+                border: "1px solid var(--border)", borderRadius: 8,
+                padding: "8px 10px", maxWidth: 340,
+              }}
+            >
+              {[...resolved.cards]
+                .sort((a, b) => (b.can_command ? 1 : 0) - (a.can_command ? 1 : 0))
+                .map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name}{c.can_command ? " · legendaria" : ""}
+                  </option>
+                ))}
+            </select>
+            <button className="go" onClick={() => setCommander(cmdChoice)}>
+              Usar como comandante
+            </button>
+          </div>
+        </div>
+      )}
+
       {resolved && (
         <div className="card">
           <h2>2 · Revisá y editá</h2>
@@ -437,7 +495,7 @@ export default function DeckPage() {
               <Tag r={resolved.commander} />
             </p>
           ) : (
-            <p className="err">Falta el comandante (marcalo con una sección «Commander»).</p>
+            <p className="err">Elegí tu comandante en el recuadro de arriba ⚑</p>
           )}
           <p className="muted">
             {totalQty} cartas · {resolved.implemented} con efecto programado ·{" "}

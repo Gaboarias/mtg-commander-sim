@@ -94,8 +94,10 @@ def _card_row(name, qty, card):
     types = " ".join(sorted(card.types))
     pt = f"{card.power}/{card.toughness}" if "creature" in card.types else ""
     colors = sorted(card.identity())
+    can_command = ("legendary" in card.supertypes and
+                   bool({"creature", "planeswalker"} & card.types))
     return {"name": card.name, "qty": qty, "source": source,
-            "implemented": exact, "generic": generic,
+            "implemented": exact, "generic": generic, "can_command": can_command,
             "type": types, "cost": cost, "pt": pt, "colors": colors}
 
 
@@ -119,17 +121,23 @@ def resolve_decklist(text):
     missing = []
     implemented = 0
     total = 0
+    suggested = None
     for qty, name in parsed["cards"]:
         card = cardsdb.resolve(name, fetch)
-        rows.append(_card_row(name, qty, card))
+        row = _card_row(name, qty, card)
+        rows.append(row)
         total += qty
         if card is None:
             missing.append(name)
         elif cardsdb.is_implemented(name):
             implemented += qty
+        # auto-sugerir comandante: primera legendaria criatura/planeswalker
+        if suggested is None and row.get("can_command"):
+            suggested = row["name"]
     return {
         "commander": commander,
         "commander_name": cmd_name,
+        "commander_suggested": suggested,
         "cards": rows,
         "total": total,
         "implemented": implemented,
