@@ -41,17 +41,62 @@ type Resolved = {
   bracket_declared?: number | null;
 };
 
-const SAMPLE = `Commander
-1 Kang, el Embaucador
+// Plantillas de arranque (nunca la de Kang). Se elige una al azar al abrir el
+// editor. Son solo un punto de partida para editar; se resuelven con Scryfall.
+const TEMPLATES = [
+  `Commander
+1 Quintorius Kand
 
 Deck
-1 Gray Merchant of Asphodel
-1 Go for the Throat
-1 Night's Whisper
+1 Lightning Helix
+1 Anguished Unmaking
+1 Faithless Looting
 1 Sol Ring
 1 Arcane Signet
 1 Command Tower
-30 Swamp`;
+15 Mountain
+15 Plains`,
+  `Commander
+1 Ezuri, Claw of Progress
+
+Deck
+1 Cultivate
+1 Rapid Hybridization
+1 Counterspell
+1 Sol Ring
+1 Arcane Signet
+1 Command Tower
+15 Forest
+15 Island`,
+  `Commander
+1 Kaalia of the Vast
+
+Deck
+1 Swords to Plowshares
+1 Terminate
+1 Read the Bones
+1 Sol Ring
+1 Arcane Signet
+1 Command Tower
+10 Mountain
+10 Plains
+10 Swamp`,
+  `Commander
+1 Atraxa, Praetors' Voice
+
+Deck
+1 Cultivate
+1 Anguished Unmaking
+1 Doubling Season
+1 Sol Ring
+1 Arcane Signet
+1 Command Tower
+10 Forest
+10 Plains
+10 Swamp`,
+];
+
+const SAMPLE = TEMPLATES[0];
 
 function MissingFixer({ name, onPick }: { name: string; onPick: (n: string) => void }) {
   const [q, setQ] = useState(name);
@@ -154,6 +199,11 @@ export default function DeckPage() {
   const [deckName, setDeckName] = useState("");
   const [noStorage, setNoStorage] = useState(false);
   const [justSaved, setJustSaved] = useState<string | null>(null);
+
+  // plantilla al azar al abrir (solo en cliente, para no romper la hidratación)
+  useEffect(() => {
+    setText(TEMPLATES[Math.floor(Math.random() * TEMPLATES.length)]);
+  }, []);
 
   useEffect(() => {
     if (!storageAvailable()) {

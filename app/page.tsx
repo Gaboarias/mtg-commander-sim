@@ -7,7 +7,7 @@ import { listDecks, type SavedDeck } from "./localDecks";
 
 const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6"];
 
-type RegDeck = { key: string; commander: string; identity: string[] };
+type RegDeck = { key: string; commander: string; identity: string[]; theme?: string };
 type MatchSpec =
   | { kind: "registered"; key: string; name: string }
   | { kind: "custom"; name: string; text: string };
@@ -57,7 +57,7 @@ export default function Home() {
         const examples: Pickable[] = (d.decks || []).map((x: RegDeck) => ({
           id: "reg:" + x.key,
           label: x.commander,
-          tag: "ejemplo",
+          tag: x.theme || "ejemplo",
           colors: x.identity || [],
           spec: { kind: "registered", key: x.key, name: x.commander },
           mine: false,
@@ -197,7 +197,7 @@ export default function Home() {
         <h2><span className="step">2</span> Jugar</h2>
         <div className="row">
           <label>
-            Nivel de la IA&nbsp;
+            Dificultad&nbsp;
             <select
               value={level}
               onChange={(e) => setLevel(e.target.value)}
@@ -239,7 +239,7 @@ export default function Home() {
           transition={reduce ? { duration: 0 } : { duration: 0.3 }}
         >
           <h2>
-            Resultados · {result.players} decks · {result.n} partidas · IA {level}
+            Resultados · {result.players} decks · {result.n} partidas · dificultad {level}
           </h2>
           {result.results.map((r, i) => (
             <div className="bar-row" key={r.deck}>

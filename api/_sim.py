@@ -29,11 +29,16 @@ MAX_CARDS = 200       # tope de entradas de decklist
 
 
 def deck_list():
+    """Solo los ejemplos publicos (temas de precon). Los presets personales del
+    usuario no se listan aca: un usuario nuevo arranca sin decks propios."""
+    keys = getattr(decks, "EXAMPLES", None) or list(decks.DECKS)
+    theme = getattr(decks, "EXAMPLE_THEME", {})
     out = []
-    for name in decks.DECKS:
+    for name in keys:
         _, commander = decks.build(name)
         out.append({"key": name, "commander": commander.name,
-                    "identity": sorted(commander.identity())})
+                    "identity": sorted(commander.identity()),
+                    "theme": theme.get(name, "ejemplo")})
     return out
 
 

@@ -178,7 +178,24 @@ DECKS = {
     "kang": kang,
 }
 
-# Decks de ejemplo (arriba) + presets del usuario en presets/*.md
+# Ejemplos publicos que ve un usuario nuevo (temas de precon). Reutilizan los
+# mazos de arriba, ya probados, presentados bajo tres temas reconocibles.
+#   Strixhaven -> Lorehold (colegio Lorehold, R/W)
+#   Marvel     -> Kang (Kang el Conquistador, mono-negro)
+#   Vieja guardia -> Simic clasico de contadores (G/U)
+DECKS["strixhaven"] = lorehold
+DECKS["marvel"] = kang
+DECKS["vieja-guardia"] = tricky
+
+EXAMPLES = ["strixhaven", "marvel", "vieja-guardia"]
+EXAMPLE_THEME = {
+    "strixhaven": "Strixhaven",
+    "marvel": "Marvel",
+    "vieja-guardia": "Vieja guardia",
+}
+
+# Origen de cada deck (los presets del usuario se marcan aparte y NO se
+# muestran como ejemplos publicos en la portada).
 DECK_SOURCE = {k: "ejemplo" for k in DECKS}
 
 
