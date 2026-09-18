@@ -151,7 +151,9 @@ class Policy:
             pool = game.legal_creature_targets(me)
             if not pool:
                 return []
-            return [max(pool, key=lambda p: (p.power, p.toughness))]
+            n = max(1, getattr(card, "target_count", 1))
+            pool.sort(key=lambda p: (p.power, p.toughness), reverse=True)
+            return pool[:n]           # las N más grandes
         return []
 
     def _activate_planeswalkers(self, game, me):

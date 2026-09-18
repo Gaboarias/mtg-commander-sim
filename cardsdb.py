@@ -139,6 +139,24 @@ def _prefer_front_face(data: dict) -> dict:
     return merged
 
 
+_NUMWORD = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4,
+            "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+
+
+def _targeted_spell(oracle: str):
+    """Detecta remoción/bounce DIRIGIDA en el texto: (modo, cantidad de objetivos).
+    Aproximado, pero permite ELEGIR el/los objetivo(s) en vez de auto."""
+    t = re.sub(r"\s+", " ", (oracle or "").lower())
+    for verb, mode in (("destroy", "destroy"), ("exile", "exile")):
+        m = re.search(verb + r" (up to )?(\w+ )?target (?:creature|permanent)", t)
+        if m:
+            return mode, _NUMWORD.get((m.group(2) or "").strip(), 1)
+    m = re.search(r"return (up to )?(\w+ )?target (?:creature|permanent)[^.]{0,40}hand", t)
+    if m:
+        return "bounce", _NUMWORD.get((m.group(2) or "").strip(), 1)
+    return None
+
+
 def build_card_from_data(data: dict) -> Card:
     """Construye una Card desde un dict tipo Scryfall (name, mana_cost,
     type_line, power, toughness, keywords, color_identity)."""
@@ -186,6 +204,17 @@ def build_card_from_data(data: dict) -> Card:
         opts = {c: 1 for c in produced}
         card.produces = (lambda perm, pl, _o=opts: dict(_o))
         card.tags = card.tags | {"ramp"}
+
+    # remoción / bounce DIRIGIDA (instantáneo o conjuro): dejar elegir objetivos.
+    # Se cablea ANTES de la capa genérica para que no la reemplace.
+    if {"instant", "sorcery"} & types:
+        spec = _targeted_spell(data.get("oracle_text", ""))
+        if spec is not None:
+            mode, count = spec
+            card.on_cast_resolve = cards.remove_targets(mode)
+            card.target_spec = "opp_creature"
+            card.target_count = max(1, count)
+            card.tags = card.tags | {"removal"}
     return cards.attach_generic_effects(card)
 
 

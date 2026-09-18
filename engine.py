@@ -123,6 +123,7 @@ class Card:
     static_mod: Optional[Callable] = None          # (fuente, objetivo) -> (dP, dT) anthem/capas
     loyalty_abilities: tuple = ()                  # planeswalker: ((coste_lealtad, efecto), ...)
     target_spec: Optional[str] = None              # "opp_creature" | "stack_spell" | None
+    target_count: int = 1                          # cuántos objetivos (remoción múltiple)
 
     def identity(self) -> set:
         """Identidad de color: explicita si existe, si no se deduce del coste."""

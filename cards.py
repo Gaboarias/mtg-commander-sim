@@ -135,6 +135,37 @@ def wrath(game, ctrl, targets):
                 game.destroy(perm, "wrath")
 
 
+def remove_targets(mode="destroy"):
+    """Aplica destruir / exiliar / devolver-a-la-mano a CADA objetivo elegido
+    (lista `targets` de Permanent). Usado por remociones importadas dirigidas."""
+    def eff(game, ctrl, targets):
+        for perm in list(targets or []):
+            if perm not in perm.controller.battlefield:
+                continue
+            if not game.can_target(ctrl, perm):
+                continue
+            owner = perm.controller
+            if mode == "destroy":
+                game.destroy(perm, "removal")
+            elif mode == "exile":
+                owner.battlefield.remove(perm)
+                if perm.is_token:
+                    continue
+                if perm.card is owner.commander_card:
+                    owner.command.append(perm.card)      # el comandante puede ir a la zona de mando
+                else:
+                    owner.exile.append(perm.card)
+            elif mode == "bounce":
+                owner.battlefield.remove(perm)
+                if perm.is_token:
+                    continue
+                if perm.card is owner.commander_card:
+                    owner.command.append(perm.card)
+                else:
+                    owner.hand.append(perm.card)
+    return eff
+
+
 def draw_n(n):
     def _eff(game, ctrl, targets):
         ctrl.draw(n, game)

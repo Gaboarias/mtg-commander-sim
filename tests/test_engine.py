@@ -355,6 +355,30 @@ def test_trace_records_serializable_steps():
     json.dumps(g.trace)   # debe ser serializable
 
 
+def test_imported_removal_is_targeted():
+    # Remoción importada "destroy up to N target creatures": debe quedar dirigida
+    # (target_spec + target_count) y destruir exactamente los objetivos elegidos.
+    import cardsdb
+    import cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Big Wipe", "type_line": "Sorcery", "mana_cost": "{4}{W}{W}",
+        "color_identity": ["W"], "oracle_text": "Destroy up to six target creatures."})
+    assert c.target_spec == "opp_creature" and c.target_count == 6
+    assert c.on_cast_resolve is not None
+    me = Player("yo", [cards.land("Plains", ["W"], basic=True) for _ in range(99)],
+                cards.creature("C", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Swamp", ["B"], basic=True) for _ in range(99)],
+                cards.creature("C2", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    t1 = g.move_to_battlefield(cards.creature("A", "1B", 2, 2), op)
+    t2 = g.move_to_battlefield(cards.creature("B", "1B", 4, 4), op)
+    keep = g.move_to_battlefield(cards.creature("Keep", "1B", 1, 1), op)
+    c.on_cast_resolve(g, me, [t1, t2])                 # destruyo solo 2 elegidas
+    names = [p.name for p in op.creatures()]
+    assert "A" not in names and "B" not in names and "Keep" in names
+
+
 def test_land_uses_produced_mana():
     # Las tierras no básicas / artifact lands tienen color_identity vacía pero
     # producen color real (produced_mana). Debe usarse ese, no la identidad.

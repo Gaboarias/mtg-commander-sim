@@ -385,3 +385,5 @@ textarea:focus { border-color: var(--accent-2) !important; }
 
 .target-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .target-list .ghost { text-align: left; }
+
+.target-list .ghost.on { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(216,178,58,.5); color: var(--text); }

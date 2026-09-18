@@ -18,7 +18,7 @@ type HandCard = {
 };
 type Activatable = { uid: number; name: string; loyalty: number; abilities: { i: number; cost: number }[] };
 type TargetOpt = { uid?: number; idx?: number; name: string; power?: number; toughness?: number; from?: string };
-type CastOpt = { i?: number; name: string; zone: string; cost: string; tax?: number; target_spec?: string | null; targets?: TargetOpt[] };
+type CastOpt = { i?: number; name: string; zone: string; cost: string; tax?: number; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] };
 type Legal = {
   lands: { i: number; name: string }[];
   casts: CastOpt[];
@@ -36,7 +36,7 @@ type Combat = {
   from: string; incoming_damage: number;
   attackers: CombatAtk[];
   blockers: { uid: number; name: string; power: number; toughness: number }[];
-  responses: { i: number; name: string; cost: string; target_spec?: string | null; targets?: TargetOpt[] }[];
+  responses: { i: number; name: string; cost: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] }[];
 };
 type Mulligan = { mulls: number; to_bottom: number; lands: number };
 type GameState = {
@@ -67,11 +67,11 @@ def new_game(specs_json, datamap_json, seed, level):
 def act(kind, arg_json):
     g = _IG['g']; a = json.loads(arg_json or '{}')
     if kind == 'land': g.play_land(a['i'])
-    elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'), a.get('target_uid'))
+    elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'), a.get('target_uids'))
     elif kind == 'attack': g.attack(a.get('uids', []))
     elif kind == 'end': g.end_turn()
     elif kind == 'activate': g.activate(a.get('uid'), a.get('index', 0))
-    elif kind == 'respond': g.respond(a.get('i'), a.get('target_uid'))
+    elif kind == 'respond': g.respond(a.get('i'), a.get('target_uids'))
     elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
     elif kind == 'mulligan': g.mulligan()
     elif kind == 'keep': g.keep(a.get('bottom', []))
@@ -99,7 +99,8 @@ export default function Play() {
   const [inspect, setInspect] = useState<Inspect | null>(null);
   const infoReq = useRef<Set<string>>(new Set());  // nombres ya pedidos
   const [assign, setAssign] = useState<Record<number, number>>({});  // bloqueador -> atacante
-  const [targeting, setTargeting] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; targets: TargetOpt[] } | null>(null);
+  const [targeting, setTargeting] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; targets: TargetOpt[]; count: number } | null>(null);
+  const [tsel, setTsel] = useState<number[]>([]);  // objetivos elegidos (multi)
   const [bottom, setBottom] = useState<number[]>([]);  // cartas al fondo tras mulligan
 
   const examplesRef = useRef<Pickable[]>([]);
@@ -295,23 +296,35 @@ export default function Play() {
   // lanzar: si la carta necesita objetivo y hay opciones, abrir el selector
   function castCard(c: CastOpt) {
     if (c.target_spec && c.targets && c.targets.length > 0) {
-      setTargeting({ kind: "cast", i: c.i, zone: c.zone, name: c.name, targets: c.targets });
+      setTsel([]);
+      setTargeting({ kind: "cast", i: c.i, zone: c.zone, name: c.name, targets: c.targets, count: c.target_count || 1 });
     } else {
       doAct("cast", { i: c.i, zone: c.zone });
     }
   }
-  function respondCard(r: { i: number; name: string; target_spec?: string | null; targets?: TargetOpt[] }) {
+  function respondCard(r: { i: number; name: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] }) {
     if (r.target_spec && r.targets && r.targets.length > 0) {
-      setTargeting({ kind: "respond", i: r.i, name: r.name, targets: r.targets });
+      setTsel([]);
+      setTargeting({ kind: "respond", i: r.i, name: r.name, targets: r.targets, count: r.target_count || 1 });
     } else {
       doAct("respond", { i: r.i });
     }
   }
-  function chooseTarget(t: TargetOpt) {
+  function dispatchTargets(uids: number[]) {
     if (!targeting) return;
-    const tu = t.uid ?? t.idx;
-    doAct(targeting.kind, { i: targeting.i, zone: targeting.zone, target_uid: tu });
+    doAct(targeting.kind, { i: targeting.i, zone: targeting.zone, target_uids: uids });
     setTargeting(null);
+    setTsel([]);
+  }
+  function chooseTarget(t: TargetOpt) {
+    const tu = (t.uid ?? t.idx) as number;
+    if (!targeting) return;
+    if (targeting.count <= 1) {
+      dispatchTargets([tu]);            // objetivo único: dispara directo
+    } else {
+      setTsel((s) => s.includes(tu) ? s.filter((x) => x !== tu)
+        : s.length < targeting.count ? [...s, tu] : s);   // multi: hasta N
+    }
   }
 
   const meIdx = state?.human_index ?? 0;
@@ -619,16 +632,32 @@ export default function Play() {
         <div className="inspect-back" onClick={() => setTargeting(null)}>
           <div className="inspect" onClick={(e) => e.stopPropagation()}>
             <button className="inspect-x" onClick={() => setTargeting(null)}>✕</button>
-            <h3>🎯 Objetivo de {targeting.name}</h3>
-            <p className="muted" style={{ marginTop: 2 }}>Elegí a qué apunta:</p>
+            <h3>🎯 Objetivo{targeting.count > 1 ? "s" : ""} de {targeting.name}</h3>
+            <p className="muted" style={{ marginTop: 2 }}>
+              {targeting.count > 1
+                ? `Elegí hasta ${targeting.count} objetivos (${tsel.length}/${targeting.count}):`
+                : "Elegí a qué apunta:"}
+            </p>
             <div className="target-list">
-              {targeting.targets.map((t, k) => (
-                <button key={k} className="ghost" onClick={() => chooseTarget(t)}>
-                  {t.name}{t.power != null ? ` ${t.power}/${t.toughness}` : ""}
-                  {t.from ? <span className="muted"> · {t.from}</span> : null}
-                </button>
-              ))}
+              {targeting.targets.map((t, k) => {
+                const tu = (t.uid ?? t.idx) as number;
+                const sel = tsel.includes(tu);
+                return (
+                  <button key={k} className={`ghost ${sel ? "on" : ""}`} onClick={() => chooseTarget(t)}>
+                    {targeting.count > 1 ? (sel ? "☑ " : "☐ ") : ""}
+                    {t.name}{t.power != null ? ` ${t.power}/${t.toughness}` : ""}
+                    {t.from ? <span className="muted"> · {t.from}</span> : null}
+                  </button>
+                );
+              })}
             </div>
+            {targeting.count > 1 && (
+              <div className="act-block" style={{ marginTop: 10 }}>
+                <button className="go" onClick={() => dispatchTargets(tsel)} disabled={tsel.length === 0}>
+                  Confirmar ({tsel.length}/{targeting.count})
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
