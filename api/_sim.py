@@ -306,6 +306,22 @@ def _card_images(names):
     return out
 
 
+def resolve_decks(texts):
+    """Resuelve (via Scryfall) todas las cartas de una lista de decklists y
+    devuelve {nombre_norm: datos_scryfall}. Lo usa /play para armar decks
+    importados dentro de Pyodide sin necesitar red en el navegador."""
+    names = set()
+    for t in texts or []:
+        parsed = decklist.parse_decklist(t or "")
+        if parsed.get("commander"):
+            names.add(parsed["commander"])
+        for _q, n in parsed["cards"]:
+            names.add(n)
+    if _scry is None or not names:
+        return {}
+    return _scry.resolve_many([n for n in names if n])
+
+
 def card_info(names):
     """{nombre: {art, type, oracle}} desde Scryfall para las cartas reales.
     Las cartas caseras no aparecen (el front usa lo que trae el motor)."""

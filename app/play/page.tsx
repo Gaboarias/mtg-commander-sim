@@ -3,11 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Seat, type PlayerState, type Perm } from "../board";
+import { listDecks, type SavedDeck } from "../localDecks";
 
 const PY_VERSION = "0.26.4";
 const PY_BASE = `https://cdn.jsdelivr.net/pyodide/v${PY_VERSION}/full/`;
 
 type RegDeck = { key: string; commander: string; identity: string[]; theme?: string };
+type Spec = { kind: "registered"; key: string; name: string } | { kind: "custom"; name: string; text: string };
+type Pickable = { id: string; label: string; tag: string; spec: Spec; mine: boolean };
 type HandCard = {
   i: number; name: string; is_land: boolean; is_creature: boolean; cost: string;
   power: number | null; toughness: number | null; types: string[];
@@ -54,8 +57,10 @@ import sys, json
 sys.path.insert(0, '.')
 import interactive
 _IG = {'g': None}
-def new_game(specs_json, seed, level):
-    _IG['g'] = interactive.from_registered(json.loads(specs_json), 0, int(seed), level)
+def new_game(specs_json, datamap_json, seed, level):
+    specs = json.loads(specs_json)
+    datamap = json.loads(datamap_json or '{}')
+    _IG['g'] = interactive.from_specs(specs, datamap, 0, int(seed), level)
     return json.dumps(_IG['g'].state())
 def act(kind, arg_json):
     g = _IG['g']; a = json.loads(arg_json or '{}')
@@ -71,9 +76,9 @@ def act(kind, arg_json):
 
 export default function Play() {
   const reduce = useReducedMotion() ?? false;
-  const [decks, setDecks] = useState<RegDeck[]>([]);
-  const [mine, setMine] = useState<string>("");
-  const [foes, setFoes] = useState<string[]>([]);
+  const [pickables, setPickables] = useState<Pickable[]>([]);
+  const [mineId, setMineId] = useState<string>("");
+  const [foeIds, setFoeIds] = useState<string[]>([]);
   const [level, setLevel] = useState("intermedio");
   const [seed, setSeed] = useState(1);
 
@@ -91,12 +96,24 @@ export default function Play() {
   const [targeting, setTargeting] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; targets: TargetOpt[] } | null>(null);
 
   useEffect(() => {
+    const mine: Pickable[] = listDecks().map((d: SavedDeck) => ({
+      id: "mine:" + d.id, label: d.name, tag: "mi deck",
+      spec: { kind: "custom", name: d.name, text: d.text }, mine: true,
+    }));
     fetch("/api/catalog").then((r) => r.json()).then((d) => {
-      const list: RegDeck[] = d.decks || [];
-      setDecks(list);
-      if (list[0]) setMine(list[0].key);
-      if (list[1]) setFoes([list[1].key]);
-    }).catch(() => {});
+      const examples: Pickable[] = (d.decks || []).map((x: RegDeck) => ({
+        id: "reg:" + x.key, label: x.commander, tag: x.theme || "ejemplo",
+        spec: { kind: "registered", key: x.key, name: x.commander }, mine: false,
+      }));
+      const all = [...mine, ...examples];
+      setPickables(all);
+      setMineId((mine[0] || all[0])?.id || "");
+      const foe = all.find((p) => p.id !== (mine[0] || all[0])?.id);
+      if (foe) setFoeIds([foe.id]);
+    }).catch(() => {
+      setPickables(mine);
+      if (mine[0]) setMineId(mine[0].id);
+    });
   }, []);
 
   async function ensurePyodide() {
@@ -116,17 +133,49 @@ export default function Play() {
     return py;
   }
 
-  function toggleFoe(key: string) {
-    setFoes((f) => (f.includes(key) ? f.filter((x) => x !== key) : f.length < 3 ? [...f, key] : f));
+  function toggleFoe(id: string) {
+    setFoeIds((f) => (f.includes(id) ? f.filter((x) => x !== id) : f.length < 3 ? [...f, id] : f));
   }
 
   async function start() {
     setError(null); setBooting(true);
     try {
+      const mineP = pickables.find((p) => p.id === mineId);
+      const foesP = foeIds.map((id) => pickables.find((p) => p.id === id)).filter(Boolean) as Pickable[];
+      if (!mineP || foesP.length < 1) { setError("Elegí tu deck y al menos un rival."); setBooting(false); return; }
+      const specs: Spec[] = [mineP.spec, ...foesP.map((p) => p.spec)];
+
+      // decks importados: resolver sus cartas (Scryfall) en el servidor
+      let datamap: Record<string, any> = {};
+      const customTexts = specs.filter((s) => s.kind === "custom").map((s) => (s as { text: string }).text);
+      if (customTexts.length > 0) {
+        setStatus("Resolviendo tus cartas con Scryfall…");
+        const r = await fetch("/api/resolvedeck", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ texts: customTexts }),
+        });
+        const d = await r.json();
+        if (d.error) throw new Error(d.error);
+        datamap = d.cards || {};
+        // sembrar arte + texto para no volver a pedirlos
+        const seedArt: Record<string, string> = {};
+        const seedInfo: Record<string, CardInfo> = {};
+        for (const c of Object.values(datamap) as any[]) {
+          const nm: string = c?.name;
+          if (!nm) continue;
+          const iu = c.image_uris || (c.card_faces && c.card_faces[0] && c.card_faces[0].image_uris) || {};
+          const url = iu.art_crop || iu.normal || iu.small;
+          if (url) seedArt[nm] = url;
+          seedInfo[nm] = { art: url, type: c.type_line || "", oracle: c.oracle_text || (c.card_faces && c.card_faces[0] && c.card_faces[0].oracle_text) || "" };
+          infoReq.current.add(nm);
+        }
+        setArt((p) => ({ ...seedArt, ...p }));
+        setInfo((p) => ({ ...seedInfo, ...p }));
+      }
+
       const py = await ensurePyodide();
-      const specs = [{ key: mine }, ...foes.map((k) => ({ key: k }))];
       const newGame = py.globals.get("new_game");
-      const raw = newGame(JSON.stringify(specs), seed, level);
+      const raw = newGame(JSON.stringify(specs), JSON.stringify(datamap), seed, level);
       newGame.destroy?.();
       setState(JSON.parse(raw));
       setPicked(new Set());
@@ -230,9 +279,9 @@ export default function Play() {
           <h2><span className="step">1</span> Preparar la partida</h2>
           <div className="row" style={{ flexWrap: "wrap", gap: 14 }}>
             <label>Tu deck&nbsp;
-              <select value={mine} onChange={(e) => setMine(e.target.value)}
+              <select value={mineId} onChange={(e) => setMineId(e.target.value)}
                 style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
-                {decks.map((d) => <option key={d.key} value={d.key}>{d.commander}</option>)}
+                {pickables.map((p) => <option key={p.id} value={p.id}>{p.mine ? "★ " : ""}{p.label}</option>)}
               </select>
             </label>
             <label>Dificultad&nbsp;
@@ -247,25 +296,25 @@ export default function Play() {
               <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} style={{ width: 90 }} />
             </label>
           </div>
-          <p className="muted" style={{ marginTop: 12, marginBottom: 6 }}>Rivales ({foes.length}/3):</p>
+          <p className="muted" style={{ marginTop: 12, marginBottom: 6 }}>Rivales ({foeIds.length}/3):</p>
           <div className="decks">
-            {decks.filter((d) => d.key !== mine).map((d) => (
-              <button key={d.key} className={`deck-btn ${foes.includes(d.key) ? "on" : ""}`} onClick={() => toggleFoe(d.key)}>
-                <div className="name">{d.commander}</div>
-                <div className="sub">{d.theme || "ejemplo"}</div>
+            {pickables.filter((p) => p.id !== mineId).map((p) => (
+              <button key={p.id} className={`deck-btn ${foeIds.includes(p.id) ? "on" : ""}`} onClick={() => toggleFoe(p.id)}>
+                <div className="name">{p.mine ? "★ " : ""}{p.label}</div>
+                <div className="sub">{p.tag}</div>
               </button>
             ))}
           </div>
           <div className="row" style={{ marginTop: 14 }}>
-            <button className="go" onClick={start} disabled={booting || !mine || foes.length < 1}>
+            <button className="go" onClick={start} disabled={booting || !mineId || foeIds.length < 1}>
               {booting ? "Preparando…" : "Empezar partida"}
             </button>
           </div>
           {status && <p className="muted" style={{ marginTop: 10 }}>⏳ {status}</p>}
           {error && <p className="err">⚠ {error}</p>}
           <p className="muted" style={{ marginTop: 10, fontSize: ".8rem" }}>
-            Por ahora se juega con los decks de ejemplo (sin conexión). Los decks
-            importados con arte real llegan en un próximo paso.
+            Podés jugar con tus decks guardados (★) o los de ejemplo. Tus cartas
+            reales se resuelven con Scryfall (foto y texto) antes de empezar.
           </p>
         </div>
       )}
@@ -501,9 +550,9 @@ export default function Play() {
       )}
 
       <footer>
-        El sistema juega los turnos rivales con la dificultad elegida. Las cartas
-        reales muestran su foto y texto de Scryfall; las de ejemplo, una ficha con
-        sus habilidades. Tocá cualquier carta (o su ⓘ) para verla.
+        El sistema juega los turnos rivales con la dificultad elegida. Podés usar
+        tus decks importados (★) con foto y texto real de Scryfall, o los de
+        ejemplo (ficha simple). Tocá cualquier carta (o su ⓘ) para verla.
       </footer>
     </div>
   );

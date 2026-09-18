@@ -17,8 +17,7 @@ from engine import Game, Cost
 
 def from_registered(specs, human_index=0, seed=0, level="intermedio"):
     """Construye una partida interactiva desde decks REGISTRADOS (de ejemplo).
-    `specs`: lista de {"key": <clave>, "name": <opcional>}. Lo usa la web
-    (Pyodide) para no tener que armar los mazos en JS."""
+    `specs`: lista de {"key": <clave>, "name": <opcional>}."""
     import decks
     defs = []
     for s in specs:
@@ -26,6 +25,33 @@ def from_registered(specs, human_index=0, seed=0, level="intermedio"):
         name = s.get("name") if isinstance(s, dict) else None
         deck, cmd = decks.build(key)
         defs.append((name or cmd.name, deck, cmd))
+    return InteractiveGame(defs, human_index=human_index, seed=seed, level=level)
+
+
+def from_specs(specs, datamap=None, human_index=0, seed=0, level="intermedio"):
+    """Construye una partida mezclando decks registrados y decks IMPORTADOS.
+    `specs`: lista de {"kind":"registered","key":..} o
+             {"kind":"custom","name":..,"text":<decklist>}.
+    `datamap`: {nombre_norm: datos_scryfall} ya resuelto por el servidor, para
+    armar los custom sin red (build_deck usa este fetch)."""
+    import decks
+    import decklist
+    import cardsdb
+    datamap = datamap or {}
+
+    def fetch(name):
+        return datamap.get(cardsdb._norm(name))
+
+    defs = []
+    for s in specs:
+        if s.get("kind") == "custom" and not s.get("key"):
+            parsed = decklist.parse_decklist(s.get("text", ""))
+            deck, cmd, _rep = decklist.build_deck(parsed, fetch=fetch)
+            label = s.get("name") or cmd.name
+        else:
+            deck, cmd = decks.build(s["key"])
+            label = s.get("name") or cmd.name
+        defs.append((label, deck, cmd))
     return InteractiveGame(defs, human_index=human_index, seed=seed, level=level)
 
 
