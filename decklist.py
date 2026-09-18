@@ -31,9 +31,13 @@ def parse_decklist(text: str) -> dict:
     commander = None
     entries = []            # [(qty, name)]
     section = "main"
+    last_break = 0          # indice del ultimo corte por linea en blanco
     for raw in text.splitlines():
         line = raw.strip()
-        if not line or line.startswith("#") or line.startswith("//"):
+        if not line:
+            last_break = len(entries)   # bloque nuevo tras la linea en blanco
+            continue
+        if line.startswith("#") or line.startswith("//"):
             continue
         low = re.sub(r"\s*\(\d+\)\s*$", "", line).lower().strip().rstrip(":")
         if low in _HEADERS_CMD:
@@ -61,6 +65,15 @@ def parse_decklist(text: str) -> dict:
             commander = name
             continue
         entries.append((qty, name))
+
+    # Moxfield crudo: si no hubo seccion/marcador de comandante, el bloque final
+    # de UNA sola carta (qty 1) tras una linea en blanco es el comandante.
+    if commander is None and 0 < last_break < len(entries):
+        tail = entries[last_break:]
+        if len(tail) == 1 and tail[0][0] == 1:
+            commander = tail[0][1]
+            entries = entries[:last_break]
+
     return {"commander": commander, "cards": entries}
 
 

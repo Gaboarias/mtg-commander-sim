@@ -477,6 +477,17 @@ def test_mdparse_builds_and_uses_registry():
     assert hb.power == 4 and "creature" in hb.types   # vainilla con stats reales
 
 
+def test_moxfield_commander_at_end():
+    import decklist
+    # Moxfield crudo: comandante al final tras una linea en blanco, sin encabezado
+    raw = "1 Sol Ring\n1 Command Tower\n30 Swamp\n\n1 Kang, el Embaucador"
+    p = decklist.parse_decklist(raw)
+    assert p["commander"] == "Kang, el Embaucador"
+    names = [n for _, n in p["cards"]]
+    assert "Kang, el Embaucador" not in names  # no queda duplicado en el mazo
+    assert "Sol Ring" in names
+
+
 def test_mdparse_rejects_question_mark():
     import mdparse
     txt = """## Comandante
