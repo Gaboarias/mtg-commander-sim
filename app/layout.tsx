@@ -20,7 +20,7 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600;700&display=swap"
           rel="stylesheet"
         />
         <script
@@ -48,10 +48,10 @@ export default function RootLayout({
                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 999, border: "1px solid var(--border, #3a4150)", textDecoration: "none" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/hostinger.svg" alt="Hostinger" height={20} style={{ height: 20 }} />
-              <span style={{ fontSize: ".82rem", opacity: 0.8 }}>ayuda a mantener el dominio</span>
+              <span style={{ fontSize: ".82rem", color: "var(--muted)" }}>ayuda a mantener el dominio</span>
             </a>
           </div>
-          <div style={{ fontSize: ".78rem", opacity: 0.6 }}>
+          <div style={{ fontSize: ".8rem", color: "var(--muted)", maxWidth: 640, margin: "0 auto", lineHeight: 1.5 }}>
             El sitio es gratis; apoyar banca la infraestructura, no la IP de MTG.
             {" "}Datos de cartas: <a href="https://scryfall.com" target="_blank" rel="noreferrer">Scryfall</a> ·
             {" "}Combos: <a href="https://commanderspellbook.com" target="_blank" rel="noreferrer">Commander Spellbook</a>.
