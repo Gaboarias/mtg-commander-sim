@@ -248,6 +248,26 @@ def _lvl(level):
     return level if level in _LEVELS else "intermedio"
 
 
+def _slow_reason(card, land_count, avg_rounds):
+    """Motivo probable (heurístico) de por qué una carta se jugó poco: falta de
+    maná / coste, ser reactiva (depende del rival) o depender de otras piezas."""
+    cmc = card.cost.cmc if card.cost else 0
+    tags = getattr(card, "tags", None) or set()
+    types = getattr(card, "types", None) or set()
+    reactive = ("instant" in types or bool(getattr(card, "target_spec", None))
+                or bool({"removal", "counter", "protection", "wipe"} & tags))
+    # coste alto para lo que duran las partidas
+    if cmc >= 6 and avg_rounds < cmc + 1:
+        return f"cuesta mucho (CMC {cmc}) para lo que suelen durar las partidas: rara vez hay maná a tiempo"
+    if land_count and land_count < 34 and cmc >= 4:
+        return f"coste {cmc} y el mazo tiene pocas tierras ({land_count}): a veces falta maná para lanzarla"
+    if reactive:
+        return "es reactiva (respuesta o remoción): se guarda para el momento justo y depende de lo que hagan los rivales"
+    if cmc >= 5:
+        return f"coste alto (CMC {cmc}): pocas veces hay maná disponible para jugarla"
+    return "es situacional: rinde cuando ya tenés otras piezas del mazo en juego (poca química por sí sola)"
+
+
 def match(specs, n=120, level="intermedio"):
     """Simula una mesa de 2 a 6 decks. Devuelve winrate por deck + notas
     (analitica en bulk) + partidas (para exportar)."""
@@ -287,19 +307,24 @@ def match(specs, n=120, level="intermedio"):
                     "pct": round(100 * wins.get("EMPATE", 0) / n, 1)})
 
     # notas por deck: turno del comandante y cartas que rara vez se juegan
+    avg_rounds = turns_total / n / nplayers if n else 0
     deck_notes = []
     for lbl in labels:
         cts = cmd_turns[lbl]
         cmd_avg = round(sum(cts) / len(cts) / nplayers, 1) if cts else None
+        deck_cards = deck_by_label[lbl]
+        land_count = sum(1 for c in deck_cards if c.is_land())
         seen_names = set()
         rates = []
-        for c in deck_by_label[lbl]:
+        for c in deck_cards:
             if c.is_land() or c.cost is None or c.name in seen_names:
                 continue
             seen_names.add(c.name)
-            rates.append((c.name, round(100 * cast_counts[lbl].get(c.name, 0) / n)))
+            rates.append((c, round(100 * cast_counts[lbl].get(c.name, 0) / n)))
         rates.sort(key=lambda x: x[1])
-        slow = [{"name": nm, "pct": p} for nm, p in rates[:6] if p < 50]
+        slow = [{"name": c.name, "pct": p,
+                 "reason": _slow_reason(c, land_count, avg_rounds)}
+                for c, p in rates[:6] if p < 50]
         deck_notes.append({
             "deck": lbl,
             "commander_avg_turn": cmd_avg,

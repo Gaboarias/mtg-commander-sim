@@ -16,7 +16,7 @@ type MatchSpec =
   | { kind: "custom"; name: string; text: string };
 type Pickable = { id: string; label: string; tag: string; colors: string[]; spec: MatchSpec; mine: boolean };
 type Res = { deck: string; wins: number; pct: number };
-type SlowCard = { name: string; pct: number };
+type SlowCard = { name: string; pct: number; reason?: string };
 type DeckNote = { deck: string; commander_avg_turn: number | null; commander_pct: number; slow_cards: SlowCard[] };
 type Notes = { avg_rounds: number; decided_pct: number; decks: DeckNote[] };
 type GameRow = { seed: number; winner: string; turns: number };
@@ -331,16 +331,19 @@ export default function Home() {
                 )}
               </p>
               {d.slow_cards.length > 0 ? (
-                <p className="muted" style={{ margin: "4px 0" }}>
-                  Cartas que rara vez se jugaron:{" "}
-                  {d.slow_cards.map((s, i) => (
-                    <span key={s.name}>
-                      {i > 0 ? ", " : ""}
-                      <b>{s.name}</b> ({s.pct}%)
-                    </span>
-                  ))}
-                  .
-                </p>
+                <>
+                  <p className="muted" style={{ margin: "4px 0" }}>
+                    Cartas que rara vez llegaron a jugarse (y por qué, aproximado):
+                  </p>
+                  <ul className="abil" style={{ margin: "4px 0" }}>
+                    {d.slow_cards.map((s) => (
+                      <li key={s.name}>
+                        <b>{s.name}</b> <span className="muted">({s.pct}% de las partidas)</span>
+                        {s.reason ? <><br /><span className="muted" style={{ fontSize: ".85rem" }}>{s.reason}</span></> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </>
               ) : (
                 <p className="muted" style={{ margin: "4px 0" }}>
                   El deck desplegó su plan de forma pareja.
