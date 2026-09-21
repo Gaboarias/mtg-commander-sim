@@ -53,10 +53,12 @@ def analyze(trace, winner, players, ability_events=None):
     # --- recorrer: deltas de vida por step (todos arrancan en 40 en Commander) ---
     prev_life = {n: 40 for n in names}
     key, best = [], []
+    last_turn = turns
     for i, s in enumerate(steps):
         pm = _by_name(s["players"])
         actor = names[s["active"]] if 0 <= s["active"] < len(names) else None
         label = s["label"]
+        is_land = bool(_LAND.search(label))
         # daño causado este step = caída de vida de rivales
         dmg = 0
         for n, p in pm.items():
@@ -64,20 +66,51 @@ def analyze(trace, winner, players, ability_events=None):
             if n != actor and d > 0:
                 dmg += d
             prev_life[n] = p.get("life") or 0
-        # eventos definitorios
+        # eventos definitorios (el daño no se atribuye a una jugada de tierra: la
+        # baja de vida suele ser del combate del turno, no de bajar una tierra)
         why = None
         if _WIPE.search(label):
             why = "barrida"
         elif _ULT.search(label):
             why = "ult de planeswalker"
-        elif dmg >= 6:
+        elif "pierde" in label.lower():
+            why = "eliminación"
+        elif dmg >= 6 and not is_land:
             why = f"{dmg} de daño"
         if why:
-            key.append({"turn": s["turn"], "label": label, "why": why, "step": i})
-        if actor == winner and dmg > 0:
+            key.append({"turn": s["turn"], "label": label, "why": why, "step": i, "dmg": dmg})
+        if actor == winner and dmg > 0 and not is_land:
             best.append({"turn": s["turn"], "label": label, "delta": dmg, "step": i})
 
-    key.sort(key=lambda k: (k["why"] != "barrida", -k.get("step", 0)))
+    maxdmg = max([k.get("dmg", 0) for k in key] + [0])
+    maxdelta = max([b["delta"] for b in best] + [0])
+
+    def _key_reason(k):
+        w = k["why"]
+        if w == "eliminación":
+            base = "sacó a un jugador de la partida"
+            return base + (" — el golpe que cerró la partida" if k["turn"] >= last_turn else "")
+        if w == "barrida":
+            return "barrió el tablero: limpió las criaturas en juego y frenó a la mesa"
+        if w == "ult de planeswalker":
+            return "ultimate de un planeswalker: un efecto grande de una sola vez"
+        s = f"en ese turno un rival perdió {k.get('dmg', 0)} de vida"
+        if k.get("dmg", 0) and k["dmg"] == maxdmg:
+            s += " — el mayor golpe de la partida"
+        return s
+
+    def _best_reason(b):
+        s = f"le quitó {b['delta']} de vida al rival en ese turno"
+        if b["delta"] == maxdelta and maxdelta:
+            s += " (su golpe más fuerte)"
+        return s
+
+    for k in key:
+        k["reason"] = _key_reason(k)
+    for b in best:
+        b["reason"] = _best_reason(b)
+
+    key.sort(key=lambda k: (k["why"] != "eliminación", k["why"] != "barrida", -k.get("step", 0)))
     key = key[:8]
     best.sort(key=lambda b: b["delta"], reverse=True)
     best = best[:5]

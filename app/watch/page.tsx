@@ -14,7 +14,7 @@ type MatchSpec =
   | { kind: "custom"; name: string; text: string };
 type Pickable = { id: string; label: string; tag: string; spec: MatchSpec; mine: boolean };
 type Step = { turn: number; active: number; label: string; stack: string[]; players: PlayerState[] };
-type KeyPlay = { turn: number; label: string; why?: string; delta?: number; step: number };
+type KeyPlay = { turn: number; label: string; why?: string; delta?: number; step: number; reason?: string };
 type AbilityGroup = { card: string; controller: string | null; count: number; turns: number[]; kinds: string[]; step: number };
 type MatchAnalysis = {
   win_type: string; summary: string;
@@ -305,9 +305,9 @@ export default function Watch() {
               <h3 style={{ fontSize: ".95rem" }}>Jugadas clave</h3>
               {replay.analysis.key_plays.length === 0 && <p className="muted">—</p>}
               {replay.analysis.key_plays.map((k, i) => (
-                <button key={i} className="play-line" onClick={() => { setPlaying(false); setIdx(k.step); }}>
-                  <span className="pl-turn">T{k.turn}</span> {k.label}
-                  {k.why ? <span className="muted"> · {k.why}</span> : null}
+                <button key={i} className="play-line" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }} onClick={() => { setPlaying(false); setIdx(k.step); }}>
+                  <span><span className="pl-turn">T{k.turn}</span> {k.label}</span>
+                  {k.reason ? <span className="muted" style={{ fontSize: ".78rem", lineHeight: 1.3 }}>Por qué: {k.reason}</span> : null}
                 </button>
               ))}
             </div>
@@ -315,9 +315,9 @@ export default function Watch() {
               <h3 style={{ fontSize: ".95rem", color: "#7ad17a" }}>Las mejores jugadas de {replay.winner}</h3>
               {replay.analysis.best_moves.length === 0 && <p className="muted">—</p>}
               {replay.analysis.best_moves.map((k, i) => (
-                <button key={i} className="play-line" onClick={() => { setPlaying(false); setIdx(k.step); }}>
-                  <span className="pl-turn">T{k.turn}</span> {k.label}
-                  {typeof k.delta === "number" ? <span className="muted"> · +{k.delta}</span> : null}
+                <button key={i} className="play-line" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }} onClick={() => { setPlaying(false); setIdx(k.step); }}>
+                  <span><span className="pl-turn">T{k.turn}</span> {k.label}{typeof k.delta === "number" ? <span className="muted"> · +{k.delta}</span> : null}</span>
+                  {k.reason ? <span className="muted" style={{ fontSize: ".78rem", lineHeight: 1.3 }}>{k.reason}</span> : null}
                 </button>
               ))}
             </div>
