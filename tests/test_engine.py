@@ -565,16 +565,19 @@ def test_analysis_consistency_and_recommendations():
                               "protection": 0},
                          {"creature": 30}, 4.2,
                          {c: 0 for c in "WUBRG"}, {c: 0 for c in "WUBRG"})
-    low = " ".join(recs).lower()
+    # recomendaciones estructuradas: {text, cards:[nombres]}
+    low = " ".join(r["text"] for r in recs).lower()
     assert "ramp" in low and "barrida" in low and "tierras" in low
+    ramp = next(r for r in recs if "ramp" in r["text"].lower())
+    assert "Sol Ring" in ramp["cards"]                 # expone nombres para precificar
     # no re-sugiere staples que el deck YA tiene
     owned = {an._norm("Sol Ring"), an._norm("Arcane Signet")}
     recs2 = an._recommend(20, {"ramp": 2, "draw": 3, "removal": 2, "wipe": 0,
                                "protection": 0},
                           {"creature": 30}, 4.2,
                           {c: 0 for c in "WUBRG"}, {c: 0 for c in "WUBRG"}, owned)
-    ramp_line = next(r for r in recs2 if "ramp" in r.lower())
-    assert "Sol Ring" not in ramp_line and "Arcane Signet" not in ramp_line
+    ramp2 = next(r for r in recs2 if "ramp" in r["text"].lower())
+    assert "Sol Ring" not in ramp2["cards"] and "Arcane Signet" not in ramp2["cards"]
 
 
 def test_turso_db_encode_decode_and_parse():

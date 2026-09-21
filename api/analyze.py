@@ -52,7 +52,46 @@ def run(text, commander=None):
     report["scryfall_online"] = _scry is not None
     report["combos"] = _analyze.find_combos(
         [cmd] if cmd else [], [n for _, n in main])
+
+    _attach_prices(report, cache)
     return report
+
+
+def _usd(raw):
+    try:
+        v = (raw.get("prices") or {}).get("usd")
+        return round(float(v), 2) if v not in (None, "") else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _attach_prices(report, cache):
+    """Resuelve el precio (Scryfall) de las cartas SUGERIDAS (staples de las
+    recomendaciones + piezas que faltan para un combo) e inyecta el detalle."""
+    # nombres sugeridos que aún no están en cache
+    wanted = []
+    for rec in report.get("recommendations", []):
+        wanted += rec.get("cards", [])
+    for c in (report.get("combos", {}) or {}).get("almost", []):
+        wanted += c.get("missing", [])
+    missing = [n for n in wanted if _norm(n) not in cache]
+    if missing and _scry is not None:
+        try:
+            cache = {**cache, **_scry.resolve_many(missing)}
+        except Exception:  # noqa: BLE001
+            pass
+
+    def priced(name):
+        return {"name": name, "price": _usd(cache.get(_norm(name)))}
+
+    for rec in report.get("recommendations", []):
+        cards = [priced(n) for n in rec.get("cards", [])]
+        rec["cards"] = cards
+        sub = sum(c["price"] for c in cards if c["price"])
+        rec["subtotal"] = round(sub, 2) if sub else None
+
+    for c in (report.get("combos", {}) or {}).get("almost", []):
+        c["missing_priced"] = [priced(n) for n in c.get("missing", [])]
 
 
 class handler(BaseHTTPRequestHandler):

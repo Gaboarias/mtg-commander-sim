@@ -326,24 +326,26 @@ _FIX = {
 
 def _staples(role, owned):
     """Staples del rol que el deck NO tiene todavía (para no recomendar lo puesto)."""
-    ex = [s for s in _STAPLES[role] if _norm(s) not in (owned or set())]
-    return ", ".join(ex[:5])
+    return [s for s in _STAPLES[role] if _norm(s) not in (owned or set())][:5]
 
 
 def _recommend(lands, roles, counts, avg_cmc, demand, sources, owned=None):
-    """Sugerencias ACCIONABLES a partir de las mismas líneas base que _judge.
-    `owned`: nombres normalizados ya en el deck (para no sugerir lo que ya tenés)."""
+    """Sugerencias ACCIONABLES. Devuelve [{text, cards:[nombre...]}]; los precios se
+    inyectan después (capa de API, que tiene Scryfall). `owned`: nombres normalizados
+    ya en el deck (para no sugerir lo que ya tenés)."""
     owned = owned or set()
     recs = []
 
+    def rec(text, cards=None):
+        recs.append({"text": text, "cards": cards or []})
+
     def tip(base, role):
-        ex = _staples(role, owned)
-        recs.append(f"{base} — {ex}." if ex else f"{base}.")
+        recs.append({"text": base, "cards": _staples(role, owned)})
 
     if lands < 36:
-        recs.append(f"Sumá {36 - lands} tierras (apuntá a ~36–38) para no trabarte.")
+        rec(f"Sumá {36 - lands} tierras (apuntá a ~36–38) para no trabarte.")
     elif lands > 40:
-        recs.append(f"Bajá ~{lands - 38} tierras y meté hechizos: te vas a inundar.")
+        rec(f"Bajá ~{lands - 38} tierras y meté hechizos: te vas a inundar.")
     if roles["ramp"] < 10:
         tip(f"Sumá ~{10 - roles['ramp']} piezas de ramp", "ramp")
     if roles["draw"] < 10:
@@ -356,9 +358,9 @@ def _recommend(lands, roles, counts, avg_cmc, demand, sources, owned=None):
         tip("Protegé tu tablero de barridas", "protection")
     for c in _COLORS:
         if demand[c] >= 8 and sources[c] < max(5, demand[c] // 3):
-            recs.append(f"Reforzá fuentes de {_COLOR_ES[c]} — {_FIX[c]}.")
+            rec(f"Reforzá fuentes de {_COLOR_ES[c]} ({_FIX[c]}).")
     if not recs:
-        recs.append("El mazo está bien balanceado; afiná según tu meta local.")
+        rec("El mazo está bien balanceado; afiná según tu meta local.")
     return recs
 
 

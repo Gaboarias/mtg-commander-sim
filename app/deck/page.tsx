@@ -55,7 +55,9 @@ type Resolved = {
 type SimResult = { n: number; opponent: string; results: { deck: string; wins: number; pct: number }[] };
 type Suggestion = { name: string; in_color: boolean; fills: string[]; verdict: string; score: number };
 type SuggestResp = { card: string; roles: string[]; colors: string[]; decks: Suggestion[] };
-type Combo = { id: string; cards: string[]; produces: string[]; missing: string[] };
+type PricedCard = { name: string; price: number | null };
+type Combo = { id: string; cards: string[]; produces: string[]; missing: string[]; missing_priced?: PricedCard[] };
+type Recommendation = { text: string; cards: PricedCard[]; subtotal?: number | null };
 type Analysis = {
   commander: string | null;
   total: number;
@@ -67,7 +69,7 @@ type Analysis = {
   themes: { key: string; label: string; count: number; cards: string[] }[];
   strengths: string[];
   weaknesses: string[];
-  recommendations: string[];
+  recommendations: Recommendation[];
   consistency: { land_prob: number; score: number };
   combos: { included: Combo[]; almost: Combo[]; error: string | null };
 };
@@ -1111,7 +1113,23 @@ export default function DeckPage() {
                 <>
                   <h3 style={{ marginTop: 14, color: "#8ab4ff" }}>➜ Recomendaciones</h3>
                   <ul className="abil">
-                    {analysis.recommendations.map((r, i) => <li key={i}>{r}</li>)}
+                    {analysis.recommendations.map((r, i) => (
+                      <li key={i}>
+                        {r.text}
+                        {r.cards.length > 0 && (
+                          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+                            {r.cards.map((c) => (
+                              <span key={c.name} className="chip">
+                                {c.name} <b style={{ color: "var(--accent)" }}>{typeof c.price === "number" ? `$${c.price.toFixed(2)}` : "—"}</b>
+                              </span>
+                            ))}
+                            {typeof r.subtotal === "number" && r.subtotal > 0 && (
+                              <span className="muted" style={{ fontSize: ".78rem" }}>≈ ${r.subtotal.toFixed(2)} el set</span>
+                            )}
+                          </div>
+                        )}
+                      </li>
+                    ))}
                   </ul>
                 </>
               )}
@@ -1186,14 +1204,19 @@ export default function DeckPage() {
                   {analysis.combos.almost.length > 0 && (
                     <>
                       <h3 style={{ marginTop: 12, fontSize: ".95rem" }}>A una carta de un combo</h3>
-                      {analysis.combos.almost.map((c) => (
-                        <div key={c.id} className="combo almost">
-                          <div>{c.cards.map((n) => c.missing.includes(n)
-                            ? <b key={n} style={{ color: "var(--accent)" }}>＋{n} </b>
-                            : <span key={n}>{n} + </span>)}</div>
-                          <div className="muted" style={{ fontSize: ".82rem" }}>→ {c.produces.join(", ")}</div>
-                        </div>
-                      ))}
+                      {analysis.combos.almost.map((c) => {
+                        const priceOf = (n: string) => c.missing_priced?.find((m) => m.name === n)?.price;
+                        return (
+                          <div key={c.id} className="combo almost">
+                            <div>{c.cards.map((n) => {
+                              if (!c.missing.includes(n)) return <span key={n}>{n} + </span>;
+                              const p = priceOf(n);
+                              return <b key={n} style={{ color: "var(--accent)" }}>＋{n}{typeof p === "number" ? ` ($${p.toFixed(2)})` : ""} </b>;
+                            })}</div>
+                            <div className="muted" style={{ fontSize: ".82rem" }}>→ {c.produces.join(", ")}</div>
+                          </div>
+                        );
+                      })}
                     </>
                   )}
                 </>
