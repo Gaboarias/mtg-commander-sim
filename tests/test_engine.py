@@ -429,6 +429,32 @@ def test_modal_spell_choose_one():
     assert len(me.hand) == before + 2
 
 
+def test_reveal_keep_land_etb_is_visible():
+    # ETB "revela las primeras N, poné una tierra en la mano, el resto al
+    # cementerio": debe ejecutarse (elección automática) y quedar en el relato.
+    import cardsdb
+    import cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Scout", "type_line": "Creature", "mana_cost": "{2}{G}",
+        "power": "2", "toughness": "2", "color_identity": ["G"],
+        "oracle_text": ("When this creature enters, reveal the top four cards of your "
+                        "library. You may put a land card from among them into your hand. "
+                        "Put the rest into your graveyard.")})
+    assert c.on_etb is not None
+    lib = ([cards.land("Forest", ["G"], basic=True) for _ in range(30)]
+           + [cards.creature("Bear", "1G", 2, 2) for _ in range(30)])
+    me = Player("yo", lib, cards.creature("Cmd", "2G", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Swamp", ["B"], basic=True) for _ in range(60)],
+                cards.creature("C", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=4)
+    bh, bg = len(me.hand), len(me.graveyard)
+    g.move_to_battlefield(c, me)
+    assert len(me.hand) - bh == 1        # una tierra a la mano
+    assert len(me.graveyard) - bg == 3   # el resto al cementerio
+    assert any("revela" in ln for ln in g.log_lines)   # quedó registrado
+
+
 def test_imported_planeswalker_loyalty_and_abilities():
     # Un planeswalker importado debe ENTRAR con su lealtad (no morir a SBA) y
     # exponer sus habilidades con texto + efecto aproximado.

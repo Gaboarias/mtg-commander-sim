@@ -314,6 +314,33 @@ def _generic_amount_effect(oracle: str):
             cards.mill(game, ctrl, _n)
         return eff
 
+    # revelar las primeras N: quedarse una tierra en la mano, el resto al
+    # cementerio (la elección la hace el sistema, pero queda REGISTRADA y visible).
+    m = re.search(r"(?:reveal|look at) the top (\w+) cards?.{0,140}?land card.{0,50}?hand", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, *_a, _n=min(n, 8)):
+            revealed = []
+            for _ in range(_n):
+                if ctrl.library:
+                    revealed.append(ctrl.library.pop())
+            land = next((c for c in revealed if c.is_land()), None)
+            for c in revealed:
+                if c is not land:
+                    ctrl.graveyard.append(c)
+            if land:
+                ctrl.hand.append(land)
+            shown = ", ".join(c.name for c in revealed) or "nada"
+            kept = land.name if land else "ninguna tierra"
+            game.log(f"{ctrl.name} revela {shown} — se queda con {kept}, el resto al cementerio")
+        return eff
+
+    # "you may draw a card" (opcional, singular): la tomamos y lo registramos.
+    if re.search(r"(?:you may )?draw a card", t):
+        def eff(game, ctrl, *_a):
+            ctrl.draw(1, game)
+            game.log(f"{ctrl.name} roba una carta")
+        return eff
+
     return None
 
 
