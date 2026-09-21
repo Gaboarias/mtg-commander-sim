@@ -300,6 +300,8 @@ export default function DeckPage() {
   const supportUrl = KOFI_URL;
   const [suggest, setSuggest] = useState<SuggestResp | null>(null);
   const [suggesting, setSuggesting] = useState<string | null>(null);
+  const [preconIcons, setPreconIcons] = useState<Record<string, string>>({});
+  const [preconPick, setPreconPick] = useState<{ name: string; commander: string | null; cover?: string } | null>(null);
 
   // plantilla al azar al abrir (solo en cliente, para no romper la hidratación)
   useEffect(() => {
@@ -387,6 +389,43 @@ export default function DeckPage() {
       .then((d) => setSamples(d.samples || []))
       .catch(() => {});
   }, []);
+
+  // símbolos de set (Scryfall, vía nuestra API) para mostrar cada precon con imagen
+  useEffect(() => {
+    fetch("/api/seticons")
+      .then((r) => r.json())
+      .then((d) => setPreconIcons(d.icons || {}))
+      .catch(() => {});
+  }, []);
+
+  // elegir un precon desde el grid: carga la lista y muestra el arte del comandante
+  async function pickPrecon(p: Precon) {
+    setPreconPick({ name: p.name, commander: null });
+    try {
+      const r = await fetch(`/api/precons?load=${encodeURIComponent(p.fileName)}`);
+      const d = await r.json();
+      if (d.error || !d.text) { setError(d.error || "No se pudo cargar el precon."); setPreconPick(null); return; }
+      setText(d.text);
+      setResolved(null);
+      resolve(d.text);
+      const cmd: string | null = d.commander || null;
+      setPreconPick({ name: p.name, commander: cmd });
+      if (cmd) {
+        try {
+          const ci = await fetch("/api/cardinfo", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ names: [cmd] }),
+          });
+          const cj = await ci.json();
+          const cover = cj.info?.[cmd]?.art;
+          if (cover) setPreconPick({ name: p.name, commander: cmd, cover });
+        } catch { /* sin portada, no pasa nada */ }
+      }
+    } catch (e) {
+      setError("No se pudo cargar el precon: " + (e instanceof Error ? e.message : String(e)));
+      setPreconPick(null);
+    }
+  }
 
   function currentDeckText(): string {
     if (!resolved) return text;
@@ -728,6 +767,8 @@ export default function DeckPage() {
   }
 
   const totalQty = resolved ? resolved.cards.reduce((s, c) => s + c.qty, 0) : 0;
+  const preconFiltered = precons.filter((p) =>
+    (p.name || "").toLowerCase().includes(filter.toLowerCase()));
 
   return (
     <div className="wrap">
@@ -797,43 +838,7 @@ export default function DeckPage() {
       <div className="card">
         <h2><span className="step">1</span> Traé tu lista</h2>
         <div className="row" style={{ marginBottom: 10, flexWrap: "wrap" }}>
-          <span className="muted">Empezar desde:</span>
-          {precons.length > 0 ? (
-            <>
-              <input
-                placeholder="filtrar precon…" aria-label="Filtrar precons"
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                style={{
-                  background: "var(--panel-2)", color: "var(--text)",
-                  border: "1px solid var(--border)", borderRadius: 8,
-                  padding: "8px 10px", width: 160,
-                }}
-              />
-              <select
-                onChange={(e) => e.target.value &&
-                  loadInto(`/api/precons?load=${encodeURIComponent(e.target.value)}`)}
-                defaultValue=""
-                style={{
-                  background: "var(--panel-2)", color: "var(--text)",
-                  border: "1px solid var(--border)", borderRadius: 8,
-                  padding: "8px 10px", maxWidth: 300,
-                }}
-              >
-                <option value="">— un precon oficial —</option>
-                {precons
-                  .filter((p) => p.name.toLowerCase().includes(filter.toLowerCase()))
-                  .slice(0, 300)
-                  .map((p) => (
-                    <option key={p.fileName} value={p.fileName}>
-                      {p.name} · {p.releaseDate}
-                    </option>
-                  ))}
-              </select>
-            </>
-          ) : (
-            <span className="muted">{preconMsg || "cargando precons…"}</span>
-          )}
+          <span className="muted">¿No querés escribir toda la lista? Arrancá de un deck de ejemplo:</span>
           {samples.length > 0 && (
             <select
               onChange={(e) => e.target.value &&
@@ -852,6 +857,61 @@ export default function DeckPage() {
             </select>
           )}
         </div>
+
+        {precons.length > 0 ? (
+          <div style={{ marginBottom: 12 }}>
+            <div className="row" style={{ marginBottom: 8, gap: 8 }}>
+              <span className="muted">…o de un precon oficial:</span>
+              <input
+                placeholder="buscar precon…" aria-label="Buscar precon"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                style={{
+                  background: "var(--panel-2)", color: "var(--text)",
+                  border: "1px solid var(--border)", borderRadius: 8,
+                  padding: "8px 10px", width: 200,
+                }}
+              />
+              <span className="muted" style={{ fontSize: ".8rem" }}>{preconFiltered.length} precons</span>
+            </div>
+            {preconPick && (
+              <div className="precon-pick">
+                {preconPick.cover
+                  ? <div className="precon-cover" style={{ backgroundImage: `url(${preconPick.cover})` }} />
+                  : <div className="precon-cover ph"><Icon name="cards" size={22} /></div>}
+                <div>
+                  <div style={{ fontWeight: 600 }}>{preconPick.name}</div>
+                  <div className="muted" style={{ fontSize: ".82rem" }}>
+                    {preconPick.commander ? <>Comandante: {preconPick.commander}</> : "cargando…"}
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="precon-grid">
+              {preconFiltered.slice(0, 60).map((p) => {
+                const icon = preconIcons[(p.code || "").toUpperCase()];
+                return (
+                  <button key={p.fileName} className="precon-tile" onClick={() => pickPrecon(p)}
+                    aria-label={`Empezar desde el precon ${p.name}`} title={`${p.name} · ${p.releaseDate}`}>
+                    {icon
+                      // eslint-disable-next-line @next/next/no-img-element
+                      ? <img src={icon} alt="" className="precon-sym" />
+                      : <span className="precon-sym ph"><Icon name="cards" size={16} /></span>}
+                    <span className="precon-name">{p.name}</span>
+                    <span className="precon-date">{p.releaseDate}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {preconFiltered.length > 60 && (
+              <p className="muted" style={{ fontSize: ".8rem", marginTop: 6 }}>
+                Mostrando 60. Buscá por nombre para encontrar el tuyo.
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="muted" style={{ marginBottom: 10 }}>{preconMsg || "cargando precons…"}</p>
+        )}
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
