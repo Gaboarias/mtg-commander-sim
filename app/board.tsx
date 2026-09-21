@@ -62,17 +62,17 @@ export function CardMini({
 }
 
 export function Seat({
-  p, active, art, reduce, selectableUids, selectedUids, onCard, onInspect,
+  p, active, art, reduce, selectableUids, selectedUids, onCard, onInspect, variant = "grid",
 }: {
   p: PlayerState; active: boolean; art: Record<string, string>; reduce: boolean;
   selectableUids?: Set<number>; selectedUids?: Set<number>; onCard?: (uid: number) => void;
-  onInspect?: (perm: Perm) => void;
+  onInspect?: (perm: Perm) => void; variant?: "grid" | "hero" | "mini";
 }) {
   const lands = p.battlefield.filter((x) => x.is_land);
   const nonlands = p.battlefield.filter((x) => !x.is_land);
   const maxCmdr = Math.max(0, ...Object.values(p.cmdr_damage || {}));
   return (
-    <motion.div layout={!reduce} className={`seat ${active ? "active" : ""} ${p.lost ? "dead" : ""}`}>
+    <motion.div layout={!reduce} className={`seat seat-${variant} ${active ? "active" : ""} ${p.lost ? "dead" : ""}`}>
       <div className="seat-head">
         <span className="seat-name">
           {p.lost ? <Icon name="skull" size={13} /> : active ? <Icon name="play" size={11} /> : null}

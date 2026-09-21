@@ -340,6 +340,24 @@ textarea:focus { border-color: var(--accent-2) !important; }
 .seat-meta { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: .8rem; margin: 4px 0 8px; }
 .empty { font-size: .8rem; margin: 6px 0; }
 
+/* --- replay con foco fuerte: jugador en turno grande, rivales chicos --- */
+.stage { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+.seat-hero { flex: 1 1 100%; order: -1; padding: 14px 16px; }
+.seat-hero .cardmini { width: 70px; }
+.seat-hero .cardmini .art { height: 52px; }
+.seat-hero .seat-name { font-size: 1.05rem; }
+.seat-mini { flex: 1 1 150px; max-width: 240px; padding: 8px 10px; opacity: .82; }
+.seat-mini:hover { opacity: 1; }
+.seat-mini .row-cards, .seat-mini .empty { display: none; }
+.seat-mini .seat-name { font-size: .85rem; }
+.seat-mini .seat-meta { gap: 8px; font-size: .74rem; margin-bottom: 2px; }
+.seat-mini.dead { opacity: .4; }
+/* una barrita para separar visualmente al que juega de los rivales */
+.stage .seat-mini { border-style: dashed; }
+@media (max-width: 480px) {
+  .seat-mini { flex: 1 1 45%; max-width: none; }
+}
+
 .row-cards { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .row-cards.lands { opacity: .9; }
 .cardmini { width: 58px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); background: var(--panel); transition: transform .15s; position: relative; }

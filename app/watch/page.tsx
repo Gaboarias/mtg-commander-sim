@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { listDecks, type SavedDeck } from "../localDecks";
 import { Seat, type PlayerState } from "../board";
 import { download, fileStamp } from "../download";
@@ -224,14 +224,34 @@ export default function Watch() {
             <span className="muted">{idx + 1}/{last + 1}</span>
           </div>
           <div className="now">
-            <span className="turnbadge">Turno {step.turn}</span>
-            <span className="label">{step.label}</span>
+            <motion.span
+              key={step.turn}
+              className="turnbadge"
+              initial={reduce ? false : { scale: 0.8, opacity: 0.4 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: "spring", stiffness: 400, damping: 24 }}
+            >
+              Turno {step.turn}
+            </motion.span>
+            <motion.span
+              key={"who" + step.active}
+              className="label"
+              initial={reduce ? false : { opacity: 0, x: 8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.3 }}
+            >
+              Juega <b>{step.players[step.active]?.name}</b>
+            </motion.span>
           </div>
+          <p className="muted" style={{ margin: "2px 0 8px", fontSize: ".85rem" }}>{step.label}</p>
           {step.stack.length > 0 && <p className="muted">Pila: {step.stack.join(" → ")}</p>}
 
-          <div className="seats" data-n={step.players.length}>
+          <div className="stage">
             {step.players.map((p, i) => (
-              <Seat key={p.name} p={p} active={i === step.active} art={replay.images} reduce={reduce} />
+              <Seat
+                key={p.name} p={p} active={i === step.active} art={replay.images} reduce={reduce}
+                variant={i === step.active ? "hero" : "mini"}
+              />
             ))}
           </div>
 
