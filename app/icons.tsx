@@ -36,12 +36,12 @@ const P: Record<IconName, React.ReactNode> = {
   "check-circle": <><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></>,
   target: <><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.5" fill="currentColor"/></>,
   skull: <><path d="M12 3a8 8 0 0 0-5 14v3h10v-3a8 8 0 0 0-5-14Z"/><circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/></>,
-  hand: <path d="M7 11V6a1.5 1.5 0 0 1 3 0v4V4.5a1.5 1.5 0 0 1 3 0V10V6a1.5 1.5 0 0 1 3 0v7a6 6 0 0 1-6 6h-1a5 5 0 0 1-4.3-2.5L4 15c-.6-1 .3-2.2 1.4-1.8L7 14Z"/>,
+  hand: <path d="M8 11V5.5a1.5 1.5 0 0 1 3 0V10V4a1.5 1.5 0 0 1 3 0v6V5.5a1.5 1.5 0 0 1 3 0V13a6 6 0 0 1-6 6 6 6 0 0 1-5.2-3l-2.1-3.6a1.5 1.5 0 0 1 2.5-1.6L8 12Z"/>,
   library: <><path d="M5 4v16M9 4v16"/><rect x="12" y="4" width="4" height="16" rx="1"/><path d="M18 5l3 15"/></>,
   grave: <path d="M6 21V10a6 6 0 0 1 12 0v11M4 21h16M9 9h6M12 9v6"/>,
   sword: <path d="M14 3h7v7l-9 9-1-1 3-3-6-6-3 3-1-1 9-9Z"/>,
   swords: <><path d="M14.5 3H21v6.5L9 21H3v-6L14.5 3Z"/><path d="m16 16 5 5M5 3l4 4"/></>,
-  poison: <><path d="M12 3c3 4 5 6.5 5 9a5 5 0 0 1-10 0c0-2.5 2-5 5-9Z"/><path d="M10 14a2 2 0 0 0 4 0"/></>,
+  poison: <><path d="M12 3c3.2 4.3 5.5 7 5.5 10a5.5 5.5 0 0 1-11 0c0-3 2.3-5.7 5.5-10Z"/><path d="M9.5 13.5a2.6 2.6 0 0 0 5 0"/></>,
   user: <><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></>,
   edit: <><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"/></>,
   "skip-back": <path d="M19 5v14L9 12l10-7ZM5 5v14"/>,
@@ -55,13 +55,13 @@ const P: Record<IconName, React.ReactNode> = {
   lock: <><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></>,
   chart: <path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>,
   film: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></>,
-  brain: <path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-1 5 3 3 0 0 0 2 5 3 3 0 0 0 3 3V4Zm6 0a3 3 0 0 1 3 3 3 3 0 0 1 1 5 3 3 0 0 1-2 5 3 3 0 0 1-3 3V4Z"/>,
+  brain: <path d="M12 5a2.5 2.5 0 0 0-4.6-1.3A2.5 2.5 0 0 0 4.5 7 2.5 2.5 0 0 0 4 11a2.5 2.5 0 0 0 1.5 4.5A2.5 2.5 0 0 0 10 18a2 2 0 0 0 2-1.5V5Zm0 0a2.5 2.5 0 0 1 4.6-1.3A2.5 2.5 0 0 1 19.5 7 2.5 2.5 0 0 1 20 11a2.5 2.5 0 0 1-1.5 4.5A2.5 2.5 0 0 1 14 18a2 2 0 0 1-2-1.5"/>,
   scroll: <><path d="M7 4h11a2 2 0 0 1 2 2v11M5 4a2 2 0 0 0-2 2v1h4"/><path d="M20 17a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7h14v10Z"/><path d="M8 10h7M8 14h5"/></>,
   wrench: <path d="M15 6a4 4 0 0 0-5 5L3 18l3 3 7-7a4 4 0 0 0 5-5l-2.5 2.5L14 9l1.5-3Z"/>,
   link: <><path d="M10 13a4 4 0 0 0 6 .5l2-2a4 4 0 0 0-5.7-5.7L11 7"/><path d="M14 11a4 4 0 0 0-6-.5l-2 2a4 4 0 0 0 5.7 5.7L13 17"/></>,
   cloud: <path d="M6.5 18a4.5 4.5 0 0 1-.5-9 6 6 0 0 1 11.6 1.5A3.8 3.8 0 0 1 17 18H6.5Z"/>,
   archive: <><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></>,
-  gamepad: <><path d="M6 8h12a4 4 0 0 1 4 4v1a4 4 0 0 1-7 2.7l-.6-.7H8.6l-.6.7A4 4 0 0 1 2 13v-1a4 4 0 0 1 4-4Z"/><path d="M8 11v2M7 12h2M15 11.5h.01M17 13.5h.01"/></>,
+  gamepad: <><rect x="2" y="7" width="20" height="11" rx="5.5"/><path d="M7 11v3M5.5 12.5h3"/><circle cx="15.5" cy="11.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="18" cy="14" r="1.1" fill="currentColor" stroke="none"/></>,
   hourglass: <path d="M6 3h12M6 21h12M8 3c0 4 8 6 8 9s-8 5-8 9M16 3c0 4-8 6-8 9s8 5 8 9"/>,
   undo: <path d="M9 14 4 9l5-5M4 9h9a7 7 0 0 1 0 14h-3"/>,
   bolt: <path d="M13 2 4 14h7l-2 8 9-12h-7l2-8Z"/>,
@@ -75,13 +75,17 @@ const P: Record<IconName, React.ReactNode> = {
   sparkles: <path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3ZM19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z"/>,
 };
 
+// Perilla global de tamaño: sube ~30% todos los íconos sin tocar los call sites.
+// Si al verlo parece mucho/poco, ajustar acá (p. ej. 1.25 o 1.35).
+const SCALE = 1.3;
+
 export function Icon({
   name,
-  size = 16,
+  size = 18,
   label,
   className,
   style,
-  strokeWidth = 2,
+  strokeWidth = 2.4,
 }: {
   name: IconName;
   size?: number;
@@ -90,10 +94,11 @@ export function Icon({
   style?: React.CSSProperties;
   strokeWidth?: number;
 }) {
+  const px = Math.round(size * SCALE);
   return (
     <svg
-      width={size}
-      height={size}
+      width={px}
+      height={px}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

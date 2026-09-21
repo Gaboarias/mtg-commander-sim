@@ -448,17 +448,21 @@ button.go, button.ghost, a.go, a.ghost {
   justify-content: center;
   gap: 6px;
 }
-/* botón ⓘ sobre la carta: que el SVG (14px) entre bien */
+/* botón ⓘ sobre la carta: que el SVG ampliado entre bien */
 .cardmini .cm-info {
-  width: 18px; height: 18px;
+  width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;
 }
 /* cerrar (modales): centrar el SVG */
 .inspect-x { display: inline-grid; place-items: center; width: 28px; height: 28px; }
 /* chips: usar el borde del tema (antes color fijo, no adaptaba a modo claro) */
 .chip { border-color: var(--border); }
-/* íconos dentro de headings/labels heredan el color del texto */
-h1 svg, h2 svg, h3 svg { color: currentColor; }
+/* íconos de títulos en dorado (resaltan); los h3 son de colores semánticos
+   (verde/naranja) y sus íconos heredan ese color */
+h1 svg, h2 svg { color: var(--accent); }
+h3 svg { color: currentColor; }
+.nav-brand svg { color: var(--accent); }
+.win-line svg { color: var(--accent); }
 
 /* ---- responsive / mobile ---- */
 @media (max-width: 640px) {
