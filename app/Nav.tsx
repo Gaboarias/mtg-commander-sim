@@ -11,6 +11,7 @@ const LINKS = [
   { href: "/watch", label: "Ver partida" },
   { href: "/play", label: "Jugar" },
   { href: "/deck", label: "Editor de decks" },
+  { href: "/reglas", label: "Reglas" },
 ];
 
 function ThemeToggle() {

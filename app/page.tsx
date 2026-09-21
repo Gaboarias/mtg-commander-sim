@@ -173,6 +173,7 @@ export default function Home() {
           Elegí de 2 a 6 decks, corré la mesa un montón de veces y mirá cuánto
           gana cada uno. ¿Querés probar con los tuyos? Armalos en el{" "}
           <Link href="/deck">editor de decks →</Link>.
+          {" "}¿Primera vez con Magic? <Link href="/reglas">Aprendé a jugar →</Link>
         </p>
       </header>
 

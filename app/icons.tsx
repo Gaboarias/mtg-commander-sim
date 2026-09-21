@@ -13,7 +13,7 @@ export type IconName =
   | "flag" | "ban" | "refresh" | "lock" | "chart" | "film" | "brain"
   | "scroll" | "wrench" | "link" | "cloud" | "archive" | "gamepad"
   | "hourglass" | "undo" | "bolt" | "land" | "plus" | "search" | "info"
-  | "chevron-left" | "chevron-right" | "star" | "sparkles";
+  | "chevron-left" | "chevron-right" | "star" | "sparkles" | "book";
 
 // Cada entrada es el contenido interno del <svg viewBox="0 0 24 24">.
 const P: Record<IconName, React.ReactNode> = {
@@ -73,6 +73,7 @@ const P: Record<IconName, React.ReactNode> = {
   "chevron-right": <path d="M9 5l7 7-7 7"/>,
   star: <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 17l-5.2 2.6 1-5.8-4.3-4.1 5.9-.9L12 3.5Z"/>,
   sparkles: <path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3ZM19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z"/>,
+  book: <><path d="M5 4h11a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2V4Z"/><path d="M18 20a2 2 0 0 0 2-2V6"/><path d="M8 8h6M8 12h6"/></>,
 };
 
 // Perilla global de tamaño: sube ~30% todos los íconos sin tocar los call sites.
