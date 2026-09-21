@@ -22,9 +22,15 @@ import _db  # noqa: E402
 _CODE_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 
 
+# Cupón de fallback (sirve aunque no esté seteada la env SUPPORTER_CODES).
+# La env, si existe, SUMA códigos (podés rotar el fallback cambiándolo acá).
+_FALLBACK_CODES = {"GRACIAS-MTG"}
+
+
 def _valid_coupons():
     raw = os.environ.get("SUPPORTER_CODES", "")
-    return {c.strip() for c in raw.split(",") if c.strip()}
+    env = {c.strip() for c in raw.split(",") if c.strip()}
+    return env | _FALLBACK_CODES
 
 
 def is_supporter(code):
