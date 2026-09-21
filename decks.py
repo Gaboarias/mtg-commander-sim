@@ -30,17 +30,119 @@ def _basic(color):
     return land(name, [c], basic=True)
 
 
+# Objetivo de tierras de un mazo real de Commander (~37 de 99). Antes se rellenaba
+# TODO con basicas -> 77-86 tierras -> manos inundadas de tierra y el mulligan parecia
+# no cambiar nada. Ahora topamos las tierras y completamos con cartas reales en color.
+TARGET_LANDS = 37
+
+# Pool de relleno: criaturas REALES por color (traen ilustracion de Scryfall).
+# (nombre, coste, fuerza, resistencia, keywords)
+_FILLER = {
+    W: [
+        ("Wall of Omens", "1W", 0, 4, ()), ("Kor Skyfisher", "1W", 2, 3, ("flying",)),
+        ("Blade Splicer", "2W", 1, 1, ()), ("Fiend Hunter", "1WW", 1, 3, ()),
+        ("Precinct Captain", "1W", 2, 2, ("first strike",)), ("Thraben Inspector", "W", 1, 2, ()),
+        ("Banisher Priest", "1WW", 2, 2, ()), ("Leonin Warleader", "2WW", 4, 4, ()),
+        ("Mentor of the Meek", "2W", 2, 2, ()), ("Palace Jailer", "3W", 2, 2, ()),
+        ("Attended Knight", "2W", 2, 2, ("first strike",)), ("Whitemane Lion", "1W", 2, 2, ()),
+        ("Cloudgoat Ranger", "3WW", 2, 2, ()), ("Loxodon Smiter", "1WW", 4, 4, ()),
+        ("Skyhunter Skirmisher", "1W", 1, 1, ("flying", "double strike")),
+        ("Sunlance Cleric", "1W", 2, 1, ()), ("Auriok Champion", "WW", 1, 1, ()),
+        ("Ranger of Eos", "3W", 3, 2, ()), ("Dawnbringer Charioteers", "3W", 3, 4, ("flying",)),
+        ("Angel of Vitality", "1WW", 2, 2, ("flying",)),
+    ],
+    U: [
+        ("Man-o'-War", "2U", 2, 2, ()), ("Cloudkin Seer", "2U", 2, 2, ("flying",)),
+        ("Mulldrifter", "4U", 2, 2, ("flying",)), ("Pestermite", "2U", 2, 1, ("flying", "flash")),
+        ("Wall of Frost", "1UU", 0, 7, ()), ("Silvergill Adept", "1U", 2, 1, ()),
+        ("Looter il-Kor", "1U", 1, 1, ()), ("Aven Fisher", "3U", 2, 2, ("flying",)),
+        ("Riftwing Cloudskate", "3U", 2, 2, ("flying",)), ("Cursecatcher", "U", 1, 1, ()),
+        ("Fog Bank", "1U", 0, 2, ("flying",)), ("Sower of Temptation", "2UU", 2, 2, ("flying",)),
+        ("Phantasmal Bear", "U", 2, 2, ()), ("Deranged Assistant", "1U", 1, 1, ()),
+        ("Cloud Elemental", "3U", 2, 3, ("flying",)), ("Sea Scryer", "1U", 1, 1, ()),
+        ("Wavesifter", "3U", 2, 2, ("flying",)), ("Chasm Skulker", "1U", 1, 1, ()),
+        ("Spire Owl", "2U", 1, 3, ("flying",)), ("Tandem Lookout", "3U", 2, 2, ()),
+    ],
+    B: [
+        ("Phyrexian Rager", "2B", 2, 2, ()), ("Nekrataal", "2BB", 2, 1, ("first strike",)),
+        ("Gravedigger", "3B", 2, 2, ()), ("Bone Shredder", "2B", 1, 1, ("flying",)),
+        ("Shriekmaw", "4BB", 3, 2, ()), ("Bloodgift Demon", "3BB", 5, 4, ("flying",)),
+        ("Doomed Dissenter", "1B", 1, 1, ()), ("Carrion Feeder", "B", 1, 1, ()),
+        ("Big Game Hunter", "2B", 1, 1, ()), ("Fume Spitter", "B", 1, 1, ()),
+        ("Plaguecrafter", "2B", 3, 2, ()), ("Liliana's Reaver", "3BB", 2, 4, ()),
+        ("Grim Haruspex", "2B", 3, 2, ()), ("Vampire Hexmage", "BB", 2, 2, ("first strike",)),
+        ("Crypt Rats", "2B", 1, 1, ()), ("Bloodhusk Ritualist", "2BB", 2, 2, ()),
+        ("Dread Wanderer", "B", 2, 2, ()), ("Cave Scavenger", "3B", 3, 2, ()),
+        ("Nested Shambler", "1B", 1, 1, ()), ("Corpse Augur", "2B", 3, 2, ()),
+        ("Vampire Sovereign", "4BB", 3, 4, ("flying",)), ("Sengir Autocrat", "3B", 2, 2, ()),
+        ("Bala Ged Scorpion", "3B", 2, 2, ()), ("Twisted Abomination", "5B", 5, 3, ()),
+        ("Reassembling Skeleton", "1B", 1, 1, ()), ("Moaning Wall", "2B", 0, 4, ()),
+        ("Nantuko Husk", "2B", 2, 2, ()), ("Gloomhunter", "3B", 2, 2, ("flying",)),
+        ("Bloodghast", "B", 2, 1, ()), ("Vampire Lacerator", "B", 2, 2, ()),
+        ("Gatekeeper of Malakir", "BB", 2, 2, ()), ("Skinrender", "3B", 3, 3, ()),
+        ("Disciple of Bolas", "3B", 2, 2, ()), ("Child of Night", "1B", 2, 1, ("lifelink",)),
+        ("Crypt Ghast", "2BB", 2, 2, ()), ("Ravenous Rats", "2B", 1, 1, ()),
+        ("Chittering Rats", "2B", 2, 2, ()), ("Vault Skirge", "B", 1, 1, ("flying", "lifelink")),
+        ("Cackling Fiend", "2B", 2, 2, ()), ("Highborn Ghoul", "1B", 2, 2, ("menace",)),
+        ("Festering Goblin", "B", 1, 1, ()), ("Wight of Precinct Six", "1B", 1, 1, ()),
+    ],
+    R: [
+        ("Young Pyromancer", "1R", 2, 1, ()), ("Goblin Rabblemaster", "2R", 2, 2, ()),
+        ("Hellrider", "2RR", 3, 3, ("haste",)), ("Ash Zealot", "1RR", 2, 2, ("first strike", "haste")),
+        ("Kird Ape", "R", 1, 1, ()), ("Fanatic of Mogis", "3R", 3, 2, ()),
+        ("Charging Monstrosaur", "3RR", 5, 5, ("trample", "haste")), ("Torch Fiend", "2R", 2, 2, ()),
+        ("Zealous Conscripts", "4R", 3, 3, ("haste",)), ("Hellspark Elemental", "R", 3, 1, ("trample", "haste")),
+        ("Ember Hauler", "1R", 2, 2, ()), ("Pia Nalaar", "2R", 2, 2, ()),
+        ("Chandra's Phoenix", "2R", 2, 2, ("flying", "haste")), ("Magmatic Channeler", "1R", 1, 3, ()),
+        ("Goblin Chainwhirler", "RRR", 3, 3, ("first strike",)), ("Ash Barrens Marauder", "3R", 3, 2, ()),
+        ("Fire Elemental", "3R", 5, 4, ()), ("Bogardan Dragonheart", "1R", 2, 1, ()),
+        ("Cinder Pyromancer", "2R", 1, 1, ()), ("Viashino Pyromancer", "1R", 2, 1, ()),
+    ],
+    G: [
+        ("Sakura-Tribe Elder", "1G", 1, 1, ()), ("Beast Whisperer", "3G", 2, 3, ()),
+        ("Elvish Visionary", "1G", 1, 1, ()), ("Wood Elves", "2G", 1, 1, ()),
+        ("Yavimaya Elder", "1GG", 2, 1, ()), ("Eternal Witness", "1GG", 2, 1, ()),
+        ("Acidic Slime", "3GG", 2, 2, ("deathtouch",)), ("Reclamation Sage", "2G", 2, 1, ()),
+        ("Fauna Shaman", "1G", 2, 2, ()), ("Scavenging Ooze", "1G", 2, 2, ()),
+        ("Nessian Courser", "2G", 3, 3, ()), ("Pelakka Wurm", "5GG", 7, 7, ("trample",)),
+        ("Ambush Viper", "1G", 2, 1, ("flash", "deathtouch")), ("Wall of Blossoms", "1G", 0, 4, ()),
+        ("Deathgorge Scavenger", "2G", 3, 2, ()), ("Tireless Tracker", "2G", 3, 2, ()),
+        ("Courser of Kruphix", "1GG", 2, 4, ()), ("River Boa", "1G", 2, 1, ()),
+        ("Vinelasher Kudzu", "1G", 1, 1, ()), ("Silverback Elder", "3GG", 6, 6, ("trample",)),
+    ],
+}
+
+
 def _fill(deck, identity):
-    """Rellena con tierras basicas de la identidad del comandante hasta 99."""
+    """Completa el mazo a 99 con un ratio jugable: ~TARGET_LANDS tierras y el resto
+    con cartas reales en color (traen arte)."""
     colors = [c for c in (W, U, B, R, G) if c in identity] or [C]
+
+    def _add_land(idx):
+        color = colors[idx % len(colors)]
+        deck.append(land("Wastes", [C], basic=True) if color == C else _basic(color))
+
+    # 1) tierras basicas hasta ~TARGET_LANDS (o hasta llenar si el mazo es chico)
+    i = 0
+    while sum(1 for x in deck if x.is_land()) < TARGET_LANDS and len(deck) < 99:
+        _add_land(i); i += 1
+
+    # 2) relleno no-tierra con cartas reales en color, sin duplicar cuando se puede
+    used = {getattr(x, "name", "") for x in deck}
+    base_pool = [spec for c in colors for spec in _FILLER.get(c, [])]
+    ordered = [s for s in base_pool if s[0] not in used]      # distintas primero
+    k = 0
+    while len(deck) + len(ordered) < 99 and base_pool:        # si faltan, ciclar (dups)
+        ordered.append(base_pool[k % len(base_pool)]); k += 1
+    for name, cost, pw, tf, kw in ordered:
+        if len(deck) >= 99:
+            break
+        deck.append(creature(name, cost, pw, tf, kw=kw, color_id=tuple(colors)))
+
+    # 3) si el pool era chico (mono-color) y aun faltan slots, completar con tierras
     i = 0
     while len(deck) < 99:
-        color = colors[i % len(colors)]
-        if color == C:
-            deck.append(land("Wastes", [C], basic=True))
-        else:
-            deck.append(_basic(color))
-        i += 1
+        _add_land(i); i += 1
     return deck[:99]
 
 
