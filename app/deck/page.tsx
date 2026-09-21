@@ -318,6 +318,7 @@ export default function DeckPage() {
   const supportUrl = KOFI_URL;
   const [suggest, setSuggest] = useState<SuggestResp | null>(null);
   const [suggesting, setSuggesting] = useState<string | null>(null);
+  const [colorOverride, setColorOverride] = useState<string[] | null>(null);
   const [preconIcons, setPreconIcons] = useState<Record<string, string>>({});
   const [preconPick, setPreconPick] = useState<{ name: string; commander: string | null; cover?: string } | null>(null);
 
@@ -419,6 +420,7 @@ export default function DeckPage() {
   // elegir un precon desde el grid: carga la lista y muestra el arte del comandante
   async function pickPrecon(p: Precon) {
     setPreconPick({ name: p.name, commander: null });
+    setColorOverride(null);
     try {
       const r = await fetch(`/api/precons?load=${encodeURIComponent(p.fileName)}`);
       const d = await r.json();
@@ -614,17 +616,26 @@ export default function DeckPage() {
     setHand(pool.slice(0, 7));
   }
 
+  const COLOR_ORDER = ["W", "U", "B", "R", "G"];
   function deckColors(): string[] {
-    const order = ["W", "U", "B", "R", "G"];
     const set = new Set<string>();
     (resolved?.commander?.colors || []).forEach((c) => set.add(c));
     resolved?.cards.forEach((c) => (c.colors || []).forEach((x) => set.add(x)));
-    return order.filter((c) => set.has(c));
+    return COLOR_ORDER.filter((c) => set.has(c));
+  }
+  // colores efectivos: lo que el usuario forzó a mano, o lo auto-detectado
+  function effectiveColors(): string[] {
+    return colorOverride ?? deckColors();
+  }
+  function toggleColor(c: string) {
+    const base = effectiveColors();
+    const next = base.includes(c) ? base.filter((x) => x !== c) : [...base, c];
+    setColorOverride(COLOR_ORDER.filter((x) => next.includes(x)));
   }
 
   function onSaveDeck() {
     const name = deckName.trim() || resolved?.commander_name || "Mi deck";
-    setSavedDecks(saveDeck(name, currentDeckText(), deckColors()));
+    setSavedDecks(saveDeck(name, currentDeckText(), effectiveColors()));
     setDeckName("");
     setJustSaved(name);
     setTimeout(() => setJustSaved(null), 4000);
@@ -632,6 +643,7 @@ export default function DeckPage() {
   function onLoadSaved(d: SavedDeck) {
     setText(d.text);
     setResolved(null);
+    setColorOverride(null);
   }
   function onDeleteSaved(id: string) {
     setSavedDecks(removeDeck(id));
@@ -644,6 +656,7 @@ export default function DeckPage() {
   async function loadInto(url: string) {
     setBusy(true);
     setError(null);
+    setColorOverride(null);
     try {
       const r = await fetch(url);
       const raw = await r.text();
@@ -885,17 +898,35 @@ export default function DeckPage() {
           <div style={{ marginBottom: 12 }}>
             <div className="row" style={{ marginBottom: 8, gap: 8 }}>
               <span className="muted">…o de un precon oficial:</span>
+              <select
+                aria-label="Elegir precon de la lista"
+                value=""
+                onChange={(e) => {
+                  const p = precons.find((x) => x.fileName === e.target.value);
+                  if (p) pickPrecon(p);
+                }}
+                style={{
+                  background: "var(--panel-2)", color: "var(--text)",
+                  border: "1px solid var(--border)", borderRadius: 8,
+                  padding: "8px 10px", maxWidth: 260,
+                }}
+              >
+                <option value="">— elegir de la lista ({precons.length}) —</option>
+                {precons.map((p) => (
+                  <option key={p.fileName} value={p.fileName}>{p.name} · {p.releaseDate}</option>
+                ))}
+              </select>
               <input
-                placeholder="buscar precon…" aria-label="Buscar precon"
+                placeholder="o buscar en el grid…" aria-label="Buscar precon"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 style={{
                   background: "var(--panel-2)", color: "var(--text)",
                   border: "1px solid var(--border)", borderRadius: 8,
-                  padding: "8px 10px", width: 200,
+                  padding: "8px 10px", width: 170,
                 }}
               />
-              <span className="muted" style={{ fontSize: ".8rem" }}>{preconFiltered.length} precons</span>
+              <span className="muted" style={{ fontSize: ".8rem" }}>{preconFiltered.length} en el grid</span>
             </div>
             {preconPick && (
               <div className="precon-pick">
@@ -911,14 +942,14 @@ export default function DeckPage() {
               </div>
             )}
             <div className="precon-grid">
-              {preconFiltered.slice(0, 60).map((p) => {
+              {preconFiltered.map((p) => {
                 const icon = preconIcons[(p.code || "").toUpperCase()];
                 return (
                   <button key={p.fileName} className="precon-tile" onClick={() => pickPrecon(p)}
                     aria-label={`Empezar desde el precon ${p.name}`} title={`${p.name} · ${p.releaseDate}`}>
                     {icon
                       // eslint-disable-next-line @next/next/no-img-element
-                      ? <img src={icon} alt="" className="precon-sym" />
+                      ? <img src={icon} alt="" className="precon-sym" loading="lazy" />
                       : <span className="precon-sym ph"><Icon name="cards" size={16} /></span>}
                     <span className="precon-name">{p.name}</span>
                     <span className="precon-date">{p.releaseDate}</span>
@@ -926,11 +957,6 @@ export default function DeckPage() {
                 );
               })}
             </div>
-            {preconFiltered.length > 60 && (
-              <p className="muted" style={{ fontSize: ".8rem", marginTop: 6 }}>
-                Mostrando 60. Buscá por nombre para encontrar el tuyo.
-              </p>
-            )}
           </div>
         ) : (
           <p className="muted" style={{ marginBottom: 10 }}>{preconMsg || "cargando precons…"}</p>
@@ -1019,12 +1045,29 @@ export default function DeckPage() {
           ) : (
             <p className="err">Elegí tu comandante en el recuadro de arriba <Icon name="flag" size={13} /></p>
           )}
-          <p style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0" }}>
-            <strong>Colores del mazo:</strong> <ColorPips colors={deckColors()} />
-            <span className="muted" style={{ fontSize: ".8rem" }}>
-              — detectados por el maná de tus cartas{resolved.commander ? " y tu comandante" : ""}
-            </span>
-          </p>
+          <div style={{ margin: "6px 0" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <strong>Colores del mazo:</strong> <ColorPips colors={effectiveColors()} />
+              <span className="muted" style={{ fontSize: ".8rem" }}>
+                {colorOverride ? "— fijados a mano" : `— detectados por el maná de tus cartas${resolved.commander ? " y tu comandante" : ""}`}
+              </span>
+            </div>
+            <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+              <span className="muted" style={{ fontSize: ".8rem" }}>Ajustar a mano:</span>
+              {COLOR_ORDER.map((c) => {
+                const on = effectiveColors().includes(c);
+                return (
+                  <button key={c} type="button" onClick={() => toggleColor(c)}
+                    className={`pip pip-${c} color-toggle${on ? " on" : ""}`}
+                    aria-pressed={on} title={COLOR_LABEL[c]} aria-label={`${COLOR_LABEL[c]}${on ? " (activo)" : ""}`}>
+                    {c}
+                  </button>
+                );
+              })}
+              <button type="button" className="ghost" style={{ padding: "3px 10px", fontSize: ".8rem" }}
+                onClick={() => setColorOverride(null)} disabled={!colorOverride}>Auto</button>
+            </div>
+          </div>
           <p className="muted">
             {totalQty} cartas · {resolved.implemented} con habilidad ya cargada ·{" "}
             {resolved.missing.length} sin encontrar

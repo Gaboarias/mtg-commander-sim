@@ -484,6 +484,18 @@ h3 svg { color: currentColor; }
 .nav-brand svg { color: var(--accent); }
 .win-line svg { color: var(--accent); }
 
+/* --- toggle de colores del mazo (override manual) -------------------- */
+.color-toggle {
+  cursor: pointer; padding: 0; width: 24px; height: 24px; line-height: 20px;
+  font-size: .72rem; border: 2px solid transparent; opacity: .4;
+  transition: opacity .15s, box-shadow .15s, border-color .15s;
+}
+.color-toggle:hover { opacity: .75; }
+.color-toggle.on {
+  opacity: 1; border-color: var(--text);
+  box-shadow: 0 0 0 2px rgba(216,178,58,.35);
+}
+
 /* --- picker de precons (con símbolo de set + comandante) ------------- */
 .precon-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
