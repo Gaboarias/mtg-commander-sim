@@ -80,6 +80,9 @@ class InteractiveGame:
         self._attacker = None       # jugador que ataca (durante defensa)
         self._declared = []         # atacantes declarados (Permanent)
         self.mulls = 0              # mulligans que llevás (para el londrino)
+        # el motor pausa una resolución cuando el HUMANO debe elegir (revelar, etc.)
+        self.g.interactive_human = self.human()
+        self.g.pending_choice = None
         self._ai_mulligans()        # los rivales hacen mulligan solos
         # el humano decide en la fase "mulligan" (ver mulligan()/keep())
 
@@ -585,18 +588,42 @@ class InteractiveGame:
                     "abilities": carddesc.describe(c),
                 } for j, c in enumerate(pl.hand)]
             players.append(s)
+        pending = self.g.pending_choice
         return {
             "turn": self.g.turn,
             "active": self.g.active_index,
             "human_index": self.human_index,
-            "phase": self.phase,
+            "phase": "choose" if pending else self.phase,
             "attacked": self.attacked,
             "winner": self.winner,
             "players": players,
             "legal": self.legal(),
             "combat": self._defense_state() if self.mode == "defense" else None,
+            "choice": self._choice_state(),
             "mulligan": ({"mulls": self.mulls, "to_bottom": max(0, self.mulls - 1),
                           "lands": sum(1 for c in self.human().hand if c.is_land())}
                          if self.phase == "mulligan" else None),
             "log": self.g.log_lines[-14:],
         }
+
+    def _choice_state(self):
+        pc = self.g.pending_choice
+        if not pc:
+            return None
+        return {"kind": pc.get("kind"), "prompt": pc.get("prompt"),
+                "options": pc.get("options", []),
+                "allow_none": bool(pc.get("allow_none"))}
+
+    def resolve_choice(self, index=None):
+        """El humano eligió una opción de una decisión pendiente (revelar, etc.)."""
+        pc = self.g.pending_choice
+        if not pc:
+            return self.state()
+        self.g.pending_choice = None
+        apply = pc.get("_apply")
+        if apply:
+            apply(index)
+        self.g.sba()
+        if len(self.g.alive()) <= 1:
+            self._finish()
+        return self.state()

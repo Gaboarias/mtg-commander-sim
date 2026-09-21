@@ -46,10 +46,12 @@ type Combat = {
   responses: { i: number; name: string; cost: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number }[];
 };
 type Mulligan = { mulls: number; to_bottom: number; lands: number };
+type ChoiceOpt = { i: number; name: string; is_land?: boolean };
+type Choice = { kind: string; prompt: string; options: ChoiceOpt[]; allow_none: boolean };
 type GameState = {
   turn: number; active: number; human_index: number; phase: string; attacked: boolean;
   winner: string | null; players: PlayerState[]; legal: Legal; combat: Combat | null;
-  mulligan: Mulligan | null; log: string[];
+  choice: Choice | null; mulligan: Mulligan | null; log: string[];
 };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -81,6 +83,7 @@ def act(kind, arg_json):
     elif kind == 'ability': g.activate_ability(a.get('uid'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'respond': g.respond(a.get('i'), a.get('target_uids'), a.get('mode'))
     elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
+    elif kind == 'choose': g.resolve_choice(a.get('index'))
     elif kind == 'mulligan': g.mulligan()
     elif kind == 'keep': g.keep(a.get('bottom', []))
     return json.dumps(g.state())
@@ -738,6 +741,36 @@ export default function Play() {
               <div className="act-block" style={{ marginTop: 10 }}>
                 <button className="go" onClick={() => dispatchTargets(tsel)} disabled={tsel.length === 0}>
                   Confirmar ({tsel.length}/{targeting.count})
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {state?.phase === "choose" && state.choice && (
+        <div className="inspect-back">
+          <div className="inspect" onClick={(e) => e.stopPropagation()}>
+            <h3><Icon name="book" size={17} /> Elegí una carta</h3>
+            <p className="muted" style={{ marginTop: 2 }}>{state.choice.prompt}</p>
+            <div className="target-list">
+              {state.choice.options.map((o) => (
+                <button
+                  key={o.i}
+                  className="ghost"
+                  disabled={state.choice!.kind === "reveal_land" && !o.is_land}
+                  onClick={() => doAct("choose", { index: o.i })}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <Icon name={o.is_land ? "land" : "cards"} size={13} />
+                  {o.name}
+                  {state.choice!.kind === "reveal_land" && !o.is_land ? <span className="muted"> · al cementerio</span> : null}
+                </button>
+              ))}
+            </div>
+            {state.choice.allow_none && (
+              <div className="act-block" style={{ marginTop: 10 }}>
+                <button className="ghost" onClick={() => doAct("choose", { index: null })}>
+                  No quedarme con ninguna
                 </button>
               </div>
             )}

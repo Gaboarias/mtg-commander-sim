@@ -424,6 +424,10 @@ class Game:
         # registro de habilidades que se activaron (para el resumen de la partida):
         # {turn, controller, card, kind}. No crea pasos en la traza.
         self.ability_events: list = []
+        # decisión pendiente del humano (juego interactivo): el motor pausa un
+        # efecto que requiere elegir (revelar, etc.) hasta resolve_choice().
+        self.interactive_human = None
+        self.pending_choice = None
         for p in players:
             p.setup(self.rng)
         if mulligan:

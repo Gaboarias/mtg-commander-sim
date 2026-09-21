@@ -475,6 +475,39 @@ def test_reveal_keep_land_etb_is_visible():
     assert any("revela" in ln for ln in g.log_lines)   # quedó registrado
 
 
+def test_reveal_land_human_choice_pauses_and_resolves():
+    # Para el humano interactivo, el efecto NO elige solo: deja una decisión
+    # pendiente con las cartas reveladas, y resolve_choice aplica lo elegido.
+    import cardsdb
+    import cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Scout", "type_line": "Creature", "mana_cost": "{2}{G}",
+        "power": "2", "toughness": "2", "color_identity": ["G"],
+        "oracle_text": ("When this creature enters, reveal the top four cards of your "
+                        "library. You may put a land card from among them into your hand. "
+                        "Put the rest into your graveyard.")})
+    lib = ([cards.land("Forest", ["G"], basic=True) for _ in range(30)]
+           + [cards.creature("Bear", "1G", 2, 2) for _ in range(30)])
+    me = Player("yo", lib, cards.creature("Cmd", "2G", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Swamp", ["B"], basic=True) for _ in range(60)],
+                cards.creature("C", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=4)
+    g.interactive_human = me            # simulamos que el humano controla a "me"
+    bh, bg = len(me.hand), len(me.graveyard)
+    g.move_to_battlefield(c, me)
+    # nada movido todavía: la decisión quedó pendiente
+    assert g.pending_choice is not None
+    assert len(me.hand) == bh and len(me.graveyard) == bg
+    opts = g.pending_choice["options"]
+    assert len(opts) == 4
+    land_i = next(o["i"] for o in opts if o["is_land"])
+    g.pending_choice["_apply"](land_i)  # el humano se queda con una tierra
+    g.pending_choice = None
+    assert len(me.hand) - bh == 1
+    assert len(me.graveyard) - bg == 3
+
+
 def test_activated_ability_pays_mana():
     # Habilidad activada "{2}{R}: deals 2 damage to each opponent": debe parsearse
     # y, al activarla, pagar el maná y aplicar el efecto.

@@ -436,8 +436,8 @@ def _generic_amount_effect(oracle: str):
             game.log(f"{ctrl.name} recupera {pick.name} del cementerio a la mano")
         return eff
 
-    # revelar las primeras N: quedarse una tierra en la mano, el resto al
-    # cementerio (la elección la hace el sistema, pero queda REGISTRADA y visible).
+    # revelar las primeras N: quedarse una tierra en la mano, el resto al cementerio.
+    # El HUMANO elige a mano (decisión pendiente); los bots eligen automático.
     m = re.search(r"(?:reveal|look at) the top (\w+) cards?.{0,140}?land card.{0,50}?hand", t)
     if m and (n := _count_word(m.group(1))):
         def eff(game, ctrl, *_a, _n=min(n, 8)):
@@ -445,15 +445,31 @@ def _generic_amount_effect(oracle: str):
             for _ in range(_n):
                 if ctrl.library:
                     revealed.append(ctrl.library.pop())
-            land = next((c for c in revealed if c.is_land()), None)
-            for c in revealed:
-                if c is not land:
-                    ctrl.graveyard.append(c)
-            if land:
-                ctrl.hand.append(land)
-            shown = ", ".join(c.name for c in revealed) or "nada"
-            kept = land.name if land else "ninguna tierra"
-            game.log(f"{ctrl.name} revela {shown} — se queda con {kept}, el resto al cementerio")
+            if not revealed:
+                return
+
+            def _apply(idx, _rev=revealed):
+                keep = None
+                if idx is not None and 0 <= idx < len(_rev) and _rev[idx].is_land():
+                    keep = _rev[idx]
+                for c in _rev:
+                    (ctrl.hand if c is keep else ctrl.graveyard).append(c)
+                shown = ", ".join(c.name for c in _rev)
+                game.log(f"{ctrl.name} revela {shown} — se queda con "
+                         f"{keep.name if keep else 'ninguna tierra'}, el resto al cementerio")
+
+            if ctrl is getattr(game, "interactive_human", None):
+                game.pending_choice = {
+                    "kind": "reveal_land",
+                    "prompt": "Elegí una tierra para tu mano (el resto va al cementerio)",
+                    "options": [{"i": i, "name": c.name, "is_land": c.is_land()}
+                                for i, c in enumerate(revealed)],
+                    "allow_none": True,
+                    "_apply": _apply,
+                }
+            else:  # bot: mejor tierra automática
+                land = next((i for i, c in enumerate(revealed) if c.is_land()), None)
+                _apply(land)
         return eff
 
     # "you may draw a card" (opcional, singular): la tomamos y lo registramos.
