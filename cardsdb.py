@@ -169,6 +169,16 @@ def _fragment_effect(seg: str):
     if spec is not None:
         mode, count = spec
         return cards.remove_targets(mode), "opp_creature", max(1, count)
+    # quema a criatura elegida: "deals N damage to (up to M) target creature"
+    mb = re.search(r"deals? (\w+) damage to (?:up to (\w+) )?target creature(?! or player)",
+                   seg, re.I)
+    if mb and (n := _count_word(mb.group(1))):
+        cnt = _count_word(mb.group(2)) if mb.group(2) else 1
+
+        def burn(game, ctrl, targets, _n=n):
+            for tg in (targets or []):
+                game.deal_damage(None, tg, _n)
+        return burn, "opp_creature", max(1, cnt or 1)
     geff = _generic_amount_effect(seg)
     if geff is None:
         dm = re.search(r"draw (\w+) cards?", seg, re.I)
@@ -346,6 +356,20 @@ def _generic_amount_effect(oracle: str):
         def eff(game, ctrl, *_a, _n=n):
             for o in game.opponents(ctrl):
                 game.deal_damage(None, o, _n)
+            game.log(f"{ctrl.name}: {_n} de daño a cada oponente")
+        return eff
+
+    # quema a un objetivo tipo jugador (any target / target player / creature or
+    # player): se la mandamos al rival más débil (auto) y queda VISIBLE en la vida.
+    m = re.search(r"deals? (\w+) damage to (?:any target|target player|"
+                  r"target opponent|target creature or player|target planeswalker or player)", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, *_a, _n=n):
+            opps = game.opponents(ctrl)
+            if opps:
+                tgt = min(opps, key=lambda o: o.life)
+                game.deal_damage(None, tgt, _n)
+                game.log(f"{ctrl.name}: {_n} de daño a {tgt.name}")
         return eff
 
     m = re.search(r"(?:you )?gain (\w+) life", t)

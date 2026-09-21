@@ -429,6 +429,26 @@ def test_modal_spell_choose_one():
     assert len(me.hand) == before + 2
 
 
+def test_burn_to_player_is_visible():
+    # "deals N damage to any target": debe bajar la vida de un rival (visible),
+    # tanto como hechizo suelto como dentro de un modo.
+    import cardsdb
+    import cards
+    from engine import Game, Player
+    bolt = cardsdb.build_card_from_data({
+        "name": "Bolt", "type_line": "Instant", "mana_cost": "{R}",
+        "color_identity": ["R"], "oracle_text": "Bolt deals 3 damage to any target."})
+    assert bolt.on_cast_resolve is not None
+    me = Player("yo", [cards.creature("X", "1G", 1, 1) for _ in range(8)],
+                cards.creature("C", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("Y", "1G", 1, 1) for _ in range(8)],
+                cards.creature("C2", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    life0 = op.life
+    bolt.on_cast_resolve(g, me, [])
+    assert op.life == life0 - 3
+
+
 def test_reveal_keep_land_etb_is_visible():
     # ETB "revela las primeras N, poné una tierra en la mano, el resto al
     # cementerio": debe ejecutarse (elección automática) y quedar en el relato.
