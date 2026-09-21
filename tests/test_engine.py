@@ -345,6 +345,12 @@ def test_interactive_defense_window():
                 json.dumps(st)
                 life0 = st["players"][0]["life"]
                 st2 = ig.resolve_defense([])       # tomo el daño
+                # con varios rivales, al resolver una defensa puede abrirse otra
+                # ventana (otro oponente ataca): resolvemos todas hasta salir.
+                guard = 0
+                while st2["phase"] == "defense" and guard < 10:
+                    st2 = ig.resolve_defense([])
+                    guard += 1
                 assert st2["phase"] in ("main", "over")
                 assert st2["players"][0]["life"] <= life0
                 found = True

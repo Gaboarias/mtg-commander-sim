@@ -342,7 +342,7 @@ def QuintoriusPlaneswalker():
             game.deal_damage(perm, o, 4)
         game.log(f"{ctrl.name}: PW -4 hace 4 a cada oponente")
 
-    return planeswalker("Quintorius, Loremaster", "3RW", 4,
+    return planeswalker("Quintorius Kand", "3RW", 4,
                         ((+1, plus), (-4, ultimate)), (R, W))
 
 

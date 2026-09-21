@@ -354,7 +354,20 @@ def resolve_decks(texts):
             names.add(n)
     if _scry is None or not names:
         return {}
-    return _scry.resolve_many([n for n in names if n])
+    names = [n for n in names if n]
+    data = _scry.resolve_many(names)
+    # Fallback difuso: para los nombres que no matchearon exacto (typos, acentos,
+    # nombre parcial en una lista pegada) intentamos la mejor coincidencia de
+    # Scryfall y la guardamos bajo el nombre original. Cap para no abusar de la API.
+    missing = [n for n in names if _scry._norm(n) not in data]
+    for n in missing[:20]:
+        try:
+            hit = _scry.named_fuzzy(n)
+        except Exception:  # noqa: BLE001
+            hit = None
+        if hit and hit.get("name"):
+            data[_scry._norm(n)] = hit
+    return data
 
 
 def card_info(names):

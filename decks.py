@@ -61,14 +61,14 @@ def lorehold():
     d.append(cards.KarmicGuide())
     d.append(cards.CronistaEspectral())
     d.append(cards.MerodeadorDeTumbas())
-    d.append(cards.anthem("Basalt Banner", "2W", 1, 1, (W,)))  # P2.4 anthem
-    d.append(cards.QuintoriusPlaneswalker())                   # P2.3 planeswalker
-    # criaturas de relleno tematicas
-    d.append(creature("War Historian", "1R", 2, 2, color_id=(R,)))
-    d.append(creature("Lorehold Chronicler", "2W", 2, 3, color_id=(W,)))
-    d.append(creature("Basalt Angel", "3WW", 4, 4, kw=("flying",), color_id=(W,)))
-    d.append(creature("Igneous Elemental", "3R", 4, 3, kw=("haste",), color_id=(R,)))
-    d.append(creature("Stone Guardian", "4W", 3, 6, kw=("vigilance",), color_id=(W,)))
+    d.append(cards.anthem("Glorious Anthem", "1WW", 1, 1, (W,)))  # P2.4 anthem
+    d.append(cards.QuintoriusPlaneswalker())                      # P2.3 planeswalker
+    # criaturas de relleno tematicas (nombres reales -> traen ilustracion)
+    d.append(creature("Goblin Cratermaker", "1R", 2, 2, color_id=(R,)))
+    d.append(creature("Seasoned Hallowblade", "1W", 3, 2, color_id=(W,)))
+    d.append(creature("Serra Angel", "3WW", 4, 4, kw=("flying",), color_id=(W,)))
+    d.append(creature("Flametongue Kavu", "3R", 4, 3, kw=("haste",), color_id=(R,)))
+    d.append(creature("Wall of Reverence", "4W", 3, 6, kw=("vigilance",), color_id=(W,)))
     # ramp + removal + draw
     d.append(rock("Boros Signet", "2", [R, W]))
     d.append(rock("Arcane Signet", "2", [R, W]))
@@ -84,20 +84,20 @@ def lorehold():
 
 def _boros_removal():
     from engine import Card, parse_cost
-    return Card("Angelic Justice", {"instant"}, parse_cost("1W"),
+    return Card("Swords to Plowshares", {"instant"}, parse_cost("W"),
                 on_cast_resolve=cards.destroy_target, tags={"removal"},
                 color_id={W}, target_spec="opp_creature")
 
 
 def _boros_wipe():
     from engine import Card, parse_cost
-    return Card("Purifying Blaze", {"sorcery"}, parse_cost("2RW"),
+    return Card("Blasphemous Act", {"sorcery"}, parse_cost("2RW"),
                 on_cast_resolve=cards.wrath, tags={"wipe"}, color_id={R, W})
 
 
 def _lorehold_draw():
     from engine import Card, parse_cost
-    return Card("Ancient Wisdom", {"sorcery"}, parse_cost("2R"),
+    return Card("Tormenting Voice", {"sorcery"}, parse_cost("1R"),
                 on_cast_resolve=cards.draw_n(2), tags={"draw"}, color_id={R})
 
 
@@ -113,10 +113,10 @@ def tricky():
     d.append(cards.SimicAscendancy())
     d.append(cards.BranchingEvolution())
     d.append(cards.HardenedScales())
-    d.append(creature("Simic Explorer", "1G", 2, 1, color_id=(G,)))
-    d.append(creature("Tidal Mystic", "1U", 1, 3, color_id=(U,)))
-    d.append(creature("Moss Hydra", "3G", 3, 3, kw=("trample",), color_id=(G,)))
-    d.append(creature("Kraken Serpent", "4U", 5, 5, color_id=(U,)))
+    d.append(creature("Sylvan Advocate", "1G", 2, 1, color_id=(G,)))
+    d.append(creature("Sea Gate Oracle", "1U", 1, 3, color_id=(U,)))
+    d.append(creature("Kavu Titan", "3G", 3, 3, kw=("trample",), color_id=(G,)))
+    d.append(creature("Frost Titan", "4U", 5, 5, color_id=(U,)))
     d.append(rock("Simic Signet", "2", [G, U]))
     d.append(rock("Sol Ring", "1", [C, C]))
     d.append(cards.Counterspell())        # P2.1 instantaneo de respuesta
@@ -154,17 +154,17 @@ def kang():
     d.append(cards.GoForTheThroat())
     d.append(cards.NightsWhisper())
     d.append(cards.DamnationWipe())
-    d.append(creature("Shadow Acolyte", "1B", 2, 1, kw=("deathtouch",), color_id=(B,)))
-    d.append(creature("Nightfall Vampire", "2B", 3, 2, kw=("flying", "lifelink"), color_id=(B,)))
-    d.append(creature("Pit Horror", "3B", 4, 3, kw=("menace",), color_id=(B,)))
-    d.append(creature("Lesser Demon", "4BB", 5, 5, kw=("flying",), color_id=(B,)))
-    d.append(creature("Soul Reaper", "2BB", 3, 4, kw=("deathtouch",), color_id=(B,)))
-    d.append(creature("Stealthy Thief", "1B", 2, 2, kw=("menace",), color_id=(B,)))
+    d.append(creature("Gifted Aetherborn", "1B", 2, 1, kw=("deathtouch",), color_id=(B,)))
+    d.append(creature("Vampire Nighthawk", "2B", 3, 2, kw=("flying", "lifelink"), color_id=(B,)))
+    d.append(creature("Ravenous Chupacabra", "3B", 4, 3, kw=("menace",), color_id=(B,)))
+    d.append(creature("Archfiend of Depravity", "4BB", 5, 5, kw=("flying",), color_id=(B,)))
+    d.append(creature("Sengir Vampire", "2BB", 3, 4, kw=("deathtouch",), color_id=(B,)))
+    d.append(creature("Dusk Legion Zealot", "1B", 2, 2, kw=("menace",), color_id=(B,)))
     d.append(rock("Dimir Signet", "2", [U, B]))
     d.append(rock("Jet Medallion", "2", [B]))
     d.append(rock("Sol Ring", "1", [C, C]))
     d.append(cards.NightsWhisper())
-    d.append(land("Gloomy Caverns", [B], tapped=True))
+    d.append(land("Barren Moor", [B], tapped=True))
     return _fill(d, commander.identity()), commander
 
 
@@ -187,21 +187,28 @@ DECKS = {
 
 def strixhaven():
     deck, _cmd = lorehold()          # reutiliza los 99 R/W
-    commander = creature("Strixhaven Dean", "2RW", 3, 4, legendary=True,
-                         kw=("vigilance",), tags=("engine",), color_id=(R, W))
+    commander = creature("Feather, the Redeemed", "1RRW", 3, 4, legendary=True,
+                         kw=("flying",), tags=("engine",), color_id=(R, W))
     return deck, commander
 
 
 def old_guard():
     deck, _cmd = tricky()            # reutiliza los 99 G/U
-    commander = creature("Old Guard Sentinel", "2GU", 3, 4,
-                         legendary=True, kw=("trample",), tags=("engine",),
-                         color_id=(G, U))
+    commander = creature("Kinnan, Bonder Prodigy", "1GU", 2, 2,
+                         legendary=True, tags=("engine",), color_id=(G, U))
+    return deck, commander
+
+
+def marvel():
+    deck, _cmd = kang()              # reutiliza los 99 mono-B
+    commander = creature("Sheoldred, the Apocalypse", "2BB", 4, 5,
+                         legendary=True, kw=("deathtouch",), tags=("engine",),
+                         color_id=(B,))
     return deck, commander
 
 
 DECKS["strixhaven"] = strixhaven
-DECKS["marvel"] = kang
+DECKS["marvel"] = marvel
 DECKS["old-guard"] = old_guard
 
 EXAMPLES = ["strixhaven", "marvel", "old-guard"]
