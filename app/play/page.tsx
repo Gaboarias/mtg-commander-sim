@@ -24,6 +24,7 @@ type Legal = {
   casts: CastOpt[];
   attackers: { uid: number; name: string; power: number; toughness: number }[];
   activatables: Activatable[];
+  attack_targets: { index: number; name: string; life: number }[];
   can_attack: boolean; can_end: boolean;
 };
 type CardInfo = { art?: string; type?: string; oracle?: string };
@@ -68,7 +69,7 @@ def act(kind, arg_json):
     g = _IG['g']; a = json.loads(arg_json or '{}')
     if kind == 'land': g.play_land(a['i'])
     elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'), a.get('target_uids'))
-    elif kind == 'attack': g.attack(a.get('uids', []))
+    elif kind == 'attack': g.attack(a.get('uids', []), a.get('target'))
     elif kind == 'end': g.end_turn()
     elif kind == 'activate': g.activate(a.get('uid'), a.get('index', 0))
     elif kind == 'respond': g.respond(a.get('i'), a.get('target_uids'))
@@ -94,6 +95,7 @@ export default function Play() {
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<GameState | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());  // atacantes elegidos
+  const [atkTarget, setAtkTarget] = useState<number | null>(null); // rival a atacar
   const [art, setArt] = useState<Record<string, string>>({});
   const [info, setInfo] = useState<Record<string, CardInfo>>({});
   const [inspect, setInspect] = useState<Inspect | null>(null);
@@ -604,7 +606,21 @@ export default function Play() {
                 )}
 
                 <div className="act-block">
-                  <button className="go" onClick={() => doAct("attack", { uids: [...picked] })}
+                  {(legal?.attack_targets?.length || 0) > 1 && (
+                    <label className="muted" style={{ fontSize: ".82rem" }}>
+                      Atacar a:{" "}
+                      <select value={atkTarget ?? legal!.attack_targets[0].index}
+                        onChange={(e) => setAtkTarget(Number(e.target.value))}>
+                        {legal!.attack_targets.map((t) => (
+                          <option key={t.index} value={t.index}>{t.name} ({t.life}♥)</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <button className="go" onClick={() => doAct("attack", {
+                    uids: [...picked],
+                    target: atkTarget ?? legal?.attack_targets?.[0]?.index,
+                  })}
                     disabled={!legal?.can_attack || picked.size === 0}>
                     ⚔ Atacar {picked.size > 0 ? `(${picked.size})` : ""}
                   </button>
@@ -612,8 +628,9 @@ export default function Play() {
                 </div>
                 <p className="muted" style={{ fontSize: ".8rem" }}>
                   Tocá una carta para ver sus habilidades. Elegí criaturas tocándolas
-                  en tu tablero para atacar. Cuando un rival te ataque, los bloqueos los
-                  decide tu deck automáticamente (por ahora).
+                  en tu tablero para atacar y, si hay más de un rival, a quién atacar.
+                  Cuando un rival te ataque, vos elegís los bloqueos y podés responder
+                  con instantáneos.
                 </p>
               </div>
             );

@@ -401,3 +401,21 @@ ul.abil li { margin: 5px 0; line-height: 1.35; }
 .target-list .ghost { text-align: left; }
 
 .target-list .ghost.on { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(216,178,58,.5); color: var(--text); }
+
+/* ---- responsive / mobile ---- */
+@media (max-width: 640px) {
+  .wrap { padding: 24px 16px 72px; }        /* gutter 16px, sin scroll horizontal */
+  /* tablas (editor de decks): scroll horizontal en vez de romper el layout */
+  .card table { display: block; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+  /* selector de decks (home) y grillas: más angostas */
+  .decks { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+  /* /play: acciones y defensa apiladas, paddings menores */
+  .act-block { gap: 6px; }
+  .act-block .pw-ab { max-width: 100%; }
+  .blk-row { max-width: 100%; }
+  .hand { gap: 8px; }
+  .inspect { max-width: 100%; }
+  /* la curva del análisis no debe desbordar */
+  .curve { overflow-x: auto; }
+  header h1 { font-size: 1.6rem; }
+}

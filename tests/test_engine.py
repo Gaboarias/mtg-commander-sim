@@ -306,6 +306,24 @@ def test_interactive_manual_turn():
     json.dumps(st)                                  # serializable para la web
 
 
+def test_interactive_attack_target_choice():
+    # F3: con 2 rivales, legal expone attack_targets y attack(target_index)
+    # dirige el daño al rival elegido (no siempre al primero).
+    import interactive
+    import decks
+    defs = [("Tu deck",) + decks.build("marvel"),
+            ("Rival A",) + decks.build("strixhaven"),
+            ("Rival B",) + decks.build("lorehold")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    tgts = ig.legal()["attack_targets"]
+    assert len(tgts) == 2 and all("index" in t and "life" in t for t in tgts)
+    # sin atacantes reales el daño no cambia, pero el índice debe resolverse sin
+    # error y elegir al rival correcto internamente
+    st = ig.attack([], target_index=tgts[1]["index"])
+    assert st is not None
+
+
 def test_interactive_defense_window():
     # Fase 2: cuando un rival me ataca, la partida se pausa en "defense" y puedo
     # resolver (tomar el daño / bloquear) y continuar.

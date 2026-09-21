@@ -369,8 +369,9 @@ class InteractiveGame:
             self.g.sba()
         return self.state()
 
-    def attack(self, uids):
-        """Declara atacantes (todos contra el primer rival vivo, MVP)."""
+    def attack(self, uids, target_index=None):
+        """Declara atacantes contra el rival elegido (por índice de jugador).
+        Si no se indica, ataca al primer rival vivo."""
         if not self._my_turn() or self.attacked:
             return self.state()
         p = self.human()
@@ -378,6 +379,11 @@ class InteractiveGame:
         if not foes:
             return self.state()
         target = foes[0]
+        if target_index is not None:
+            for f in foes:
+                if self.players.index(f) == int(target_index):
+                    target = f
+                    break
         self.g._begin_combat(p)
         chosen = []
         for uid in (uids or []):
@@ -450,8 +456,13 @@ class InteractiveGame:
                                        "text": texts[i] if i < len(texts) else ""}
                                       for i, (cost, _e) in enumerate(pm.card.loyalty_abilities)],
                     })
+        atk_targets = []
+        if self._my_turn() and not self.attacked:
+            for f in self.g.opponents(p):
+                atk_targets.append({"index": self.players.index(f),
+                                    "name": f.name, "life": f.life})
         return {"lands": lands, "casts": casts, "attackers": attackers,
-                "activatables": activatables,
+                "activatables": activatables, "attack_targets": atk_targets,
                 "can_attack": self._my_turn() and not self.attacked,
                 "can_end": self._my_turn()}
 
