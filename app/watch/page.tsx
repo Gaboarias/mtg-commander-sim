@@ -15,10 +15,12 @@ type MatchSpec =
 type Pickable = { id: string; label: string; tag: string; spec: MatchSpec; mine: boolean };
 type Step = { turn: number; active: number; label: string; stack: string[]; players: PlayerState[] };
 type KeyPlay = { turn: number; label: string; why?: string; delta?: number; step: number };
+type AbilityGroup = { card: string; controller: string | null; count: number; turns: number[]; kinds: string[]; step: number };
 type MatchAnalysis = {
   win_type: string; summary: string;
   key_plays: KeyPlay[]; best_moves: KeyPlay[];
   mistakes: { player: string; note: string }[]; chain: KeyPlay[];
+  abilities?: AbilityGroup[];
 };
 type Replay = { players: string[]; winner: string; turns: number; steps: Step[]; log?: string[]; analysis?: MatchAnalysis; images: Record<string, string> };
 type Combo = { id: string; cards: string[]; produces: string[] };
@@ -335,6 +337,27 @@ export default function Watch() {
                 {replay.analysis.chain.map((k, i) => (
                   <button key={i} className="play-line" onClick={() => { setPlaying(false); setIdx(k.step); }}>
                     <span className="pl-turn">T{k.turn}</span> {k.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {(replay.analysis.abilities?.length || 0) > 0 && (
+            <>
+              <h3 style={{ fontSize: ".95rem" }}>Habilidades que se activaron</h3>
+              <p className="muted" style={{ marginTop: -4, fontSize: ".8rem" }}>
+                Qué carta activó qué, y en qué turnos. Tocá una para saltar el tablero.
+              </p>
+              <div className="plays" style={{ maxHeight: 240 }}>
+                {replay.analysis.abilities!.map((a, i) => (
+                  <button key={i} className="play-line" onClick={() => { setPlaying(false); setIdx(a.step); }}
+                    title={a.controller ? `Controlada por ${a.controller}` : undefined}>
+                    <b>{a.card}</b>
+                    <span className="muted"> — {a.kinds.join(" · ")}</span>
+                    {a.count > 1 ? <span className="muted"> ×{a.count}</span> : null}
+                    <span className="pl-turn" style={{ marginLeft: 6 }}>
+                      T{a.turns.slice(0, 6).join(", T")}{a.turns.length > 6 ? "…" : ""}
+                    </span>
                   </button>
                 ))}
               </div>

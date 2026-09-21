@@ -391,6 +391,16 @@ class StackObject:
 
 class Game:
     SELF_SCOPED = {"upkeep", "end_step", "draw", "landfall", "cast", "begin_combat"}
+    # descripción amigable de cada evento, para el resumen de habilidades
+    EVENT_KIND = {
+        "etb": "cuando algo entra al campo", "landfall": "al jugar una tierra",
+        "attacks": "al atacar", "death": "cuando muere una criatura",
+        "to_graveyard": "cuando algo va al cementerio",
+        "leaves_graveyard": "cuando algo deja el cementerio",
+        "upkeep": "en tu mantenimiento", "end_step": "al final del turno",
+        "cast": "cuando lanzás un hechizo", "draw": "al robar",
+        "begin_combat": "al empezar el combate",
+    }
 
     def __init__(self, players: list, seed: int = 0, max_turns: int = 60,
                  log: bool = False, mulligan: bool = False, trace: bool = False):
@@ -405,6 +415,9 @@ class Game:
         self._in_priority = False    # evita recursion al lanzar en respuesta
         self.trace_enabled = trace   # graba snapshots del estado (replay visual)
         self.trace: list = []
+        # registro de habilidades que se activaron (para el resumen de la partida):
+        # {turn, controller, card, kind}. No crea pasos en la traza.
+        self.ability_events: list = []
         for p in players:
             p.setup(self.rng)
         if mulligan:
@@ -444,6 +457,18 @@ class Game:
         if nonlands:
             return max(nonlands, key=lambda c: c.cost.cmc if c.cost else 0)
         return p.hand[0]
+
+    # -- registro de habilidades activadas (resumen) ---------------------- #
+    def note_ability(self, card, kind: str, controller=None):
+        """Anota que se activó una habilidad de `card` (kind = descripción corta
+        del disparo: 'entra al campo', 'al morir una criatura', 'lealtad +1'...)."""
+        name = getattr(card, "name", None)
+        if not name:
+            return
+        who = getattr(controller, "name", None)
+        self.ability_events.append({
+            "turn": self.turn, "controller": who, "card": name, "kind": kind,
+        })
 
     # -- logging ---------------------------------------------------------- #
     def log(self, msg: str):
@@ -578,6 +603,8 @@ class Game:
                     source=perm,
                     label=f"trigger:{event}:{perm.name}",
                 ))
+                self.note_ability(perm.card, self.EVENT_KIND.get(event, event),
+                                  controller=pl)
 
     def resolve_stack(self):
         """Vacia la pila en orden LIFO."""
@@ -613,6 +640,7 @@ class Game:
             perm.counters["loyalty"] = card.loyalty
         player.battlefield.append(perm)
         if card.on_etb:
+            self.note_ability(card, "entra al campo", controller=player)
             card.on_etb(self, player, perm)
         self.emit("etb", player=player, perm=perm)
         if card.is_land():
@@ -761,6 +789,7 @@ class Game:
                 g.move_to_battlefield(card, player)
             elif {"instant", "sorcery"} & card.types:
                 if card.on_cast_resolve:
+                    g.note_ability(card, "resuelve su efecto", controller=player)
                     card.on_cast_resolve(g, player, targets or [])
                 player.graveyard.append(card)
                 g.emit("to_graveyard", player=player, card=card)
@@ -826,6 +855,7 @@ class Game:
         perm.activated_this_turn = True
         self.log(f"{perm.controller.name}: {perm.name} activa {cost:+d} "
                  f"(lealtad {perm.counters['loyalty']})")
+        self.note_ability(perm.card, f"lealtad {cost:+d}", controller=perm.controller)
         if eff:
             eff(self, perm.controller, perm)
         self.sba()

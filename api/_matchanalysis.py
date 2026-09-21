@@ -25,12 +25,13 @@ def _by_name(players):
     return {p["name"]: p for p in players}
 
 
-def analyze(trace, winner, players):
+def analyze(trace, winner, players, ability_events=None):
     names = [p.name for p in players]
     steps = trace or []
     if not steps:
         return {"win_type": "?", "summary": "Sin datos de la partida.",
-                "key_plays": [], "best_moves": [], "mistakes": [], "chain": []}
+                "key_plays": [], "best_moves": [], "mistakes": [], "chain": [],
+                "abilities": []}
 
     final = steps[-1]["players"]
     fmap = _by_name(final)
@@ -106,6 +107,36 @@ def analyze(trace, winner, players):
         if casts == 0 and maxturn >= 2:
             mistakes.append({"player": n, "note": "no llegó a desplegar su plan"})
 
+    # --- habilidades que se activaron (agrupadas por carta) ---
+    turn_to_step = {}
+    for i, s in enumerate(steps):
+        turn_to_step.setdefault(s["turn"], i)
+    groups = {}
+    order = []
+    for ev in (ability_events or []):
+        cardn = ev.get("card")
+        if not cardn:
+            continue
+        g = groups.get(cardn)
+        if g is None:
+            g = {"card": cardn, "controller": ev.get("controller"),
+                 "count": 0, "turns": set(), "kinds": []}
+            groups[cardn] = g
+            order.append(cardn)
+        g["count"] += 1
+        g["turns"].add(ev.get("turn", 0))
+        if ev.get("kind") and ev["kind"] not in g["kinds"]:
+            g["kinds"].append(ev["kind"])
+    abilities = []
+    for cardn in order:
+        g = groups[cardn]
+        tsorted = sorted(g["turns"])
+        abilities.append({"card": g["card"], "controller": g["controller"],
+                          "count": g["count"], "turns": tsorted,
+                          "kinds": g["kinds"], "step": turn_to_step.get(tsorted[0], 0)})
+    abilities.sort(key=lambda x: (-x["count"], x["card"]))
+    abilities = abilities[:30]
+
     # --- encadenamiento: key plays de los últimos ~4 turnos ---
     chain = [k for k in sorted(key, key=lambda k: k.get("step", 0))
              if k["turn"] >= max(1, turns - 3)]
@@ -121,4 +152,4 @@ def analyze(trace, winner, players):
 
     return {"win_type": win_type, "summary": summary,
             "key_plays": key, "best_moves": best,
-            "mistakes": mistakes, "chain": chain}
+            "mistakes": mistakes, "chain": chain, "abilities": abilities}

@@ -411,7 +411,8 @@ def replay(specs, seed=0, level="intermedio"):
         "turns": g.turn,
         "steps": g.trace,
         "log": list(g.log_lines),      # relato completo (líneas T-prefijadas)
-        "analysis": _matchanalysis.analyze(g.trace, winner, players),
+        "analysis": _matchanalysis.analyze(g.trace, winner, players,
+                                           getattr(g, "ability_events", None)),
         "images": _card_images(names),
     }
 
