@@ -157,6 +157,51 @@ def _targeted_spell(oracle: str):
     return None
 
 
+def _short_label(s, n=52):
+    s = re.sub(r"\s+", " ", (s or "")).strip()
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
+def _parse_modes(oracle: str):
+    """Detecta un hechizo modal ('Choose one/two — ...') y devuelve
+    (list[{label, effect, target_spec, target_count}], cuántos_elegir) o None.
+    Cada modo se parsea con los mismos helpers que un hechizo suelto."""
+    if not oracle:
+        return None
+    m = re.search(r"choose (one|two|up to \w+)\s*[—\-–]\s*(.+)", oracle, re.I | re.S)
+    if not m:
+        return None
+    pick = 2 if "two" in m.group(1).lower() else 1
+    body = m.group(2)
+    parts = None
+    for pat in (r"\s*•\s*", r"\s*;\s*or\s+", r"\s*\n\s*"):  # bullets, "; or", saltos
+        cand = [p.strip(" .\n") for p in re.split(pat, body) if p.strip(" .\n")]
+        if len(cand) >= 2:
+            parts = cand
+            break
+    if not parts:
+        return None
+    modes = []
+    for seg in parts[:4]:
+        spec = _targeted_spell(seg)
+        if spec is not None:
+            mode, count = spec
+            modes.append({"label": _short_label(seg), "effect": cards.remove_targets(mode),
+                          "target_spec": "opp_creature", "target_count": max(1, count)})
+            continue
+        geff = _generic_amount_effect(seg)
+        if geff is None:  # "draw N cards" no lo cubre _generic_amount_effect
+            dm = re.search(r"draw (\w+) cards?", seg, re.I)
+            n = _count_word(dm.group(1)) if dm else None
+            if n:
+                geff = cards.draw_n(n)
+        modes.append({"label": _short_label(seg), "effect": geff,
+                      "target_spec": None, "target_count": 1})
+    if not any(md["effect"] for md in modes):
+        return None
+    return modes, pick
+
+
 def _count_word(w):
     """Palabra o dígito -> int, o None."""
     w = (w or "").strip().lower()
@@ -331,9 +376,24 @@ def build_card_from_data(data: dict) -> Card:
         card.loyalty_abilities = abils
         card.loyalty_texts = texts
 
+    # hechizo MODAL ("Choose one — ...): construir la lista de modos para que el
+    # jugador elija. Se cablea antes que la remoción/genérica para no aplanarlo.
+    if {"instant", "sorcery"} & types:
+        modal = _parse_modes(data.get("oracle_text", ""))
+        if modal is not None:
+            modes, pick = modal
+            card.modes = tuple(modes)
+            card.mode_pick = pick
+            for md in modes:
+                if md.get("target_spec"):
+                    card.target_spec = md["target_spec"]
+                    card.target_count = md.get("target_count", 1)
+                    break
+            card.tags = card.tags | {"modal"}
+
     # remoción / bounce DIRIGIDA (instantáneo o conjuro): dejar elegir objetivos.
     # Se cablea ANTES de la capa genérica para que no la reemplace.
-    if {"instant", "sorcery"} & types:
+    if {"instant", "sorcery"} & types and not card.modes:
         spec = _targeted_spell(data.get("oracle_text", ""))
         if spec is not None:
             mode, count = spec
@@ -346,7 +406,7 @@ def build_card_from_data(data: dict) -> Card:
     # ganancia de vida, mill). Cubre creaturas/hechizos comunes que la capa por
     # tags no modela. No pisa remoción/barrida (más definitorias) ni efectos ya
     # cableados. Se resuelve al entrar (permanentes) o al resolverse (hechizos).
-    if not card.on_cast_resolve and not (card.tags & {"wipe", "removal"}):
+    if not card.on_cast_resolve and not card.modes and not (card.tags & {"wipe", "removal"}):
         geff = _generic_amount_effect(data.get("oracle_text", ""))
         if geff is not None:
             if {"instant", "sorcery"} & types:

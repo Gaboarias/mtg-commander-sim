@@ -403,6 +403,32 @@ def test_imported_removal_is_targeted():
     assert "A" not in names and "B" not in names and "Keep" in names
 
 
+def test_modal_spell_choose_one():
+    # Un hechizo modal "Choose one — ...": debe exponer los modos y resolver el
+    # modo elegido (destruir un objetivo, o robar), no aplanarse a uno solo.
+    import cardsdb
+    import cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Test Charm", "type_line": "Instant", "mana_cost": "{1}{R}",
+        "color_identity": ["R"],
+        "oracle_text": "Choose one —\n• Destroy target creature.\n• Draw two cards."})
+    assert len(c.modes) == 2 and c.mode_pick == 1
+    assert c.modes[0]["target_spec"] == "opp_creature" and c.modes[0]["effect"]
+    assert c.modes[1]["effect"] and c.modes[1]["target_spec"] is None
+    me = Player("yo", [cards.creature("X", "1G", 1, 1) for _ in range(10)],
+                cards.creature("C", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Swamp", ["B"], basic=True) for _ in range(99)],
+                cards.creature("C2", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    victim = g.move_to_battlefield(cards.creature("Victim", "1B", 2, 2), op)
+    c.modes[0]["effect"](g, me, [victim])              # modo 0: destruir
+    assert "Victim" not in [p.name for p in op.creatures()]
+    before = len(me.hand)
+    c.modes[1]["effect"](g, me, [])                    # modo 1: robar 2
+    assert len(me.hand) == before + 2
+
+
 def test_imported_planeswalker_loyalty_and_abilities():
     # Un planeswalker importado debe ENTRAR con su lealtad (no morir a SBA) y
     # exponer sus habilidades con texto + efecto aproximado.

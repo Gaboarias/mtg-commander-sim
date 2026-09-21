@@ -20,7 +20,8 @@ type HandCard = {
 };
 type Activatable = { uid: number; name: string; loyalty: number; abilities: { i: number; cost: number; text?: string }[] };
 type TargetOpt = { uid?: number; idx?: number; name: string; power?: number; toughness?: number; from?: string };
-type CastOpt = { i?: number; name: string; zone: string; cost: string; tax?: number; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] };
+type ModeOpt = { i: number; label: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] };
+type CastOpt = { i?: number; name: string; zone: string; cost: string; tax?: number; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number };
 type Legal = {
   lands: { i: number; name: string }[];
   casts: CastOpt[];
@@ -39,7 +40,7 @@ type Combat = {
   from: string; incoming_damage: number;
   attackers: CombatAtk[];
   blockers: { uid: number; name: string; power: number; toughness: number }[];
-  responses: { i: number; name: string; cost: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] }[];
+  responses: { i: number; name: string; cost: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number }[];
 };
 type Mulligan = { mulls: number; to_bottom: number; lands: number };
 type GameState = {
@@ -70,11 +71,11 @@ def new_game(specs_json, datamap_json, seed, level):
 def act(kind, arg_json):
     g = _IG['g']; a = json.loads(arg_json or '{}')
     if kind == 'land': g.play_land(a['i'])
-    elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'), a.get('target_uids'))
+    elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'), a.get('target_uids'), a.get('mode'))
     elif kind == 'attack': g.attack(a.get('uids', []), a.get('target'))
     elif kind == 'end': g.end_turn()
     elif kind == 'activate': g.activate(a.get('uid'), a.get('index', 0))
-    elif kind == 'respond': g.respond(a.get('i'), a.get('target_uids'))
+    elif kind == 'respond': g.respond(a.get('i'), a.get('target_uids'), a.get('mode'))
     elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
     elif kind == 'mulligan': g.mulligan()
     elif kind == 'keep': g.keep(a.get('bottom', []))
@@ -103,7 +104,8 @@ export default function Play() {
   const [inspect, setInspect] = useState<Inspect | null>(null);
   const infoReq = useRef<Set<string>>(new Set());  // nombres ya pedidos
   const [assign, setAssign] = useState<Record<number, number>>({});  // bloqueador -> atacante
-  const [targeting, setTargeting] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; targets: TargetOpt[]; count: number } | null>(null);
+  const [targeting, setTargeting] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; targets: TargetOpt[]; count: number; mode?: number } | null>(null);
+  const [modePick, setModePick] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; modes: ModeOpt[] } | null>(null);
   const [tsel, setTsel] = useState<number[]>([]);  // objetivos elegidos (multi)
   const [bottom, setBottom] = useState<number[]>([]);  // cartas al fondo tras mulligan
 
@@ -290,26 +292,43 @@ export default function Play() {
     });
   }
 
-  // lanzar: si la carta necesita objetivo y hay opciones, abrir el selector
+  // lanzar: si es modal, elegir modo; si necesita objetivo, abrir el selector
   function castCard(c: CastOpt) {
-    if (c.target_spec && c.targets && c.targets.length > 0) {
+    if (c.modes && c.modes.length > 0) {
+      setModePick({ kind: "cast", i: c.i, zone: c.zone, name: c.name, modes: c.modes });
+    } else if (c.target_spec && c.targets && c.targets.length > 0) {
       setTsel([]);
       setTargeting({ kind: "cast", i: c.i, zone: c.zone, name: c.name, targets: c.targets, count: c.target_count || 1 });
     } else {
       doAct("cast", { i: c.i, zone: c.zone });
     }
   }
-  function respondCard(r: { i: number; name: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] }) {
-    if (r.target_spec && r.targets && r.targets.length > 0) {
+  function respondCard(r: { i: number; name: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[] }) {
+    if (r.modes && r.modes.length > 0) {
+      setModePick({ kind: "respond", i: r.i, name: r.name, modes: r.modes });
+    } else if (r.target_spec && r.targets && r.targets.length > 0) {
       setTsel([]);
       setTargeting({ kind: "respond", i: r.i, name: r.name, targets: r.targets, count: r.target_count || 1 });
     } else {
       doAct("respond", { i: r.i });
     }
   }
+  // elegido un modo: si necesita objetivo, encadenar el selector; si no, disparar
+  function chooseMode(m: ModeOpt) {
+    if (!modePick) return;
+    const base = modePick;
+    setModePick(null);
+    if (m.target_spec && m.targets && m.targets.length > 0) {
+      setTsel([]);
+      setTargeting({ kind: base.kind, i: base.i, zone: base.zone, name: `${base.name} — ${m.label}`,
+        targets: m.targets, count: m.target_count || 1, mode: m.i });
+    } else {
+      doAct(base.kind, { i: base.i, zone: base.zone, mode: m.i });
+    }
+  }
   function dispatchTargets(uids: number[]) {
     if (!targeting) return;
-    doAct(targeting.kind, { i: targeting.i, zone: targeting.zone, target_uids: uids });
+    doAct(targeting.kind, { i: targeting.i, zone: targeting.zone, target_uids: uids, mode: targeting.mode });
     setTargeting(null);
     setTsel([]);
   }
@@ -642,6 +661,23 @@ export default function Play() {
             </div>
           </div>
         </>
+      )}
+
+      {modePick && (
+        <div className="inspect-back" onClick={() => setModePick(null)}>
+          <div className="inspect" onClick={(e) => e.stopPropagation()}>
+            <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setModePick(null)}><Icon name="x" size={16} /></button>
+            <h3><Icon name="sparkles" size={17} /> {modePick.name} — elegí un modo</h3>
+            <p className="muted" style={{ marginTop: 2 }}>¿Qué querés que haga?</p>
+            <div className="target-list">
+              {modePick.modes.map((m) => (
+                <button key={m.i} className="ghost" onClick={() => chooseMode(m)} style={{ textAlign: "left" }}>
+                  {m.label}{m.target_spec ? <Icon name="target" size={12} /> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {targeting && (

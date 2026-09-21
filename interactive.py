@@ -228,7 +228,7 @@ class InteractiveGame:
             return legal[:n]
         return self._auto_targets(card)
 
-    def respond(self, i, target_uids=None):
+    def respond(self, i, target_uids=None, mode=None):
         """Lanza un instantáneo / carta con destello desde la mano en defensa."""
         if self.mode != "defense":
             return self.state()
@@ -237,9 +237,14 @@ class InteractiveGame:
             c = me.hand[i]
             fast = ("instant" in c.types) or ("flash" in c.keywords)
             if fast and c.cost is not None and me.can_pay(c.cost):
-                tgt = (self._chosen_targets(c, target_uids)
+                modes = getattr(c, "modes", ())
+                chosen = spec = None
+                if modes and mode is not None and 0 <= mode < len(modes):
+                    chosen = [mode]
+                    spec = modes[mode].get("target_spec")
+                tgt = (self._chosen_targets(c, target_uids, spec=spec)
                        if target_uids else self._auto_targets_def(c))
-                self.g.cast(me, c, targets=tgt)
+                self.g.cast(me, c, targets=tgt, chosen_modes=chosen)
                 self.g.sba()
                 if len(self.g.alive()) <= 1:
                     self.mode = None
@@ -308,9 +313,8 @@ class InteractiveGame:
                     return pm
         return None
 
-    def _targets_for(self, card):
-        """Objetivos legales que el humano puede elegir para `card`."""
-        ts = getattr(card, "target_spec", None)
+    def _targets_for_spec(self, ts):
+        """Objetivos legales que el humano puede elegir para un target_spec."""
         if ts == "opp_creature":
             return [{"uid": pm.uid, "name": pm.name, "power": pm.power,
                      "toughness": pm.toughness, "from": pm.controller.name}
@@ -320,9 +324,26 @@ class InteractiveGame:
                     for k, o in enumerate(self.g.stack)]
         return []
 
-    def _chosen_targets(self, card, target_uids):
-        """Traduce la elección del humano (lista de uids) a `targets` del motor."""
-        ts = getattr(card, "target_spec", None)
+    def _targets_for(self, card):
+        return self._targets_for_spec(getattr(card, "target_spec", None))
+
+    def _modes_for(self, card):
+        """Modos de un hechizo modal para la UI: cada uno con sus objetivos legales."""
+        modes = getattr(card, "modes", ()) or ()
+        out = []
+        for i, m in enumerate(modes):
+            spec = m.get("target_spec")
+            out.append({"i": i, "label": m.get("label", f"Modo {i + 1}"),
+                        "target_spec": spec, "target_count": m.get("target_count", 1),
+                        "targets": self._targets_for_spec(spec)})
+        return out
+
+    def _chosen_targets(self, card, target_uids, spec=None):
+        """Traduce la elección del humano (lista de uids) a `targets` del motor.
+        `spec` fuerza el target_spec (para el modo elegido de un modal)."""
+        ts = spec if spec is not None else getattr(card, "target_spec", None)
+        if ts is None:
+            return []
         if not target_uids:
             return self._auto_targets(card)
         uids = target_uids if isinstance(target_uids, list) else [target_uids]
@@ -347,7 +368,7 @@ class InteractiveGame:
             self.g.sba()
         return self.state()
 
-    def cast(self, i=None, zone="hand", target_uids=None):
+    def cast(self, i=None, zone="hand", target_uids=None, mode=None):
         if not self._my_turn():
             return self.state()
         p = self.human()
@@ -364,8 +385,14 @@ class InteractiveGame:
             if i is not None and 0 <= i < len(p.hand) and not p.hand[i].is_land():
                 card = p.hand[i]
         if card is not None:
+            modes = getattr(card, "modes", ())
+            chosen = spec = None
+            if modes and mode is not None and 0 <= mode < len(modes):
+                chosen = [mode]
+                spec = modes[mode].get("target_spec")
             self.g.cast(p, card, from_command=bool(from_command),
-                        targets=self._chosen_targets(card, target_uids))
+                        targets=self._chosen_targets(card, target_uids, spec=spec),
+                        chosen_modes=chosen)
             self.g.sba()
         return self.state()
 
@@ -432,7 +459,9 @@ class InteractiveGame:
                                   "cost": _cost_str(c),
                                   "target_spec": getattr(c, "target_spec", None),
                                   "target_count": getattr(c, "target_count", 1),
-                                  "targets": self._targets_for(c)})
+                                  "targets": self._targets_for(c),
+                                  "modes": self._modes_for(c),
+                                  "mode_pick": getattr(c, "mode_pick", 1)})
             for c in p.command:
                 pay = None if c.cost is None else Cost(c.cost.generic + p.cmdr_tax,
                                                        c.cost.pips)
@@ -494,6 +523,7 @@ class InteractiveGame:
             "target_spec": getattr(c, "target_spec", None),
             "target_count": getattr(c, "target_count", 1),
             "targets": self._targets_for(c),
+            "modes": self._modes_for(c), "mode_pick": getattr(c, "mode_pick", 1),
         } for i, c in enumerate(me.hand)
             if (("instant" in c.types) or ("flash" in c.keywords))
             and c.cost is not None and me.can_pay(c.cost)]

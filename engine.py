@@ -125,6 +125,9 @@ class Card:
     loyalty_texts: tuple = ()                       # texto legible por habilidad de lealtad
     target_spec: Optional[str] = None              # "opp_creature" | "stack_spell" | None
     target_count: int = 1                          # cuántos objetivos (remoción múltiple)
+    modes: tuple = ()                              # modal "elegí una": cada modo es
+    #   {"label", "effect"(g,ctrl,targets), "target_spec", "target_count"}
+    mode_pick: int = 1                             # cuántos modos elige el jugador
 
     def identity(self) -> set:
         """Identidad de color: explicita si existe, si no se deduce del coste."""
@@ -755,7 +758,7 @@ class Game:
 
     # -- lanzar hechizos -------------------------------------------------- #
     def cast(self, player: "Player", card: Card, from_command: bool = False,
-             targets=None):
+             targets=None, chosen_modes=None):
         cost = card.cost
         # impuesto de comandante
         extra = player.cmdr_tax if from_command else 0
@@ -788,7 +791,16 @@ class Game:
             if card.is_land():  # las tierras no se lanzan, pero por seguridad
                 g.move_to_battlefield(card, player)
             elif {"instant", "sorcery"} & card.types:
-                if card.on_cast_resolve:
+                if card.modes:
+                    picks = chosen_modes if chosen_modes else [0]
+                    for mi in picks:
+                        if 0 <= mi < len(card.modes):
+                            m = card.modes[mi]
+                            g.note_ability(card, f"modo «{m.get('label', '')}»", controller=player)
+                            eff = m.get("effect")
+                            if eff:
+                                eff(g, player, targets or [])
+                elif card.on_cast_resolve:
                     g.note_ability(card, "resuelve su efecto", controller=player)
                     card.on_cast_resolve(g, player, targets or [])
                 player.graveyard.append(card)
