@@ -249,6 +249,24 @@ function CardAdder({ onAdd, placeholder }: { onAdd: (name: string) => void; plac
   );
 }
 
+const COLOR_LABEL: Record<string, string> = {
+  W: "Blanco", U: "Azul", B: "Negro", R: "Rojo", G: "Verde", C: "Incoloro",
+};
+
+// Muestra los colores de maná del mazo como pips (mismo estilo que la home).
+function ColorPips({ colors }: { colors: string[] }) {
+  if (!colors || colors.length === 0) {
+    return <span className="muted">incoloro</span>;
+  }
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, flexWrap: "wrap" }}>
+      {colors.map((c) => (
+        <span key={c} className={`pip pip-${c}`} title={COLOR_LABEL[c] || c}>{c}</span>
+      ))}
+    </span>
+  );
+}
+
 function Tag({ r }: { r: Row }) {
   const map: Record<string, [string, string]> = {
     registry: ["#2f6b3a", "con habilidad"],
@@ -813,7 +831,12 @@ export default function DeckPage() {
                 <tbody>
                   {savedDecks.map((d) => (
                     <tr key={d.id}>
-                      <td>{d.name}</td>
+                      <td>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          {d.name}
+                          {d.colors && d.colors.length > 0 ? <ColorPips colors={d.colors} /> : null}
+                        </span>
+                      </td>
                       <td className="muted">{new Date(d.updatedAt).toLocaleDateString()}</td>
                       <td style={{ whiteSpace: "nowrap" }}>
                         <button className="ghost" style={{ padding: "4px 10px", marginRight: 6 }}
@@ -996,6 +1019,12 @@ export default function DeckPage() {
           ) : (
             <p className="err">Elegí tu comandante en el recuadro de arriba <Icon name="flag" size={13} /></p>
           )}
+          <p style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0" }}>
+            <strong>Colores del mazo:</strong> <ColorPips colors={deckColors()} />
+            <span className="muted" style={{ fontSize: ".8rem" }}>
+              — detectados por el maná de tus cartas{resolved.commander ? " y tu comandante" : ""}
+            </span>
+          </p>
           <p className="muted">
             {totalQty} cartas · {resolved.implemented} con habilidad ya cargada ·{" "}
             {resolved.missing.length} sin encontrar
