@@ -47,7 +47,7 @@ type Combat = {
 };
 type Mulligan = { mulls: number; to_bottom: number; lands: number };
 type ChoiceOpt = { i: number; name: string; is_land?: boolean };
-type Choice = { kind: string; prompt: string; options: ChoiceOpt[]; allow_none: boolean };
+type Choice = { kind: string; prompt: string; options: ChoiceOpt[]; allow_none: boolean; card?: string };
 type GameState = {
   turn: number; active: number; human_index: number; phase: string; attacked: boolean;
   winner: string | null; players: PlayerState[]; legal: Legal; combat: Combat | null;
@@ -748,35 +748,40 @@ export default function Play() {
         </div>
       )}
 
-      {state?.phase === "choose" && state.choice && (
-        <div className="inspect-back">
-          <div className="inspect" onClick={(e) => e.stopPropagation()}>
-            <h3><Icon name="book" size={17} /> Elegí una carta</h3>
-            <p className="muted" style={{ marginTop: 2 }}>{state.choice.prompt}</p>
-            <div className="target-list">
-              {state.choice.options.map((o) => (
-                <button
-                  key={o.i}
-                  className="ghost"
-                  disabled={state.choice!.kind === "reveal_land" && !o.is_land}
-                  onClick={() => doAct("choose", { index: o.i })}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                  <Icon name={o.is_land ? "land" : "cards"} size={13} />
-                  {o.name}
-                  {state.choice!.kind === "reveal_land" && !o.is_land ? <span className="muted"> · al cementerio</span> : null}
-                </button>
-              ))}
-            </div>
-            {state.choice.allow_none && (
-              <div className="act-block" style={{ marginTop: 10 }}>
-                <button className="ghost" onClick={() => doAct("choose", { index: null })}>
-                  No quedarme con ninguna
-                </button>
+      {state?.phase === "choose" && state.choice && (() => {
+        const ch = state.choice;
+        const isCardPick = ch.options.some((o) => o.is_land !== undefined);
+        const title = ch.kind === "scry" ? "Scry" : ch.kind === "surveil" ? "Surveil" : "Elegí una carta";
+        return (
+          <div className="inspect-back">
+            <div className="inspect" onClick={(e) => e.stopPropagation()}>
+              <h3><Icon name="book" size={17} /> {title}</h3>
+              <p className="muted" style={{ marginTop: 2 }}>{ch.prompt}</p>
+              <div className="target-list">
+                {ch.options.map((o) => (
+                  <button
+                    key={o.i}
+                    className="ghost"
+                    disabled={ch.kind === "reveal_land" && !o.is_land}
+                    onClick={() => doAct("choose", { index: o.i })}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <Icon name={isCardPick ? (o.is_land ? "land" : "cards") : "chevron-right"} size={13} />
+                    {o.name}
+                    {ch.kind === "reveal_land" && !o.is_land ? <span className="muted"> · al cementerio</span> : null}
+                  </button>
+                ))}
               </div>
-            )}
+              {ch.allow_none && (
+                <div className="act-block" style={{ marginTop: 10 }}>
+                  <button className="ghost" onClick={() => doAct("choose", { index: null })}>
+                    No quedarme con ninguna
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {inspect && (
         <div className="inspect-back" onClick={() => setInspect(null)}>

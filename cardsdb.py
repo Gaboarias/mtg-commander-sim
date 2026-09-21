@@ -349,6 +349,77 @@ def _planeswalker_abilities(oracle: str):
     return tuple(abilities), tuple(texts)
 
 
+def _scry_surveil_effect(n, to_graveyard, draw_n=0, draw_first=False):
+    """Scry/Surveil N (+ robar opcional). El humano decide carta por carta
+    (arriba / fondo o cementerio) vía pending_choice; los bots usan heurística.
+    Top de la biblioteca = final de la lista (library.pop())."""
+    verb = "Surveil" if to_graveyard else "Scry"
+
+    def eff(game, ctrl, *_a, _n=min(n, 12), _gy=to_graveyard,
+            _dn=draw_n, _df=draw_first):
+        if _df and _dn:
+            ctrl.draw(_dn, game)
+        looked = []
+        for _ in range(_n):
+            if ctrl.library:
+                looked.append(ctrl.library.pop())   # looked[0] = tope
+        if not looked:
+            if (not _df) and _dn:
+                ctrl.draw(_dn, game)
+            return
+        kept = []          # quedan arriba, kept[0] = la más arriba
+        st = {"i": 0}
+
+        def finish():
+            for c in reversed(kept):   # kept[0] vuelve a quedar en el tope
+                ctrl.library.append(c)
+            dest = "cementerio" if _gy else "fondo"
+            moved = len(looked) - len(kept)
+            game.log(f"{ctrl.name} hace {verb} {len(looked)}: "
+                     f"{len(kept)} arriba, {moved} al {dest}")
+            if (not _df) and _dn:
+                ctrl.draw(_dn, game)
+
+        def _apply(choice):
+            c = looked[st["i"]]
+            if choice == 0:                       # dejar arriba
+                kept.append(c)
+            elif _gy:                             # surveil -> cementerio
+                ctrl.graveyard.append(c)
+            else:                                 # scry -> fondo
+                ctrl.library.insert(0, c)
+            st["i"] += 1
+            if st["i"] < len(looked):
+                _prompt()
+            else:
+                finish()
+
+        def _prompt():
+            c = looked[st["i"]]
+            dest = "Al cementerio" if _gy else "Al fondo"
+            game.pending_choice = {
+                "kind": "surveil" if _gy else "scry",
+                "prompt": f"{verb} {len(looked)} — carta {st['i'] + 1} de "
+                          f"{len(looked)}: {c.name}",
+                "card": c.name,
+                "options": [{"i": 0, "name": "Dejar arriba"}, {"i": 1, "name": dest}],
+                "allow_none": False,
+                "_apply": _apply,
+            }
+
+        if ctrl is getattr(game, "interactive_human", None):
+            _prompt()
+        else:  # bot: baja tierras si está inundado; el resto lo deja arriba
+            lands = sum(1 for pm in ctrl.battlefield if pm.card.is_land())
+            for c in looked:
+                if c.is_land() and lands >= 5:
+                    ctrl.graveyard.append(c) if _gy else ctrl.library.insert(0, c)
+                else:
+                    kept.append(c)
+            finish()
+    return eff
+
+
 def _generic_amount_effect(oracle: str):
     """Efecto APROXIMADO con monto, deducido del oracle. Devuelve una función
     eff(game, ctrl, *_) o None. Cubre patrones comunes de creaturas/hechizos que
@@ -392,6 +463,17 @@ def _generic_amount_effect(oracle: str):
         def eff(game, ctrl, *_a, _n=n):
             ctrl.life += _n
         return eff
+
+    # scry / surveil (con "then draw" opcional): el humano decide carta por carta.
+    ms = re.search(r"\b(scry|surveil)\s+(\w+)", t)
+    if ms and (sn := _count_word(ms.group(2))):
+        to_gy = ms.group(1) == "surveil"
+        dn, dfirst = 0, False
+        md = re.search(r"draw (\w+) cards?", t)
+        if md and (dd := _count_word(md.group(1))):
+            dn = dd
+            dfirst = md.start() < ms.start()   # "draw ..., then scry" -> robar primero
+        return _scry_surveil_effect(sn, to_gy, draw_n=dn, draw_first=dfirst)
 
     m = re.search(r"\bmill(?:s)? (\w+)", t)
     if m and (n := _count_word(m.group(1))):

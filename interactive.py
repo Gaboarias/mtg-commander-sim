@@ -628,7 +628,8 @@ class InteractiveGame:
             return None
         return {"kind": pc.get("kind"), "prompt": pc.get("prompt"),
                 "options": pc.get("options", []),
-                "allow_none": bool(pc.get("allow_none"))}
+                "allow_none": bool(pc.get("allow_none")),
+                "card": pc.get("card")}
 
     def resolve_choice(self, index=None):
         """El humano eligió una opción de una decisión pendiente (revelar, etc.)."""

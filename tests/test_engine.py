@@ -512,6 +512,69 @@ def test_reveal_keep_land_etb_is_visible():
     assert any("revela" in ln for ln in g.log_lines)   # quedó registrado
 
 
+def test_scry_bot_reorders_top_without_drawing():
+    # "Scry 2": el bot mira las 2 de arriba y no roba; la biblioteca conserva
+    # su tamaño (solo reordena) y queda registrado.
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Omen", "type_line": "Sorcery", "mana_cost": "{U}",
+        "color_identity": ["U"], "oracle_text": "Scry 2."})
+    assert c.on_cast_resolve is not None
+    lib = [cards.creature(f"C{i}", "1U", 1, 1) for i in range(20)]
+    me = Player("yo", lib, cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.land("I", ["U"]) for _ in range(40)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    n0, h0 = len(me.library), len(me.hand)
+    c.on_cast_resolve(g, me, [])
+    assert len(me.library) == n0 and len(me.hand) == h0   # no robó, no perdió cartas
+    assert any("Scry 2" in ln for ln in g.log_lines)
+
+
+def test_surveil_bot_bins_flooded_lands():
+    # "Surveil 2": con muchas tierras en juego, el bot manda tierras al cementerio.
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Watcher", "type_line": "Creature", "mana_cost": "{1}{B}",
+        "power": "1", "toughness": "1", "color_identity": ["B"],
+        "oracle_text": "When Watcher enters, surveil 2."})
+    assert c.on_etb is not None
+    lib = [cards.land("Swamp", ["B"], basic=True) for _ in range(10)]  # tope: tierras
+    me = Player("yo", lib, cards.creature("Cmd", "2B", 3, 3, legendary=True))
+    op = Player("op", [cards.land("I", ["U"]) for _ in range(40)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(6):   # inundado: 6 tierras en juego
+        g.move_to_battlefield(cards.land("Swamp", ["B"], basic=True), me)
+    gy0 = len(me.graveyard)
+    g.move_to_battlefield(c, me)   # dispara el ETB surveil 2
+    assert len(me.graveyard) - gy0 == 2   # las 2 tierras del tope al cementerio
+
+
+def test_scry_then_draw_for_human_pauses_then_draws():
+    # "Scry 1, then draw a card": el humano decide (pending_choice) y DESPUÉS roba.
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Visions", "type_line": "Sorcery", "mana_cost": "{U}",
+        "color_identity": ["U"], "oracle_text": "Scry 1, then draw a card."})
+    lib = [cards.creature(f"C{i}", "1U", 1, 1) for i in range(20)]
+    me = Player("yo", lib, cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.land("I", ["U"]) for _ in range(40)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.interactive_human = me
+    h0 = len(me.hand)
+    c.on_cast_resolve(g, me, [])
+    assert g.pending_choice is not None and g.pending_choice["kind"] == "scry"
+    assert len(me.hand) == h0            # todavía no robó: espera la decisión
+    g.pending_choice["_apply"](0)        # "dejar arriba"
+    g.pending_choice = None
+    assert len(me.hand) == h0 + 1        # recién ahora robó
+
+
 def test_reveal_land_human_choice_pauses_and_resolves():
     # Para el humano interactivo, el efecto NO elige solo: deja una decisión
     # pendiente con las cartas reveladas, y resolve_choice aplica lo elegido.
