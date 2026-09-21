@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { getUser, type User } from "./auth";
 
 const LINKS = [
   { href: "/", label: "Simulador" },
@@ -38,6 +39,8 @@ function ThemeToggle() {
 
 export default function Nav() {
   const path = usePathname();
+  const [user, setUser] = useState<User | null>(null);
+  useEffect(() => { setUser(getUser()); }, [path]);
   return (
     <nav className="nav">
       <div className="nav-inner">
@@ -58,6 +61,12 @@ export default function Nav() {
               </Link>
             );
           })}
+          {user?.is_admin && (
+            <Link href="/admin" className={`nav-link ${path.startsWith("/admin") ? "on" : ""}`}>Admin</Link>
+          )}
+          <Link href="/login" className={`nav-link ${path.startsWith("/login") ? "on" : ""}`}>
+            {user ? "Cuenta" : "Ingresar"}
+          </Link>
           <ThemeToggle />
         </div>
       </div>

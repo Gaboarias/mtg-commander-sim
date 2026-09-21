@@ -21,7 +21,7 @@ from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _db  # noqa: E402
-from supporter import is_supporter  # noqa: E402
+import _auth  # noqa: E402
 
 _CODE_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 FREE_DECKS = 5         # tope gratis de decks en la nube (supporter sin tope práctico)
@@ -58,13 +58,13 @@ def pull(code):
     return {"decks": decks, "binder": binder}
 
 
-def push(code, decks, binder):
+def push(code, decks, binder, supporter=False):
     if not _CODE_RE.match(code or ""):
         raise ValueError("código inválido")
     _db.ensure_schema()
     decks = decks or []
     capped = False
-    if not is_supporter(code) and len(decks) > FREE_DECKS:
+    if not supporter and len(decks) > FREE_DECKS:
         decks = decks[:FREE_DECKS]
         capped = True
     stmts = [("DELETE FROM mtg_decks WHERE owner_code = ?", [code])]
@@ -104,10 +104,12 @@ def share_get(sid):
 
 def _dispatch(req):
     action = req.get("action")
+    ident = _auth.identity(req.get("code", ""), req.get("token"))
+    owner = ident["owner"]
     if action == "pull":
-        return pull(req.get("code", ""))
+        return pull(owner)
     if action == "push":
-        return push(req.get("code", ""), req.get("decks", []), req.get("binder", []))
+        return push(owner, req.get("decks", []), req.get("binder", []), ident["supporter"])
     if action == "share":
         return share_put(req.get("name"), req.get("text"), req.get("commander"))
     raise ValueError(f"acción desconocida: {action}")

@@ -580,6 +580,88 @@ def test_analysis_consistency_and_recommendations():
     assert "Sol Ring" not in ramp2["cards"] and "Arcane Signet" not in ramp2["cards"]
 
 
+def test_auth_register_login_reset_identity():
+    import importlib
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api"))
+    _db = importlib.import_module("_db")
+    os.environ["ADMIN_EMAIL"] = "admin@x.com"
+    _auth = importlib.reload(importlib.import_module("_auth"))
+
+    users = {}      # email -> row dict
+    sessions = {}   # token -> {user_id, created_at}
+
+    def fake_run(statements, timeout=20):
+        out = []
+        for sql, args in statements:
+            s = " ".join(sql.split()).lower()
+            rows = []
+            if s.startswith("create table"):
+                pass
+            elif s.startswith("select * from mtg_users where email"):
+                u = users.get(args[0])
+                rows = [dict(u)] if u else []
+            elif s.startswith("insert into mtg_users"):
+                cols = ["id", "email", "pass_hash", "salt", "recovery_hash",
+                        "recovery_salt", "is_admin", "is_supporter", "created_at"]
+                row = dict(zip(cols, args)); row["fails"] = 0; row["last_fail"] = 0
+                users[row["email"]] = row
+            elif s.startswith("insert into mtg_sessions"):
+                sessions[args[0]] = {"user_id": args[1], "created_at": args[2]}
+            elif s.startswith("update mtg_users set fails = fails + 1"):
+                for u in users.values():
+                    if u["id"] == args[1]:
+                        u["fails"] += 1; u["last_fail"] = args[0]
+            elif s.startswith("update mtg_users set fails = 0"):
+                for u in users.values():
+                    if u["id"] == args[0]:
+                        u["fails"] = 0
+            elif s.startswith("update mtg_users set pass_hash"):
+                for u in users.values():
+                    if u["id"] == args[4]:
+                        u["pass_hash"], u["salt"], u["recovery_hash"], u["recovery_salt"] = args[0], args[1], args[2], args[3]
+                        u["fails"] = 0
+            elif s.startswith("delete from mtg_sessions where user_id"):
+                for t in [t for t, v in sessions.items() if v["user_id"] == args[0]]:
+                    del sessions[t]
+            elif s.startswith("delete from mtg_sessions where token"):
+                sessions.pop(args[0], None)
+            elif s.startswith("select u.*, s.created_at"):
+                sess = sessions.get(args[0])
+                if sess:
+                    u = next((x for x in users.values() if x["id"] == sess["user_id"]), None)
+                    if u:
+                        row = dict(u); row["s_created"] = sess["created_at"]; rows = [row]
+            out.append({"rows": rows, "affected": 0, "last_insert_rowid": None})
+        return out
+
+    orig = _db.run
+    _db.run = fake_run
+    try:
+        reg = _auth.register("admin@x.com", "secretpw123")
+        assert reg["user"]["is_admin"] and reg["user"]["is_supporter"]
+        assert "-" in reg["recovery_code"]
+        # login mal / bien
+        try:
+            _auth.login("admin@x.com", "malmalmal"); assert False
+        except ValueError:
+            pass
+        good = _auth.login("admin@x.com", "secretpw123")
+        assert good["user"]["email"] == "admin@x.com"
+        # token resuelve al usuario y da acceso admin/infinito
+        ident = _auth.identity(None, good["token"])
+        assert ident["admin"] and ident["supporter"] and ident["owner"] == reg["user"]["id"]
+        # anónimo sin token: no admin, no supporter
+        anon = _auth.identity("anon-code-123", None)
+        assert not anon["admin"] and not anon["supporter"] and anon["owner"] == "anon-code-123"
+        # reset con código de recuperación
+        res = _auth.reset_password("admin@x.com", reg["recovery_code"], "nuevapass123")
+        assert res["recovery_code"] != reg["recovery_code"]
+        assert _auth.login("admin@x.com", "nuevapass123")["user"]["email"] == "admin@x.com"
+    finally:
+        _db.run = orig
+
+
 def test_match_analysis_win_type_and_key_plays():
     import importlib
     sys.path.insert(0, os.path.join(

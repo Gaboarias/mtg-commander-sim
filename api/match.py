@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # api/ en el path
 from _sim import match, match_log, FREE_N  # noqa: E402
-from supporter import is_supporter  # noqa: E402
+import _auth  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):
@@ -34,7 +34,8 @@ class handler(BaseHTTPRequestHandler):
             if req.get("log"):
                 self._send(200, match_log(specs, level))
             else:
-                cap = 500 if is_supporter(req.get("code")) else FREE_N
+                ident = _auth.identity(req.get("code"), req.get("token"))
+                cap = 500 if ident["supporter"] else FREE_N
                 n = min(int(req.get("n", 120)), cap)
                 res = match(specs, n, level)
                 res["free_cap"] = cap

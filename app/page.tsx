@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
-import { listDecks, removeDeck, getSyncCode, type SavedDeck } from "./localDecks";
+import { listDecks, removeDeck, type SavedDeck } from "./localDecks";
+import { effectiveCode, getToken } from "./auth";
 import { download, fileStamp } from "./download";
 
 const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6"];
@@ -120,7 +121,7 @@ export default function Home() {
       const r = await fetch("/api/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(logMode ? { decks, level, log: true } : { decks, n, level, code: getSyncCode() }),
+        body: JSON.stringify(logMode ? { decks, level, log: true } : { decks, n, level, code: effectiveCode(), token: getToken() }),
       });
       const raw = await r.text();
       let d;

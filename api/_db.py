@@ -127,6 +127,13 @@ _SCHEMA = [
          turns INTEGER, created_at INTEGER)""",
     """CREATE TABLE IF NOT EXISTS mtg_supporters (
          code TEXT PRIMARY KEY, since INTEGER)""",
+    """CREATE TABLE IF NOT EXISTS mtg_users (
+         id TEXT PRIMARY KEY, email TEXT UNIQUE, pass_hash TEXT, salt TEXT,
+         recovery_hash TEXT, recovery_salt TEXT,
+         is_admin INTEGER DEFAULT 0, is_supporter INTEGER DEFAULT 0,
+         created_at INTEGER, fails INTEGER DEFAULT 0, last_fail INTEGER DEFAULT 0)""",
+    """CREATE TABLE IF NOT EXISTS mtg_sessions (
+         token TEXT PRIMARY KEY, user_id TEXT, created_at INTEGER)""",
 ]
 
 

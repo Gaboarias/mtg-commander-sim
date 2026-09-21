@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Nav from "./Nav";
-import { KOFI_URL, PAYPAL_URL } from "./support";
+import { KOFI_URL, PAYPAL_URL, HOSTINGER_URL } from "./support";
 
 export const metadata: Metadata = {
   title: "MTG Commander Sim",
@@ -42,6 +42,13 @@ export default function RootLayout({
             <a href={PAYPAL_URL} target="_blank" rel="noreferrer"
                style={{ padding: "8px 16px", borderRadius: 999, border: "1px solid var(--border, #3a4150)", color: "inherit", textDecoration: "none" }}>
               Apoyar por PayPal
+            </a>
+            <a href={HOSTINGER_URL} target="_blank" rel="noreferrer sponsored"
+               title="Contratá hosting con Hostinger — ayuda a mantener el dominio online"
+               style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 999, border: "1px solid var(--border, #3a4150)", textDecoration: "none" }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/hostinger.svg" alt="Hostinger" height={20} style={{ height: 20 }} />
+              <span style={{ fontSize: ".82rem", opacity: 0.8 }}>ayuda a mantener el dominio</span>
             </a>
           </div>
           <div style={{ fontSize: ".78rem", opacity: 0.6 }}>

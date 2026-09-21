@@ -20,6 +20,7 @@ import {
 } from "../localDecks";
 import { download, fileStamp } from "../download";
 import { KOFI_URL, PAYPAL_URL, FREE_SIM, FREE_DECKS } from "../support";
+import { effectiveCode, getToken, getUser } from "../auth";
 
 type Precon = { code: string; fileName: string; name: string; releaseDate: string };
 
@@ -314,10 +315,12 @@ export default function DeckPage() {
     setBinder(listBinder());
     const code = getSyncCode();
     setSyncCode(code);
+    const acct = getUser();
+    if (acct?.is_supporter || acct?.is_admin) setSupporter(true);
     fetch("/api/supporter", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "status", code }),
-    }).then((r) => r.json()).then((d) => setSupporter(!!d.supporter)).catch(() => {});
+    }).then((r) => r.json()).then((d) => setSupporter((s) => s || !!d.supporter)).catch(() => {});
   }, []);
 
   async function redeemCoupon() {
@@ -430,7 +433,7 @@ export default function DeckPage() {
           action: "simulate",
           cards: resolved.cards.filter((c) => c.qty > 0).map((c) => ({ name: c.name, qty: c.qty })),
           commander: resolved.commander_name || "",
-          opponent, n: simN, code: getSyncCode(),
+          opponent, n: simN, code: effectiveCode(), token: getToken(),
         }),
       });
       const d = await r.json();
@@ -471,7 +474,7 @@ export default function DeckPage() {
     try {
       const r = await fetch("/api/cloud", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "push", code: syncCode, decks: listDecks(), binder: listBinder() }),
+        body: JSON.stringify({ action: "push", code: effectiveCode(), token: getToken(), decks: listDecks(), binder: listBinder() }),
       });
       const d = await r.json();
       if (d.error) throw new Error(d.error);
@@ -480,13 +483,13 @@ export default function DeckPage() {
     finally { setCloudBusy(false); }
   }
   async function pullCloud() {
-    const code = (otherCode.trim() || syncCode).trim();
+    const code = (otherCode.trim() || effectiveCode()).trim();
     if (!code) return;
     setCloudBusy(true); setCloudMsg(null);
     try {
       const r = await fetch("/api/cloud", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "pull", code }),
+        body: JSON.stringify({ action: "pull", code, token: getToken() }),
       });
       const d = await r.json();
       if (d.error) throw new Error(d.error);

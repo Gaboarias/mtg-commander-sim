@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # api/ en el path
 from _sim import resolve_decklist, simulate_custom, FREE_N, MAX_N  # noqa: E402
-from supporter import is_supporter  # noqa: E402
+import _auth  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):
@@ -33,8 +33,9 @@ class handler(BaseHTTPRequestHandler):
             if action == "resolve":
                 body = resolve_decklist(req.get("list", ""))
             elif action == "simulate":
-                cap = MAX_N if is_supporter(req.get("code")) else FREE_N
-                n = min(int(req.get("n", 200)), cap)
+                ident = _auth.identity(req.get("code"), req.get("token"))
+                cap = MAX_N if ident["supporter"] else FREE_N
+                n = min(int(req.get("n", 100)), cap)
                 body = simulate_custom(
                     req.get("cards", []), req.get("commander", ""),
                     req.get("opponent", "kang"), n)
