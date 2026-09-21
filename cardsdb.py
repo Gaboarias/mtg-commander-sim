@@ -233,6 +233,45 @@ def _planeswalker_abilities(oracle: str):
     return tuple(abilities), tuple(texts)
 
 
+def _generic_amount_effect(oracle: str):
+    """Efecto APROXIMADO con monto, deducido del oracle. Devuelve una función
+    eff(game, ctrl, *_) o None. Cubre patrones comunes de creaturas/hechizos que
+    la capa por tags (wipe/removal/draw/ramp) no modela. Prioridad: fichas >
+    quema a cada rival > ganancia de vida > mill propio."""
+    t = re.sub(r"\s+", " ", (oracle or "").lower())
+
+    m = re.search(r"create (\w+) .{0,40}?(\d+)/(\d+).{0,40}?token", t)
+    if m:
+        n = _count_word(m.group(1)) or 1
+        pw, tf = int(m.group(2)), int(m.group(3))
+
+        def eff(game, ctrl, *_a, _n=min(n, 8), _p=pw, _t=tf):
+            for _ in range(_n):
+                cards.make_token(game, ctrl, "Token", _p, _t)
+        return eff
+
+    m = re.search(r"deals? (\w+) damage to each opponent", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, *_a, _n=n):
+            for o in game.opponents(ctrl):
+                game.deal_damage(None, o, _n)
+        return eff
+
+    m = re.search(r"(?:you )?gain (\w+) life", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, *_a, _n=n):
+            ctrl.life += _n
+        return eff
+
+    m = re.search(r"\bmill(?:s)? (\w+)", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, *_a, _n=n):
+            cards.mill(game, ctrl, _n)
+        return eff
+
+    return None
+
+
 def build_card_from_data(data: dict) -> Card:
     """Construye una Card desde un dict tipo Scryfall (name, mana_cost,
     type_line, power, toughness, keywords, color_identity)."""
@@ -302,6 +341,18 @@ def build_card_from_data(data: dict) -> Card:
             card.target_spec = "opp_creature"
             card.target_count = max(1, count)
             card.tags = card.tags | {"removal"}
+
+    # efecto genérico CON MONTO leído del oracle (fichas, quema a cada rival,
+    # ganancia de vida, mill). Cubre creaturas/hechizos comunes que la capa por
+    # tags no modela. No pisa remoción/barrida (más definitorias) ni efectos ya
+    # cableados. Se resuelve al entrar (permanentes) o al resolverse (hechizos).
+    if not card.on_cast_resolve and not (card.tags & {"wipe", "removal"}):
+        geff = _generic_amount_effect(data.get("oracle_text", ""))
+        if geff is not None:
+            if {"instant", "sorcery"} & types:
+                card.on_cast_resolve = geff
+            elif {"creature", "artifact", "enchantment"} & types:
+                card.on_etb = geff
     return cards.attach_generic_effects(card)
 
 

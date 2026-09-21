@@ -412,6 +412,48 @@ def test_imported_planeswalker_loyalty_and_abilities():
     assert any(p.name == "Token" for p in me.creatures())
 
 
+def test_generic_amount_effects_from_oracle():
+    # Cartas importadas comunes: el efecto genérico con MONTO debe ejecutarse
+    # (fichas al entrar, quema a cada rival, ganancia de vida, mill).
+    import cardsdb
+    import cards
+    from engine import Game, Player
+
+    def mk(name, tl, cost, ot):
+        return cardsdb.build_card_from_data(
+            {"name": name, "type_line": tl, "mana_cost": cost, "oracle_text": ot})
+
+    me = Player("yo", [cards.land("P", ["W"], basic=True) for _ in range(90)],
+                cards.creature("C", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.land("S", ["B"], basic=True) for _ in range(90)],
+                cards.creature("C2", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    op.life = 40
+
+    tok = mk("Tokener", "Creature — Elf", "1G",
+             "When Tokener enters, create two 1/1 green Elf creature tokens.")
+    g.move_to_battlefield(tok, me)
+    assert sum(1 for p in me.creatures() if p.name == "Token") == 2
+
+    burn = mk("Burner", "Sorcery", "2R", "Burner deals 3 damage to each opponent.")
+    burn.on_cast_resolve(g, me, [])
+    assert op.life == 37
+
+    life0 = me.life
+    heal = mk("Healer", "Instant", "W", "You gain 5 life.")
+    heal.on_cast_resolve(g, me, [])
+    assert me.life == life0 + 5
+
+    before = len(me.library)
+    miller = mk("Miller", "Sorcery", "U", "Mill 4 cards.")
+    miller.on_cast_resolve(g, me, [])
+    assert before - len(me.library) == 4
+
+    # una barrida NO debe ser reemplazada por el efecto genérico con monto
+    wrath = mk("Wrath", "Sorcery", "2WW", "Destroy all creatures.")
+    assert "wipe" in wrath.tags and wrath.on_cast_resolve is not None
+
+
 def test_land_uses_produced_mana():
     # Las tierras no básicas / artifact lands tienen color_identity vacía pero
     # producen color real (produced_mana). Debe usarse ese, no la identidad.
