@@ -40,6 +40,20 @@ type Resolved = {
   bracket_label?: string;
   bracket_declared?: number | null;
 };
+type Combo = { id: string; cards: string[]; produces: string[]; missing: string[] };
+type Analysis = {
+  commander: string | null;
+  total: number;
+  unknown: number;
+  counts: Record<string, number>;
+  roles: Record<string, number>;
+  curve: Record<string, number>;
+  avg_cmc: number;
+  themes: { key: string; label: string; count: number; cards: string[] }[];
+  strengths: string[];
+  weaknesses: string[];
+  combos: { included: Combo[]; almost: Combo[]; error: string | null };
+};
 
 // Plantillas de arranque (nunca la de Kang). Se elige una al azar al abrir el
 // editor. Son solo un punto de partida para editar; se resuelven con Scryfall.
@@ -199,6 +213,9 @@ export default function DeckPage() {
   const [deckName, setDeckName] = useState("");
   const [noStorage, setNoStorage] = useState(false);
   const [justSaved, setJustSaved] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisErr, setAnalysisErr] = useState<string | null>(null);
 
   // plantilla al azar al abrir (solo en cliente, para no romper la hidratación)
   useEffect(() => {
@@ -244,6 +261,34 @@ export default function DeckPage() {
     lines.push("", "Deck");
     for (const c of resolved.cards) if (c.qty > 0) lines.push(`${c.qty} ${c.name}`);
     return lines.join("\n");
+  }
+
+  async function analyzeDeck() {
+    setAnalyzing(true);
+    setAnalysisErr(null);
+    try {
+      const r = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: currentDeckText(),
+          commander: resolved?.commander_name || null,
+        }),
+      });
+      const raw = await r.text();
+      let d;
+      try {
+        d = JSON.parse(raw);
+      } catch {
+        throw new Error(`HTTP ${r.status}: ${raw.slice(0, 200)}`);
+      }
+      if (d.error) throw new Error(d.error);
+      setAnalysis(d as Analysis);
+    } catch (e) {
+      setAnalysisErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAnalyzing(false);
+    }
   }
 
   function deckColors(): string[] {
@@ -707,6 +752,112 @@ export default function DeckPage() {
             que se actualiza); el bracket estimado es una guía por cantidad de
             Game Changers, no considera combos ni negación masiva de tierras.
           </p>
+        </div>
+      )}
+
+      {resolved && (
+        <div className="card">
+          <h2>🔬 Análisis del deck</h2>
+          <p className="muted" style={{ marginTop: -6, fontSize: ".82rem" }}>
+            Fortalezas, debilidades y sinergias (heurístico sobre el texto de las
+            cartas) + combos reales de Commander Spellbook. Todo aproximado salvo
+            los combos, que son por nombre.
+          </p>
+          <button className="go" disabled={analyzing} onClick={analyzeDeck}>
+            {analyzing ? "Analizando…" : "Analizar deck"}
+          </button>
+          {analysisErr && <p className="err">Error: {analysisErr}</p>}
+
+          {analysis && (
+            <div style={{ marginTop: 16 }}>
+              <div className="row" style={{ gap: 24, flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 280px" }}>
+                  <h3 style={{ color: "#7ad17a" }}>✔ Fortalezas</h3>
+                  <ul className="abil">
+                    {analysis.strengths.map((s, i) => <li key={i}>{s}</li>)}
+                  </ul>
+                </div>
+                <div style={{ flex: "1 1 280px" }}>
+                  <h3 style={{ color: "#e0a35a" }}>▲ Debilidades</h3>
+                  <ul className="abil">
+                    {analysis.weaknesses.map((w, i) => <li key={i}>{w}</li>)}
+                  </ul>
+                </div>
+              </div>
+
+              <h3 style={{ marginTop: 14 }}>Curva de maná</h3>
+              <div className="curve">
+                {Object.entries(analysis.curve).map(([k, v]) => {
+                  const max = Math.max(1, ...Object.values(analysis.curve));
+                  return (
+                    <div key={k} className="curve-col">
+                      <div className="curve-bar" style={{ height: `${8 + (v / max) * 90}px` }} />
+                      <div className="curve-n">{v}</div>
+                      <div className="muted" style={{ fontSize: ".72rem" }}>{k === "7" ? "7+" : k}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="muted" style={{ fontSize: ".8rem" }}>
+                CMC promedio {analysis.avg_cmc} · {analysis.counts.land} tierras ·{" "}
+                {analysis.counts.creature} criaturas
+                {analysis.unknown ? ` · ${analysis.unknown} sin datos` : ""}
+              </p>
+
+              <h3 style={{ marginTop: 10 }}>Roles</h3>
+              <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                {Object.entries({
+                  ramp: "Ramp", draw: "Robo", removal: "Remoción",
+                  wipe: "Barridas", counter: "Counters", protection: "Protección",
+                  recursion: "Recursión", tutor: "Tutores",
+                }).map(([k, lbl]) => (
+                  <span key={k} className="chip">{lbl}: <b>{analysis.roles[k] ?? 0}</b></span>
+                ))}
+              </div>
+
+              {analysis.themes.length > 0 && (
+                <>
+                  <h3 style={{ marginTop: 14 }}>Sinergias detectadas</h3>
+                  {analysis.themes.map((t) => (
+                    <div key={t.key} style={{ marginBottom: 8 }}>
+                      <b>{t.label}</b> <span className="muted">({t.count} cartas)</span>
+                      <div className="muted" style={{ fontSize: ".8rem" }}>{t.cards.join(", ")}</div>
+                    </div>
+                  ))}
+                </>
+              )}
+
+              <h3 style={{ marginTop: 14 }}>Combos</h3>
+              {analysis.combos.error ? (
+                <p className="muted">No se pudieron consultar los combos ({analysis.combos.error}). El resto del análisis es válido.</p>
+              ) : (
+                <>
+                  {analysis.combos.included.length === 0 && (
+                    <p className="muted">No se detectaron combos completos en la lista.</p>
+                  )}
+                  {analysis.combos.included.map((c) => (
+                    <div key={c.id} className="combo">
+                      <div><b>{c.cards.join(" + ")}</b></div>
+                      <div className="muted" style={{ fontSize: ".82rem" }}>→ {c.produces.join(", ")}</div>
+                    </div>
+                  ))}
+                  {analysis.combos.almost.length > 0 && (
+                    <>
+                      <h3 style={{ marginTop: 12, fontSize: ".95rem" }}>A una carta de un combo</h3>
+                      {analysis.combos.almost.map((c) => (
+                        <div key={c.id} className="combo almost">
+                          <div>{c.cards.map((n) => c.missing.includes(n)
+                            ? <b key={n} style={{ color: "var(--accent)" }}>＋{n} </b>
+                            : <span key={n}>{n} + </span>)}</div>
+                          <div className="muted" style={{ fontSize: ".82rem" }}>→ {c.produces.join(", ")}</div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 

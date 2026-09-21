@@ -449,6 +449,56 @@ def test_build_split_card_uses_front_face():
     assert c.identity() == {"W"}
 
 
+def _analyze_mod():
+    import importlib
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api"))
+    return importlib.import_module("_analyze")
+
+
+def test_deck_analysis_strengths_and_weaknesses():
+    an = _analyze_mod()
+
+    def card(name, tl, cmc=0, cost="", ot="", pm=None):
+        return {"name": name, "type_line": tl, "cmc": cmc, "mana_cost": cost,
+                "oracle_text": ot, "produced_mana": pm or []}
+
+    entries = [(1, "Mountain", card("Mountain", "Basic Land — Mountain", pm=["R"]))
+               for _ in range(30)]
+    # deck pobre: pocas tierras, sin ramp/robo/remoción
+    entries += [(1, f"Vanilla{i}", card(f"Vanilla{i}", "Creature — Goblin", 3,
+                 "{2}{R}", "")) for i in range(15)]
+    rep = an.analyze(entries, "Krenko")
+    assert rep["counts"]["land"] == 30
+    txt = " ".join(rep["weaknesses"]).lower()
+    assert "tierras" in txt and "ramp" in txt          # detecta ambas fallas
+    assert rep["avg_cmc"] == 3.0
+
+    # tema tokens: >=5 cartas que crean fichas -> sinergia detectada
+    tok = [(1, f"T{i}", card(f"T{i}", "Creature", 2, "{1}{R}",
+            "Create a 1/1 red Goblin creature token.")) for i in range(6)]
+    rep2 = an.analyze(tok, None)
+    assert any(t["key"] == "tokens" for t in rep2["themes"])
+
+
+def test_commander_spellbook_variant_parsing():
+    an = _analyze_mod()
+    data = {"results": {
+        "included": [{"id": 1,
+                      "uses": [{"card": {"name": "A"}}, {"card": "B"}],
+                      "produces": [{"feature": {"name": "Infinite damage"}}]}],
+        "almostIncluded": [{"id": 2,
+                            "uses": [{"card": {"name": "A"}}, {"card": {"name": "Z"}}],
+                            "produces": [{"feature": {"name": "Win"}}]}],
+    }}
+    deck = {an._norm(x) for x in ["A", "B"]}
+    inc = an._variant(data["results"]["included"][0], deck)
+    assert inc["cards"] == ["A", "B"] and inc["produces"] == ["Infinite damage"]
+    assert inc["missing"] == []
+    alm = an._variant(data["results"]["almostIncluded"][0], deck)
+    assert alm["missing"] == ["Z"]                     # calcula la carta faltante
+
+
 # -- P2.1 Counterspell contrarresta un hechizo en la pila ------------------ #
 def test_counterspell_counters_a_spell():
     a = _mk_player("a")

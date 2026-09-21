@@ -375,6 +375,17 @@ textarea:focus { border-color: var(--accent-2) !important; }
 .inspect .abil { margin: 8px 0; padding-left: 18px; font-size: .85rem; }
 .inspect .abil li { margin: 3px 0; }
 
+/* análisis de deck */
+ul.abil { margin: 6px 0; padding-left: 18px; font-size: .88rem; }
+ul.abil li { margin: 5px 0; line-height: 1.35; }
+.chip { background: rgba(255,255,255,.05); border: 1px solid #2a2f3a; border-radius: 999px; padding: 3px 10px; font-size: .8rem; }
+.curve { display: flex; align-items: flex-end; gap: 8px; height: 120px; margin: 8px 0 4px; }
+.curve-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; }
+.curve-bar { width: 26px; background: linear-gradient(180deg, var(--accent), #8a6f20); border-radius: 4px 4px 0 0; }
+.curve-n { font-size: .74rem; color: var(--text); }
+.combo { border-left: 3px solid var(--accent); padding: 4px 0 4px 10px; margin: 6px 0; }
+.combo.almost { border-left-color: #4a5164; }
+
 /* ventana de defensa (respuesta a ataques) */
 .card.defense { border-color: rgba(224,104,79,.6); box-shadow: 0 0 0 1px rgba(224,104,79,.4), var(--shadow); }
 .def-title { display: flex; align-items: center; gap: 8px; color: #e0684f; }
