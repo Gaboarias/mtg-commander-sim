@@ -16,7 +16,7 @@ type HandCard = {
   power: number | null; toughness: number | null; types: string[];
   keywords: string[]; abilities: string[];
 };
-type Activatable = { uid: number; name: string; loyalty: number; abilities: { i: number; cost: number }[] };
+type Activatable = { uid: number; name: string; loyalty: number; abilities: { i: number; cost: number; text?: string }[] };
 type TargetOpt = { uid?: number; idx?: number; name: string; power?: number; toughness?: number; from?: string };
 type CastOpt = { i?: number; name: string; zone: string; cost: string; tax?: number; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] };
 type Legal = {
@@ -591,9 +591,12 @@ export default function Play() {
                     <span className="act-label">Planeswalkers:</span>
                     {legal.activatables.map((pw) =>
                       pw.abilities.map((ab) => (
-                        <button key={pw.uid + "-" + ab.i} className="ghost"
+                        <button key={pw.uid + "-" + ab.i} className="ghost pw-ab"
+                          title={ab.text || ""}
                           onClick={() => doAct("activate", { uid: pw.uid, index: ab.i })}>
-                          {pw.name} {ab.cost >= 0 ? `+${ab.cost}` : ab.cost} <span className="muted">(◆{pw.loyalty})</span>
+                          <b>{pw.name} {ab.cost >= 0 ? `+${ab.cost}` : ab.cost}</b>{" "}
+                          <span className="muted">(◆{pw.loyalty})</span>
+                          {ab.text ? <em className="pw-txt">{ab.text}</em> : null}
                         </button>
                       ))
                     )}

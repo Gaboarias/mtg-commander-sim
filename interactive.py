@@ -442,10 +442,12 @@ class InteractiveGame:
             for pm in p.battlefield:
                 if ("planeswalker" in pm.card.types and not pm.activated_this_turn
                         and pm.card.loyalty_abilities):
+                    texts = pm.card.loyalty_texts or ()
                     activatables.append({
                         "uid": pm.uid, "name": pm.name,
                         "loyalty": pm.counters.get("loyalty", 0),
-                        "abilities": [{"i": i, "cost": cost}
+                        "abilities": [{"i": i, "cost": cost,
+                                       "text": texts[i] if i < len(texts) else ""}
                                       for i, (cost, _e) in enumerate(pm.card.loyalty_abilities)],
                     })
         return {"lands": lands, "casts": casts, "attackers": attackers,

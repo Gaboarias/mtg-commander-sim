@@ -379,6 +379,39 @@ def test_imported_removal_is_targeted():
     assert "A" not in names and "B" not in names and "Keep" in names
 
 
+def test_imported_planeswalker_loyalty_and_abilities():
+    # Un planeswalker importado debe ENTRAR con su lealtad (no morir a SBA) y
+    # exponer sus habilidades con texto + efecto aproximado.
+    import cardsdb
+    import cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Test Walker", "type_line": "Legendary Planeswalker — Test",
+        "mana_cost": "{3}{R}{W}", "loyalty": "4", "color_identity": ["R", "W"],
+        "oracle_text": "+1: Create a 3/2 red Spirit creature token.\n"
+                       "−2: Test Walker deals 3 damage to each opponent.\n"
+                       "−7: Draw three cards."})
+    assert c.loyalty == 4
+    assert [cost for cost, _e in c.loyalty_abilities] == [1, -2, -7]
+    assert all(e is not None for _c, e in c.loyalty_abilities)   # efectos deducidos
+    assert c.loyalty_texts[0].startswith("Create a 3/2")
+
+    me = Player("yo", [cards.land("Plains", ["W"], basic=True) for _ in range(99)],
+                cards.creature("C", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Swamp", ["B"], basic=True) for _ in range(99)],
+                cards.creature("C2", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    op.life = 40
+    pw = g.move_to_battlefield(c, me)
+    g.sba()
+    assert pw in me.battlefield and pw.counters.get("loyalty") == 4  # NO muere
+    assert g.activate_loyalty(pw, 1)                                 # -2: 3 daño
+    assert op.life == 37 and pw.counters.get("loyalty") == 2
+    pw.activated_this_turn = False
+    assert g.activate_loyalty(pw, 0)                                 # +1: ficha
+    assert any(p.name == "Token" for p in me.creatures())
+
+
 def test_land_uses_produced_mana():
     # Las tierras no básicas / artifact lands tienen color_identity vacía pero
     # producen color real (produced_mana). Debe usarse ese, no la identidad.

@@ -122,6 +122,7 @@ class Card:
     counter_modifier: Optional[Callable] = None    # (game, perm, kind, n) -> n' (reemplazo)
     static_mod: Optional[Callable] = None          # (fuente, objetivo) -> (dP, dT) anthem/capas
     loyalty_abilities: tuple = ()                  # planeswalker: ((coste_lealtad, efecto), ...)
+    loyalty_texts: tuple = ()                       # texto legible por habilidad de lealtad
     target_spec: Optional[str] = None              # "opp_creature" | "stack_spell" | None
     target_count: int = 1                          # cuántos objetivos (remoción múltiple)
 
@@ -471,8 +472,10 @@ class Game:
         pw = "planeswalker" in pm.card.types
         loy_abils = []
         if pw:
+            texts = pm.card.loyalty_texts or ()
             for i, (cost, _eff) in enumerate(pm.card.loyalty_abilities or ()):
-                loy_abils.append({"i": i, "cost": cost})
+                loy_abils.append({"i": i, "cost": cost,
+                                  "text": texts[i] if i < len(texts) else ""})
         return {
             "uid": pm.uid,
             "name": pm.name,

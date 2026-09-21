@@ -157,6 +157,82 @@ def _targeted_spell(oracle: str):
     return None
 
 
+def _count_word(w):
+    """Palabra o dígito -> int, o None."""
+    w = (w or "").strip().lower()
+    if w in _NUMWORD:
+        return _NUMWORD[w]
+    try:
+        return int(w)
+    except ValueError:
+        return None
+
+
+_LOY_LINE = re.compile(r"^\s*([+−\-]?\d+)\s*:\s*(.+?)\s*$")
+
+
+def _loyalty_effect(text: str):
+    """Efecto APROXIMADO de una habilidad de lealtad, deducido de su texto.
+    Cubre los patrones comunes (daño, robo, vida, ficha). Si no reconoce nada,
+    devuelve None: la habilidad solo cambia la lealtad (mejor que no existir)."""
+    t = re.sub(r"\s+", " ", (text or "").lower())
+
+    m = re.search(r"deals? (\w+) damage to each opponent", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, perm, _n=n):
+            for o in game.opponents(ctrl):
+                game.deal_damage(perm, o, _n)
+        return eff
+
+    m = re.search(r"deals? (\w+) damage", t)
+    if m and "each opponent" not in t and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, perm, _n=n):
+            opps = game.opponents(ctrl)
+            if opps:
+                game.deal_damage(perm, min(opps, key=lambda o: o.life), _n)
+        return eff
+
+    m = re.search(r"draw (\w+) cards?", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, perm, _n=n):
+            ctrl.draw(_n, game)
+        return eff
+
+    m = re.search(r"gain (\w+) life", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, perm, _n=n):
+            ctrl.life += _n
+        return eff
+
+    m = re.search(r"(\d+)/(\d+).{0,60}?token", t)
+    if m:
+        pw, tf = int(m.group(1)), int(m.group(2))
+        def eff(game, ctrl, perm, _p=pw, _t=tf):
+            cards.make_token(game, ctrl, "Token", _p, _t)
+        return eff
+
+    return None
+
+
+def _planeswalker_abilities(oracle: str):
+    """Parsea las habilidades de lealtad del texto de Scryfall.
+    Devuelve (abilities, texts) con abilities = ((coste, efecto), ...)."""
+    abilities, texts = [], []
+    for line in (oracle or "").splitlines():
+        m = _LOY_LINE.match(line)
+        if not m:
+            continue
+        raw = m.group(1).replace("−", "-")
+        try:
+            cost = int(raw)
+        except ValueError:
+            continue
+        text = m.group(2).strip()
+        abilities.append((cost, _loyalty_effect(text)))
+        texts.append(text)
+    return tuple(abilities), tuple(texts)
+
+
 def build_card_from_data(data: dict) -> Card:
     """Construye una Card desde un dict tipo Scryfall (name, mana_cost,
     type_line, power, toughness, keywords, color_identity)."""
@@ -204,6 +280,17 @@ def build_card_from_data(data: dict) -> Card:
         opts = {c: 1 for c in produced}
         card.produces = (lambda perm, pl, _o=opts: dict(_o))
         card.tags = card.tags | {"ramp"}
+
+    # planeswalker: lealtad inicial + habilidades del texto de Scryfall. Sin
+    # esto entraría con lealtad 0 y moriría al instante (SBA), y no tendría
+    # habilidades activables. Se cablea ANTES de la capa genérica.
+    if "planeswalker" in types:
+        loy = _int_or_zero(data.get("loyalty"))
+        abils, texts = _planeswalker_abilities(data.get("oracle_text", ""))
+        if loy > 0:
+            card.loyalty = loy
+        card.loyalty_abilities = abils
+        card.loyalty_texts = texts
 
     # remoción / bounce DIRIGIDA (instantáneo o conjuro): dejar elegir objetivos.
     # Se cablea ANTES de la capa genérica para que no la reemplace.

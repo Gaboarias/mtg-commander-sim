@@ -39,8 +39,11 @@ def keyword_labels(card):
 def describe(card):
     """Lista de habilidades legibles (español)."""
     out = list(keyword_labels(card))
-    for cost, _eff in (getattr(card, "loyalty_abilities", ()) or ()):
-        out.append(f"Lealtad {cost:+d}: habilidad de planeswalker.")
+    texts = getattr(card, "loyalty_texts", ()) or ()
+    for i, (cost, _eff) in enumerate(getattr(card, "loyalty_abilities", ()) or ()):
+        t = texts[i] if i < len(texts) else ""
+        out.append(f"Lealtad {cost:+d}: {t}" if t
+                   else f"Lealtad {cost:+d}: habilidad de planeswalker.")
     for ev in (getattr(card, "triggers", {}) or {}):
         out.append(_TRIG_ES.get(ev, f"Disparo ({ev}), hace su efecto."))
     if getattr(card, "on_etb", None):
