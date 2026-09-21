@@ -455,6 +455,53 @@ def test_reveal_keep_land_etb_is_visible():
     assert any("revela" in ln for ln in g.log_lines)   # quedó registrado
 
 
+def test_activated_ability_pays_mana():
+    # Habilidad activada "{2}{R}: deals 2 damage to each opponent": debe parsearse
+    # y, al activarla, pagar el maná y aplicar el efecto.
+    import cardsdb
+    import cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Pinger", "type_line": "Creature", "mana_cost": "{1}{R}",
+        "power": "1", "toughness": "1", "color_identity": ["R"],
+        "oracle_text": "{2}{R}: Pinger deals 2 damage to each opponent."})
+    assert len(c.activated_abilities) == 1
+    me = Player("yo", [cards.creature("X", "1G", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("Y", "1G", 1, 1) for _ in range(10)],
+                cards.creature("C2", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    perm = g.move_to_battlefield(c, me)
+    for _ in range(3):  # maná disponible
+        g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), me)
+    life0 = op.life
+    ok = g.activate_ability(perm, 0)
+    assert ok and op.life == life0 - 2
+
+
+def test_attack_trigger_impulse():
+    # "Whenever ~ attacks, exile the top card, you may play it": al atacar exilia
+    # el tope (lo dejamos jugable en la mano) y queda en el relato.
+    import cardsdb
+    import cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Laelia", "type_line": "Creature", "mana_cost": "{2}{R}",
+        "power": "2", "toughness": "2", "color_identity": ["R"],
+        "oracle_text": ("Haste\nWhenever Laelia attacks, exile the top card of your "
+                        "library. You may play that card this turn.")})
+    assert "attacks" in c.triggers
+    me = Player("yo", [cards.creature("Spell", "1R", 1, 1) for _ in range(20)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Swamp", ["B"], basic=True) for _ in range(20)],
+                cards.creature("C2", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    perm = g.move_to_battlefield(c, me)
+    hand0 = len(me.hand)
+    c.triggers["attacks"](g, perm)     # simular el disparo de ataque
+    assert len(me.hand) == hand0 + 1   # exiliada al tope -> jugable (a la mano)
+
+
 def test_imported_planeswalker_loyalty_and_abilities():
     # Un planeswalker importado debe ENTRAR con su lealtad (no morir a SBA) y
     # exponer sus habilidades con texto + efecto aproximado.

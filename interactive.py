@@ -56,7 +56,10 @@ def from_specs(specs, datamap=None, human_index=0, seed=0, level="intermedio"):
 
 
 def _cost_str(card):
-    c = card.cost
+    return _cost_str_cost(card.cost)
+
+
+def _cost_str_cost(c):
     if c is None:
         return ""
     return (str(c.generic) if c.generic else "") + "".join(c.pips)
@@ -485,15 +488,47 @@ class InteractiveGame:
                                        "text": texts[i] if i < len(texts) else ""}
                                       for i, (cost, _e) in enumerate(pm.card.loyalty_abilities)],
                     })
+        # habilidades activadas con maná (creaturas/permanentes/tierras)
+        abilities = []
+        for pm in p.battlefield:
+            abs_ = getattr(pm.card, "activated_abilities", ()) or ()
+            usable = []
+            for i, ab in enumerate(abs_):
+                if ab.get("tap") and pm.tapped:
+                    continue
+                if not p.can_pay(ab.get("cost")):
+                    continue
+                spec = ab.get("target_spec")
+                usable.append({"i": i, "label": ab.get("label", f"Habilidad {i + 1}"),
+                               "cost": _cost_str_cost(ab.get("cost")), "tap": bool(ab.get("tap")),
+                               "target_spec": spec, "target_count": ab.get("target_count", 1),
+                               "targets": self._targets_for_spec(spec)})
+            if usable:
+                abilities.append({"uid": pm.uid, "name": pm.name, "abilities": usable})
+
         atk_targets = []
         if self._my_turn() and not self.attacked:
             for f in self.g.opponents(p):
                 atk_targets.append({"index": self.players.index(f),
                                     "name": f.name, "life": f.life})
         return {"lands": lands, "casts": casts, "attackers": attackers,
-                "activatables": activatables, "attack_targets": atk_targets,
+                "activatables": activatables, "abilities": abilities,
+                "attack_targets": atk_targets,
                 "can_attack": self._my_turn() and not self.attacked,
                 "can_end": self._my_turn()}
+
+    def activate_ability(self, uid, index=0, target_uids=None):
+        if not self._my_turn():
+            return self.state()
+        pm = self._find_perm(uid)
+        if pm is None:
+            return self.state()
+        abs_ = getattr(pm.card, "activated_abilities", ()) or ()
+        spec = abs_[index].get("target_spec") if 0 <= index < len(abs_) else None
+        tgt = self._chosen_targets(pm.card, target_uids, spec=spec) if spec else None
+        self.g.activate_ability(pm, index, targets=tgt)
+        self.g.sba()
+        return self.state()
 
     def export(self):
         """Relato COMPLETO de la partida + resumen, para descargar y analizar."""

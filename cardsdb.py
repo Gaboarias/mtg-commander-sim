@@ -162,10 +162,25 @@ def _short_label(s, n=52):
     return s if len(s) <= n else s[:n - 1] + "…"
 
 
+def _fragment_effect(seg: str):
+    """Parsea un fragmento de texto a (effect(g,ctrl,targets), target_spec, count).
+    Reusa los helpers de remoción/monto/robar. effect=None si no se reconoce."""
+    spec = _targeted_spell(seg)
+    if spec is not None:
+        mode, count = spec
+        return cards.remove_targets(mode), "opp_creature", max(1, count)
+    geff = _generic_amount_effect(seg)
+    if geff is None:
+        dm = re.search(r"draw (\w+) cards?", seg, re.I)
+        n = _count_word(dm.group(1)) if dm else None
+        if n:
+            geff = cards.draw_n(n)
+    return geff, None, 1
+
+
 def _parse_modes(oracle: str):
     """Detecta un hechizo modal ('Choose one/two — ...') y devuelve
-    (list[{label, effect, target_spec, target_count}], cuántos_elegir) o None.
-    Cada modo se parsea con los mismos helpers que un hechizo suelto."""
+    (list[{label, effect, target_spec, target_count}], cuántos_elegir) o None."""
     if not oracle:
         return None
     m = re.search(r"choose (one|two|up to \w+)\s*[—\-–]\s*(.+)", oracle, re.I | re.S)
@@ -183,23 +198,54 @@ def _parse_modes(oracle: str):
         return None
     modes = []
     for seg in parts[:4]:
-        spec = _targeted_spell(seg)
-        if spec is not None:
-            mode, count = spec
-            modes.append({"label": _short_label(seg), "effect": cards.remove_targets(mode),
-                          "target_spec": "opp_creature", "target_count": max(1, count)})
-            continue
-        geff = _generic_amount_effect(seg)
-        if geff is None:  # "draw N cards" no lo cubre _generic_amount_effect
-            dm = re.search(r"draw (\w+) cards?", seg, re.I)
-            n = _count_word(dm.group(1)) if dm else None
-            if n:
-                geff = cards.draw_n(n)
-        modes.append({"label": _short_label(seg), "effect": geff,
-                      "target_spec": None, "target_count": 1})
+        eff, spec, count = _fragment_effect(seg)
+        modes.append({"label": _short_label(seg), "effect": eff,
+                      "target_spec": spec, "target_count": count})
     if not any(md["effect"] for md in modes):
         return None
     return modes, pick
+
+
+def _parse_activated(oracle: str):
+    """Habilidades activadas con coste de MANÁ (y opcional {T}). Devuelve una tupla
+    de dicts {cost, tap, label, effect, target_spec, target_count}. Ignora costes
+    con sacrificio/descarte y efectos que no reconocemos."""
+    out = []
+    for raw in (oracle or "").split("\n"):
+        m = re.match(r"([^:]+):\s*(.+)", raw.strip())
+        if not m:
+            continue
+        costtxt, body = m.group(1), m.group(2)
+        syms = re.findall(r"\{([^}]+)\}", costtxt)
+        # el coste debe ser SOLO símbolos {..}; si queda texto (sacrifice, discard) saltar
+        if not syms or re.sub(r"\{[^}]+\}|[,\s]", "", costtxt):
+            continue
+        tap = any(s.upper() == "T" for s in syms)
+        mana = "".join("{%s}" % s for s in syms if s.upper() != "T")
+        cost = parse_cost(mana_cost_to_str(mana)) if mana else parse_cost("0")
+        eff, spec, count = _fragment_effect(body)
+        if eff is None:
+            continue
+        out.append({"cost": cost, "tap": tap, "label": _short_label(body),
+                    "effect": (lambda g, c, perm, tg, _e=eff: _e(g, c, tg)),
+                    "target_spec": spec, "target_count": count})
+    return tuple(out[:4])
+
+
+def _attack_trigger_effect(oracle: str):
+    """'Whenever ~ attacks, <efecto>' -> callback de trigger (g, perm, **kw) o None.
+    Cubre p. ej. Laelia (al atacar, exiliar el tope y poder jugarla)."""
+    t = re.sub(r"\s+", " ", (oracle or "")).strip()
+    m = re.search(r"whenever [^.]{0,50}? attacks,?\s*(.{0,180})", t, re.I)
+    if not m:
+        return None
+    eff, _spec, _count = _fragment_effect(m.group(1))
+    if eff is None:
+        return None
+
+    def trig(game, perm, **_kw):
+        eff(game, perm.controller, [])
+    return trig
 
 
 def _count_word(w):
@@ -312,6 +358,58 @@ def _generic_amount_effect(oracle: str):
     if m and (n := _count_word(m.group(1))):
         def eff(game, ctrl, *_a, _n=n):
             cards.mill(game, ctrl, _n)
+        return eff
+
+    # impulse: "exile the top (N) card(s) of your library ... you may play"
+    m = re.search(r"exile the top (\w+ )?cards? of your library.{0,80}?(?:you )?may play", t)
+    if m:
+        n = _count_word((m.group(1) or "one").strip()) or 1
+
+        def eff(game, ctrl, *_a, _n=min(n, 4)):
+            moved = []
+            for _ in range(_n):
+                if ctrl.library:
+                    c = ctrl.library.pop()
+                    ctrl.hand.append(c)
+                    moved.append(c.name)
+            if moved:
+                game.log(f"{ctrl.name} exilia del tope {', '.join(moved)} y puede jugarla(s)")
+        return eff
+
+    # reanimar desde el cementerio al campo (elección automática, visible en el log)
+    if re.search(r"return .{0,70}?from your graveyard to the battlefield", t):
+        lim = int(mvm.group(1)) if (mvm := re.search(r"mana value (\d+) or less", t)) else None
+        cre = "creature card" in t
+
+        def eff(game, ctrl, *_a, _lim=lim, _cre=cre):
+            def ok(c):
+                if c.is_land():
+                    return False
+                if _cre and "creature" not in c.types:
+                    return False
+                if _lim is not None and c.cost and c.cost.cmc > _lim:
+                    return False
+                return True
+            cands = [c for c in ctrl.graveyard if ok(c)]
+            if not cands:
+                game.log(f"{ctrl.name}: sin carta válida en el cementerio para revivir")
+                return
+            pick = max(cands, key=lambda c: (c.cost.cmc if c.cost else 0))
+            ctrl.graveyard.remove(pick)
+            game.move_to_battlefield(pick, ctrl)
+            game.log(f"{ctrl.name} revive {pick.name} del cementerio")
+        return eff
+
+    # regresar una carta del cementerio a la mano (elección automática + log)
+    if re.search(r"return .{0,70}?from your graveyard to your hand", t):
+        def eff(game, ctrl, *_a):
+            cands = [c for c in ctrl.graveyard if not c.is_land()]
+            if not cands:
+                return
+            pick = max(cands, key=lambda c: (c.cost.cmc if c.cost else 0))
+            ctrl.graveyard.remove(pick)
+            ctrl.hand.append(pick)
+            game.log(f"{ctrl.name} recupera {pick.name} del cementerio a la mano")
         return eff
 
     # revelar las primeras N: quedarse una tierra en la mano, el resto al
@@ -440,6 +538,21 @@ def build_card_from_data(data: dict) -> Card:
                 card.on_cast_resolve = geff
             elif {"creature", "artifact", "enchantment"} & types:
                 card.on_etb = geff
+
+    # habilidades activadas con coste de maná (creaturas/permanentes/tierras):
+    # "{cost}: efecto" -> se pueden activar en juego pagando el maná.
+    if not ({"instant", "sorcery"} & types):
+        ab = _parse_activated(data.get("oracle_text", ""))
+        if ab:
+            card.activated_abilities = ab
+
+    # disparo "al atacar" (whenever ~ attacks, ...): p. ej. Laelia (exiliar el tope
+    # y poder jugarla). Se cablea como trigger de "attacks".
+    atk_eff = _attack_trigger_effect(data.get("oracle_text", ""))
+    if atk_eff is not None and "attacks" not in card.triggers:
+        card.triggers = dict(card.triggers)
+        card.triggers["attacks"] = atk_eff
+
     return cards.attach_generic_effects(card)
 
 

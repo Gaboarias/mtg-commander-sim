@@ -19,6 +19,8 @@ type HandCard = {
   keywords: string[]; abilities: string[];
 };
 type Activatable = { uid: number; name: string; loyalty: number; abilities: { i: number; cost: number; text?: string }[] };
+type AbilityOpt = { i: number; label: string; cost: string; tap: boolean; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] };
+type PermAbility = { uid: number; name: string; abilities: AbilityOpt[] };
 type TargetOpt = { uid?: number; idx?: number; name: string; power?: number; toughness?: number; from?: string };
 type ModeOpt = { i: number; label: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] };
 type CastOpt = { i?: number; name: string; zone: string; cost: string; tax?: number; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number };
@@ -27,6 +29,7 @@ type Legal = {
   casts: CastOpt[];
   attackers: { uid: number; name: string; power: number; toughness: number }[];
   activatables: Activatable[];
+  abilities?: PermAbility[];
   attack_targets: { index: number; name: string; life: number }[];
   can_attack: boolean; can_end: boolean;
 };
@@ -75,6 +78,7 @@ def act(kind, arg_json):
     elif kind == 'attack': g.attack(a.get('uids', []), a.get('target'))
     elif kind == 'end': g.end_turn()
     elif kind == 'activate': g.activate(a.get('uid'), a.get('index', 0))
+    elif kind == 'ability': g.activate_ability(a.get('uid'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'respond': g.respond(a.get('i'), a.get('target_uids'), a.get('mode'))
     elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
     elif kind == 'mulligan': g.mulligan()
@@ -104,7 +108,7 @@ export default function Play() {
   const [inspect, setInspect] = useState<Inspect | null>(null);
   const infoReq = useRef<Set<string>>(new Set());  // nombres ya pedidos
   const [assign, setAssign] = useState<Record<number, number>>({});  // bloqueador -> atacante
-  const [targeting, setTargeting] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; targets: TargetOpt[]; count: number; mode?: number } | null>(null);
+  const [targeting, setTargeting] = useState<{ kind: "cast" | "respond" | "ability"; i?: number; zone?: string; name: string; targets: TargetOpt[]; count: number; mode?: number; uid?: number; index?: number } | null>(null);
   const [modePick, setModePick] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; modes: ModeOpt[] } | null>(null);
   const [tsel, setTsel] = useState<number[]>([]);  // objetivos elegidos (multi)
   const [bottom, setBottom] = useState<number[]>([]);  // cartas al fondo tras mulligan
@@ -326,9 +330,21 @@ export default function Play() {
       doAct(base.kind, { i: base.i, zone: base.zone, mode: m.i });
     }
   }
+  function useAbility(uid: number, ab: AbilityOpt) {
+    if (ab.target_spec && ab.targets && ab.targets.length > 0) {
+      setTsel([]);
+      setTargeting({ kind: "ability", uid, index: ab.i, name: ab.label, targets: ab.targets, count: ab.target_count || 1 });
+    } else {
+      doAct("ability", { uid, index: ab.i });
+    }
+  }
   function dispatchTargets(uids: number[]) {
     if (!targeting) return;
-    doAct(targeting.kind, { i: targeting.i, zone: targeting.zone, target_uids: uids, mode: targeting.mode });
+    if (targeting.kind === "ability") {
+      doAct("ability", { uid: targeting.uid, index: targeting.index, target_uids: uids });
+    } else {
+      doAct(targeting.kind, { i: targeting.i, zone: targeting.zone, target_uids: uids, mode: targeting.mode });
+    }
     setTargeting(null);
     setTsel([]);
   }
@@ -613,6 +629,21 @@ export default function Play() {
                           <b>{pw.name} {ab.cost >= 0 ? `+${ab.cost}` : ab.cost}</b>{" "}
                           <span className="muted">(◆{pw.loyalty})</span>
                           {ab.text ? <em className="pw-txt">{ab.text}</em> : null}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {legal && (legal.abilities?.length || 0) > 0 && (
+                  <div className="act-block">
+                    <span className="act-label">Habilidades (pagar maná):</span>
+                    {legal.abilities!.map((pm) =>
+                      pm.abilities.map((ab) => (
+                        <button key={pm.uid + "-a" + ab.i} className="ghost pw-ab"
+                          onClick={() => useAbility(pm.uid, ab)}>
+                          <b>{pm.name}</b> <span className="muted" style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>{ab.cost}{ab.tap ? <Icon name="refresh" size={11} /> : null}{ab.target_spec ? <Icon name="target" size={11} /> : null}</span>
+                          <em className="pw-txt">{ab.label}</em>
                         </button>
                       ))
                     )}

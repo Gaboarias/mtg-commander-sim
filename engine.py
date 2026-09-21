@@ -128,6 +128,9 @@ class Card:
     modes: tuple = ()                              # modal "elegí una": cada modo es
     #   {"label", "effect"(g,ctrl,targets), "target_spec", "target_count"}
     mode_pick: int = 1                             # cuántos modos elige el jugador
+    activated_abilities: tuple = ()                # habilidades activadas con maná:
+    #   {"cost"(Cost), "tap"(bool), "label", "effect"(g,ctrl,perm,targets),
+    #    "target_spec", "target_count"}
 
     def identity(self) -> set:
         """Identidad de color: explicita si existe, si no se deduce del coste."""
@@ -803,6 +806,11 @@ class Game:
                 elif card.on_cast_resolve:
                     g.note_ability(card, "resuelve su efecto", controller=player)
                     card.on_cast_resolve(g, player, targets or [])
+                else:
+                    # carta sin efecto modelado (mecánica compleja): que al menos se
+                    # vea que se resolvió, en vez de "no pasó nada".
+                    g.log(f"{player.name} resuelve {card.name} "
+                          f"(efecto complejo: no se simula en detalle)")
                 player.graveyard.append(card)
                 g.emit("to_graveyard", player=player, card=card)
             else:
@@ -870,6 +878,29 @@ class Game:
         self.note_ability(perm.card, f"lealtad {cost:+d}", controller=perm.controller)
         if eff:
             eff(self, perm.controller, perm)
+        self.sba()
+        return True
+
+    def activate_ability(self, perm: Permanent, index: int, targets=None) -> bool:
+        """Activa una habilidad con coste de maná (y opcionalmente girar) de un
+        permanente. Se puede repetir mientras haya con qué pagar."""
+        abils = perm.card.activated_abilities
+        if not abils or not (0 <= index < len(abils)):
+            return False
+        ab = abils[index]
+        if ab.get("tap") and perm.tapped:
+            return False
+        ctrl = perm.controller
+        if not ctrl.can_pay(ab.get("cost")):
+            return False
+        ctrl.pay(ab.get("cost"))
+        if ab.get("tap"):
+            perm.tapped = True
+        self.log(f"{ctrl.name}: {perm.name} activa «{ab.get('label', '')}»")
+        self.note_ability(perm.card, f"habilidad: {ab.get('label', '')}", controller=ctrl)
+        eff = ab.get("effect")
+        if eff:
+            eff(self, ctrl, perm, targets or [])
         self.sba()
         return True
 
