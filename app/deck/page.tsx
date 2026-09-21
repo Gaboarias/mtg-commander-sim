@@ -12,6 +12,9 @@ import {
   listBinder,
   addToBinder,
   removeFromBinder,
+  getSyncCode,
+  mergeDecks,
+  setBinder as saveBinder,
   type SavedDeck,
   type BinderCard,
 } from "../localDecks";
@@ -281,6 +284,11 @@ export default function DeckPage() {
   const [opponents, setOpponents] = useState<{ key: string; label: string }[]>([]);
   const [copied, setCopied] = useState(false);
   const [binder, setBinder] = useState<BinderCard[]>([]);
+  const [syncCode, setSyncCode] = useState("");
+  const [otherCode, setOtherCode] = useState("");
+  const [cloudMsg, setCloudMsg] = useState<string | null>(null);
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [suggest, setSuggest] = useState<SuggestResp | null>(null);
   const [suggesting, setSuggesting] = useState<string | null>(null);
 
@@ -297,6 +305,23 @@ export default function DeckPage() {
     setProfileState(getProfile());
     setSavedDecks(listDecks());
     setBinder(listBinder());
+    setSyncCode(getSyncCode());
+  }, []);
+
+  // abrir un deck compartido por link (?share=<id>)
+  useEffect(() => {
+    const sid = new URLSearchParams(window.location.search).get("share");
+    if (!sid) return;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cloud?share=${encodeURIComponent(sid)}`);
+        const d = await r.json();
+        if (d.error || !d.text) { setError("No se encontró el deck compartido."); return; }
+        setText(d.text);          // el texto ya incluye la sección Commander
+        resolve(d.text);
+      } catch { setError("No se pudo cargar el deck compartido."); }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // rivales para "probar el deck" (decks registrados del catálogo)
@@ -413,6 +438,53 @@ export default function DeckPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setSuggesting(null); }
+  }
+
+  // nube: subir / bajar por código
+  async function pushCloud() {
+    setCloudBusy(true); setCloudMsg(null);
+    try {
+      const r = await fetch("/api/cloud", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "push", code: syncCode, decks: listDecks(), binder: listBinder() }),
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      setCloudMsg(`Subido: ${listDecks().length} decks + binder.`);
+    } catch (e) { setCloudMsg("Error al subir: " + (e instanceof Error ? e.message : String(e))); }
+    finally { setCloudBusy(false); }
+  }
+  async function pullCloud() {
+    const code = (otherCode.trim() || syncCode).trim();
+    if (!code) return;
+    setCloudBusy(true); setCloudMsg(null);
+    try {
+      const r = await fetch("/api/cloud", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "pull", code }),
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      setSavedDecks(mergeDecks(d.decks || []));
+      if (Array.isArray(d.binder)) setBinder(saveBinder(d.binder));
+      setCloudMsg(`Bajado: ${(d.decks || []).length} decks + binder (fusionado con lo local).`);
+    } catch (e) { setCloudMsg("Error al bajar: " + (e instanceof Error ? e.message : String(e))); }
+    finally { setCloudBusy(false); }
+  }
+  async function shareDeck() {
+    setShareUrl(null);
+    try {
+      const r = await fetch("/api/cloud", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "share", name: resolved?.commander_name || "deck",
+          text: currentDeckText(), commander: resolved?.commander_name || "" }),
+      });
+      const d = await r.json();
+      if (d.error || !d.id) throw new Error(d.error || "sin id");
+      const url = `${window.location.origin}/deck?share=${d.id}`;
+      setShareUrl(url);
+      try { await navigator.clipboard?.writeText(url); } catch { /* copiar manual */ }
+    } catch (e) { setError("No se pudo compartir: " + (e instanceof Error ? e.message : String(e))); }
   }
 
   async function analyzeDeck() {
@@ -858,7 +930,13 @@ export default function DeckPage() {
           <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
             <button className="ghost" onClick={copyList}>{copied ? "¡Copiado! ✔" : "Copiar lista"}</button>
             <button className="ghost" onClick={exportTxt}>⬇ Descargar .txt</button>
+            <button className="ghost" onClick={shareDeck}>🔗 Compartir por link</button>
           </div>
+          {shareUrl && (
+            <p className="muted" style={{ fontSize: ".82rem" }}>
+              Link (copiado): <a href={shareUrl}>{shareUrl}</a>
+            </p>
+          )}
 
           <table>
             <thead>
@@ -1161,6 +1239,31 @@ export default function DeckPage() {
               </span>
             )}
           </div>
+        </div>
+      )}
+
+      {!noStorage && (
+        <div className="card">
+          <h2>☁️ Nube (sync entre dispositivos)</h2>
+          <p className="muted" style={{ fontSize: ".82rem" }}>
+            Sin cuentas: tus decks + binder se guardan bajo un <b>código</b>. Subí desde
+            este dispositivo y bajá pegando el mismo código en otro. Quien tenga el código
+            puede ver tus decks — no lo compartas si querés privacidad.
+          </p>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <span className="muted">Tu código:</span>
+            <code style={{ background: "var(--panel-2)", padding: "3px 8px", borderRadius: 6, fontSize: ".8rem" }}>{syncCode}</code>
+            <button className="ghost" style={{ padding: "3px 8px" }}
+              onClick={() => { try { navigator.clipboard?.writeText(syncCode); setCloudMsg("Código copiado."); } catch { /* */ } }}>Copiar código</button>
+          </div>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+            <button className="go" disabled={cloudBusy} onClick={pushCloud}>⬆ Subir a la nube</button>
+            <input placeholder="pegá un código para bajar…" value={otherCode}
+              onChange={(e) => setOtherCode(e.target.value)}
+              style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 9px", width: 240 }} />
+            <button className="ghost" disabled={cloudBusy} onClick={pullCloud}>⬇ Bajar de la nube</button>
+          </div>
+          {cloudMsg && <p className="muted" style={{ fontSize: ".82rem" }}>{cloudMsg}</p>}
         </div>
       )}
 

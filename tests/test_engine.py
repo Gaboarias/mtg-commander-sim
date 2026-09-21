@@ -577,6 +577,41 @@ def test_analysis_consistency_and_recommendations():
     assert "Sol Ring" not in ramp_line and "Arcane Signet" not in ramp_line
 
 
+def test_turso_db_encode_decode_and_parse():
+    import importlib
+    import json as _json
+    import urllib.request
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api"))
+    _db = importlib.import_module("_db")
+    assert _db._encode_arg(3) == {"type": "integer", "value": "3"}
+    assert _db._encode_arg(None) == {"type": "null"}
+    assert _db._decode_val({"type": "integer", "value": "7"}) == 7
+    assert _db._decode_val({"type": "null"}) is None
+
+    fake = {"results": [
+        {"type": "ok", "response": {"type": "execute", "result": {
+            "cols": [{"name": "a"}, {"name": "b"}],
+            "rows": [[{"type": "integer", "value": "1"}, {"type": "text", "value": "z"}]],
+            "affected_row_count": 0, "last_insert_rowid": None}}},
+        {"type": "ok", "response": {"type": "close"}}]}
+
+    class _Fake:
+        def read(self): return _json.dumps(fake).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    os.environ["TURSO_DATABASE_URL"] = "libsql://x.turso.io"
+    os.environ["TURSO_AUTH_TOKEN"] = "t"
+    orig = urllib.request.urlopen
+    urllib.request.urlopen = lambda req, timeout=20: _Fake()
+    try:
+        res = _db.run([("SELECT 1", [])])
+    finally:
+        urllib.request.urlopen = orig
+    assert res == [{"rows": [{"a": 1, "b": "z"}], "affected": 0, "last_insert_rowid": None}]
+
+
 def test_price_and_legality_from_scryfall():
     import importlib
     sys.path.insert(0, os.path.join(

@@ -41,6 +41,15 @@ export default function Home() {
   const [log, setLog] = useState<{ winner: string; turns: number; log: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mineCount, setMineCount] = useState(0);
+  const [ranking, setRanking] = useState<{ commander: string; games: number; wins: number; pct: number }[]>([]);
+  const [rankTotal, setRankTotal] = useState(0);
+
+  useEffect(() => {
+    fetch("/api/stats?limit=15")
+      .then((r) => r.json())
+      .then((d) => { if (Array.isArray(d.top)) { setRanking(d.top); setRankTotal(d.total || 0); } })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const mine: Pickable[] = listDecks().map((d: SavedDeck) => ({
@@ -339,6 +348,24 @@ export default function Home() {
             Una partida · gana <span className="win">{log.winner}</span> en {log.turns} turnos
           </h2>
           <div className="log">{log.log.join("\n")}</div>
+        </div>
+      )}
+
+      {ranking.length > 0 && (
+        <div className="card">
+          <h2>🏆 Ranking global de comandantes</h2>
+          <p className="muted" style={{ fontSize: ".82rem" }}>
+            Winrate de las partidas vistas en "Ver una partida" por todos ({rankTotal} registradas).
+          </p>
+          {ranking.map((r) => (
+            <div key={r.commander} className="bar-row" style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0" }}>
+              <span style={{ width: 180 }}>{r.commander}</span>
+              <span className="bar-track" style={{ flex: 1 }}>
+                <span className="bar-fill" style={{ display: "block", height: "100%", width: `${r.pct}%` }} />
+              </span>
+              <span className="muted" style={{ width: 90, textAlign: "right" }}>{r.pct}% ({r.wins}/{r.games})</span>
+            </div>
+          ))}
         </div>
       )}
 

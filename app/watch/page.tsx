@@ -90,6 +90,13 @@ export default function Watch() {
       try { d = JSON.parse(raw); } catch { throw new Error(`HTTP ${r.status}: ${raw.slice(0, 200)}`); }
       if (d.error) throw new Error(d.error);
       setReplay(d); setIdx(0); setRanDecks(decks); setAnalysis(null);
+      // registrar la partida para el ranking global (best-effort, no bloquea)
+      if (d.winner && d.winner !== "EMPATE") {
+        fetch("/api/stats", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ winner: d.winner, commanders: d.players || [], turns: d.turns || 0 }),
+        }).catch(() => {});
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }

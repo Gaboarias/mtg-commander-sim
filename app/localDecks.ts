@@ -4,6 +4,7 @@
 const PROFILE_KEY = "mtgsim:profile";
 const DECKS_KEY = "mtgsim:decks";
 const BINDER_KEY = "mtgsim:binder";
+const SYNC_KEY = "mtgsim:synccode";
 
 export type SavedDeck = {
   id: string;
@@ -87,6 +88,35 @@ export function addToBinder(name: string, qty = 1): BinderCard[] {
 
 export function removeFromBinder(name: string): BinderCard[] {
   write(BINDER_KEY, listBinder().filter((c) => c.name.toLowerCase() !== name.toLowerCase()));
+  return listBinder();
+}
+
+// ---- Sync anónimo (código en el navegador) ------------------------------- //
+export function getSyncCode(): string {
+  let code = read<string>(SYNC_KEY, "");
+  if (!code) {
+    code = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `c-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    write(SYNC_KEY, code);
+  }
+  return code;
+}
+
+// fusiona decks de la nube con los locales (gana el más reciente por id)
+export function mergeDecks(incoming: SavedDeck[]): SavedDeck[] {
+  const local = listDecks();
+  const byId = new Map(local.map((d) => [d.id, d]));
+  for (const d of incoming || []) {
+    const cur = byId.get(d.id);
+    if (!cur || (d.updatedAt || 0) >= (cur.updatedAt || 0)) byId.set(d.id, d);
+  }
+  write(DECKS_KEY, [...byId.values()]);
+  return listDecks();
+}
+
+export function setBinder(cards: BinderCard[]): BinderCard[] {
+  write(BINDER_KEY, Array.isArray(cards) ? cards : []);
   return listBinder();
 }
 
