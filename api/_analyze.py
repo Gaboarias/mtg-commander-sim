@@ -188,7 +188,10 @@ def analyze(entries, commander_name=None):
 
     strengths, weaknesses = _judge(total, lands, ramp_eff, roles, counts,
                                    avg_cmc, curve, demand, sources, themes)
-    recommendations = _recommend(lands, roles, counts, avg_cmc, demand, sources)
+    owned = {_norm(n) for _q, n, _c in entries}
+    if commander_name:
+        owned.add(_norm(commander_name))
+    recommendations = _recommend(lands, roles, counts, avg_cmc, demand, sources, owned)
     consistency = _consistency(total, lands, roles, avg_cmc)
 
     return {
@@ -306,11 +309,11 @@ def _judge(total, lands, ramp_eff, roles, counts, avg_cmc, curve,
 
 # staples curados por rol (autocontenido, sin depender de EDHREC)
 _STAPLES = {
-    "ramp": "Sol Ring, Arcane Signet, Cultivate, Kodama's Reach, Fellwar Stone",
-    "draw": "Rhystic Study, Phyrexian Arena, Night's Whisper, Guardian Project",
-    "removal": "Swords to Plowshares, Beast Within, Generous Gift, Chaos Warp, Go for the Throat",
-    "wipe": "Blasphemous Act, Damnation, Wrath of God, Toxic Deluge",
-    "protection": "Heroic Intervention, Teferi's Protection, Flawless Maneuver",
+    "ramp": ["Sol Ring", "Arcane Signet", "Cultivate", "Kodama's Reach", "Fellwar Stone"],
+    "draw": ["Rhystic Study", "Phyrexian Arena", "Night's Whisper", "Guardian Project"],
+    "removal": ["Swords to Plowshares", "Beast Within", "Generous Gift", "Chaos Warp", "Go for the Throat"],
+    "wipe": ["Blasphemous Act", "Damnation", "Wrath of God", "Toxic Deluge"],
+    "protection": ["Heroic Intervention", "Teferi's Protection", "Flawless Maneuver"],
 }
 _FIX = {
     "W": "Plains, duales blancas, Command Tower, fetchlands",
@@ -321,23 +324,36 @@ _FIX = {
 }
 
 
-def _recommend(lands, roles, counts, avg_cmc, demand, sources):
-    """Sugerencias ACCIONABLES a partir de las mismas líneas base que _judge."""
+def _staples(role, owned):
+    """Staples del rol que el deck NO tiene todavía (para no recomendar lo puesto)."""
+    ex = [s for s in _STAPLES[role] if _norm(s) not in (owned or set())]
+    return ", ".join(ex[:5])
+
+
+def _recommend(lands, roles, counts, avg_cmc, demand, sources, owned=None):
+    """Sugerencias ACCIONABLES a partir de las mismas líneas base que _judge.
+    `owned`: nombres normalizados ya en el deck (para no sugerir lo que ya tenés)."""
+    owned = owned or set()
     recs = []
+
+    def tip(base, role):
+        ex = _staples(role, owned)
+        recs.append(f"{base} — {ex}." if ex else f"{base}.")
+
     if lands < 36:
         recs.append(f"Sumá {36 - lands} tierras (apuntá a ~36–38) para no trabarte.")
     elif lands > 40:
         recs.append(f"Bajá ~{lands - 38} tierras y meté hechizos: te vas a inundar.")
     if roles["ramp"] < 10:
-        recs.append(f"Sumá ~{10 - roles['ramp']} piezas de ramp — {_STAPLES['ramp']}.")
+        tip(f"Sumá ~{10 - roles['ramp']} piezas de ramp", "ramp")
     if roles["draw"] < 10:
-        recs.append(f"Sumá motores de robo — {_STAPLES['draw']}.")
+        tip("Sumá motores de robo", "draw")
     if roles["removal"] < 8:
-        recs.append(f"Sumá remoción puntual — {_STAPLES['removal']}.")
+        tip("Sumá remoción puntual", "removal")
     if roles["wipe"] == 0:
-        recs.append(f"Meté 1–2 barridas — {_STAPLES['wipe']}.")
+        tip("Meté 1–2 barridas", "wipe")
     if counts["creature"] >= 28 and roles["protection"] < 3:
-        recs.append(f"Protegé tu tablero de barridas — {_STAPLES['protection']}.")
+        tip("Protegé tu tablero de barridas", "protection")
     for c in _COLORS:
         if demand[c] >= 8 and sources[c] < max(5, demand[c] // 3):
             recs.append(f"Reforzá fuentes de {_COLOR_ES[c]} — {_FIX[c]}.")

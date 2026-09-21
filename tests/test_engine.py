@@ -567,6 +567,14 @@ def test_analysis_consistency_and_recommendations():
                          {c: 0 for c in "WUBRG"}, {c: 0 for c in "WUBRG"})
     low = " ".join(recs).lower()
     assert "ramp" in low and "barrida" in low and "tierras" in low
+    # no re-sugiere staples que el deck YA tiene
+    owned = {an._norm("Sol Ring"), an._norm("Arcane Signet")}
+    recs2 = an._recommend(20, {"ramp": 2, "draw": 3, "removal": 2, "wipe": 0,
+                               "protection": 0},
+                          {"creature": 30}, 4.2,
+                          {c: 0 for c in "WUBRG"}, {c: 0 for c in "WUBRG"}, owned)
+    ramp_line = next(r for r in recs2 if "ramp" in r.lower())
+    assert "Sol Ring" not in ramp_line and "Arcane Signet" not in ramp_line
 
 
 def test_price_and_legality_from_scryfall():
