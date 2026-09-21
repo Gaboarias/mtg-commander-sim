@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getUser, setSession, clearSession, effectiveCode, getToken, type User } from "../auth";
 import { listDecks, listBinder } from "../localDecks";
+import { Icon } from "../icons";
 
 type Mode = "login" | "register" | "reset";
 
@@ -67,7 +68,7 @@ export default function LoginPage() {
   if (user) {
     return (
       <div className="wrap">
-        <header><h1>👤 Tu cuenta</h1></header>
+        <header><h1><Icon name="user" size={24} /> Tu cuenta</h1></header>
         <div className="card" style={{ maxWidth: 460 }}>
           <p>Sesión iniciada como <b>{user.email}</b>{user.is_admin ? " · admin" : ""}
             {user.is_supporter ? " · supporter (acceso ampliado)" : ""}.</p>
@@ -92,7 +93,7 @@ export default function LoginPage() {
   return (
     <div className="wrap">
       <header>
-        <h1>👤 Ingresar / crear cuenta</h1>
+        <h1><Icon name="user" size={24} /> Ingresar / crear cuenta</h1>
         <p>Con cuenta, tus decks y binder quedan atados a vos (en cualquier dispositivo). Es opcional: sin cuenta seguís con el código anónimo.</p>
       </header>
       <div className="card" style={{ maxWidth: 460 }}>
@@ -112,7 +113,7 @@ export default function LoginPage() {
           <button className="go" onClick={submit} disabled={busy || !email || !password}>
             {busy ? "…" : mode === "login" ? "Ingresar" : mode === "register" ? "Crear cuenta" : "Restablecer"}
           </button>
-          {err && <p className="err">{err}</p>}
+          {err && <p className="err" role="alert">{err}</p>}
         </div>
         <p className="muted" style={{ fontSize: ".78rem", marginTop: 12 }}>
           Seguridad: contraseñas cifradas (pbkdf2). Sin verificación por email — la recuperación

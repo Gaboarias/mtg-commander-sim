@@ -1,6 +1,7 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
+import { Icon } from "./icons";
 
 export type Perm = {
   uid: number; name: string; tapped: boolean; power: number | null; toughness: number | null;
@@ -38,7 +39,7 @@ export function CardMini({
     >
       {onInspect && (
         <button className="cm-info" title="Ver carta" aria-label="Ver detalle de la carta"
-          onClick={(e) => { e.stopPropagation(); onInspect(); }}>ⓘ</button>
+          onClick={(e) => { e.stopPropagation(); onInspect(); }}><Icon name="info" size={14} /></button>
       )}
       {art ? (
         <div className="art" style={{ backgroundImage: `url(${art})` }} />
@@ -74,7 +75,8 @@ export function Seat({
     <motion.div layout={!reduce} className={`seat ${active ? "active" : ""} ${p.lost ? "dead" : ""}`}>
       <div className="seat-head">
         <span className="seat-name">
-          {p.lost ? "☠ " : active ? "▶ " : ""}{p.name}
+          {p.lost ? <Icon name="skull" size={13} /> : active ? <Icon name="play" size={11} /> : null}
+          {(p.lost || active) ? " " : ""}{p.name}
           {p.lost && <span className="dead-badge">eliminado</span>}
         </span>
         <motion.span
@@ -84,30 +86,30 @@ export function Seat({
           transition={{ duration: 0.35 }}
           className={`life ${p.life <= 10 ? "low" : ""}`}
         >
-          ♥ {p.life}
+          <Icon name="heart-fill" size={13} /> {p.life}
         </motion.span>
       </div>
       <div className="seat-meta">
         <motion.span key={"h" + p.hand} title="cartas en mano"
           initial={reduce ? false : { scale: 1.35, color: "var(--accent)" }}
           animate={{ scale: 1, color: "var(--muted)" }} transition={{ duration: 0.5 }}>
-          ✋ {p.hand}
+          <Icon name="hand" size={13} /> {p.hand}
         </motion.span>
         <motion.span key={"l" + p.library} title="cartas en biblioteca"
           initial={reduce ? false : { scale: 1.35, color: "var(--accent)" }}
           animate={{ scale: 1, color: "var(--muted)" }} transition={{ duration: 0.5 }}>
-          📚 {p.library}
+          <Icon name="library" size={13} /> {p.library}
         </motion.span>
-        <span>⚰ {p.graveyard.length}</span>
-        <span title="comandante">👑 {p.commander.join(", ") || "—"}</span>
+        <span title="cementerio"><Icon name="grave" size={13} /> {p.graveyard.length}</span>
+        <span title="comandante"><Icon name="crown" size={13} /> {p.commander.join(", ") || "—"}</span>
         {maxCmdr > 0 && (
           <span className={`cmdr-dmg ${maxCmdr >= 21 ? "fatal" : ""}`} title="daño de comandante recibido (21 elimina)">
-            🗡 {maxCmdr}/21
+            <Icon name="sword" size={13} /> {maxCmdr}/21
           </span>
         )}
         {(p.poison || 0) > 0 && (
           <span className={`poison ${(p.poison || 0) >= 10 ? "fatal" : ""}`} title="veneno (10 elimina)">
-            ☣ {p.poison}/10
+            <Icon name="poison" size={13} /> {p.poison}/10
           </span>
         )}
       </div>

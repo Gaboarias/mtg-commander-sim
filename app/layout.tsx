@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import Nav from "./Nav";
 import { KOFI_URL, PAYPAL_URL, HOSTINGER_URL } from "./support";
+import { Icon } from "./icons";
 
 export const metadata: Metadata = {
   title: "MTG Commander Sim",
@@ -36,8 +37,8 @@ export default function RootLayout({
         <div style={{ textAlign: "center", padding: "24px 16px 40px" }}>
           <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", marginBottom: 14 }}>
             <a href={KOFI_URL} target="_blank" rel="noreferrer"
-               style={{ padding: "8px 16px", borderRadius: 999, background: "var(--accent, #d8b23a)", color: "#1a1400", fontWeight: 700, textDecoration: "none" }}>
-              💛 Apoyar en Ko-fi
+               style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 999, background: "var(--accent, #d8b23a)", color: "#1a1400", fontWeight: 700, textDecoration: "none" }}>
+              <Icon name="heart-fill" size={15} /> Apoyar en Ko-fi
             </a>
             <a href={PAYPAL_URL} target="_blank" rel="noreferrer"
                style={{ padding: "8px 16px", borderRadius: 999, border: "1px solid var(--border, #3a4150)", color: "inherit", textDecoration: "none" }}>

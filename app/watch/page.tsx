@@ -6,6 +6,7 @@ import { useReducedMotion } from "framer-motion";
 import { listDecks, type SavedDeck } from "../localDecks";
 import { Seat, type PlayerState } from "../board";
 import { download, fileStamp } from "../download";
+import { Icon } from "../icons";
 
 type RegDeck = { key: string; commander: string; identity: string[]; theme?: string };
 type MatchSpec =
@@ -173,7 +174,7 @@ export default function Watch() {
   return (
     <div className="wrap">
       <header>
-        <h1>🎬 Ver una partida</h1>
+        <h1><Icon name="film" size={26} /> Ver una partida</h1>
         <p>Elegí de 2 a 6 decks y mirá cómo el sistema juega la mesa, turno a turno.</p>
       </header>
 
@@ -182,7 +183,7 @@ export default function Watch() {
         <div className="decks">
           {pickables.map((p) => (
             <button key={p.id} className={`deck-btn ${selected.includes(p.id) ? "on" : ""}`} onClick={() => toggle(p.id)}>
-              <div className="name">{p.mine ? "★ " : ""}{p.label}</div>
+              <div className="name">{p.mine ? <Icon name="star" size={13} /> : null}{p.mine ? " " : ""}{p.label}</div>
               <div className="sub">{p.tag}</div>
             </button>
           ))}
@@ -208,17 +209,17 @@ export default function Watch() {
             {busy ? "Jugando…" : "Ver repetición"}
           </button>
         </div>
-        {error && <p className="err">⚠ {error}</p>}
+        {error && <p className="err" role="alert"><Icon name="warning" size={15} /> {error}</p>}
       </div>
 
       {replay && step && (
         <div className="card">
           <div className="scrub">
-            <button className="ghost" aria-label="Ir al inicio" title="Inicio" onClick={() => { setPlaying(false); setIdx(0); }} disabled={idx === 0}>⏮</button>
-            <button className="ghost" aria-label="Anterior" title="Anterior" onClick={() => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }} disabled={idx === 0}>◀</button>
-            <button className="go" onClick={() => setPlaying((v) => !v)}>{playing ? "⏸ Pausa" : "▶ Reproducir"}</button>
-            <button className="ghost" aria-label="Siguiente" title="Siguiente" onClick={() => { setPlaying(false); setIdx((i) => Math.min(last, i + 1)); }} disabled={idx === last}>▶</button>
-            <button className="ghost" aria-label="Ir al final" title="Final" onClick={() => { setPlaying(false); setIdx(last); }} disabled={idx === last}>⏭</button>
+            <button className="ghost" aria-label="Ir al inicio" title="Inicio" onClick={() => { setPlaying(false); setIdx(0); }} disabled={idx === 0}><Icon name="skip-back" size={16} /></button>
+            <button className="ghost" aria-label="Anterior" title="Anterior" onClick={() => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }} disabled={idx === 0}><Icon name="chevron-left" size={16} /></button>
+            <button className="go" onClick={() => setPlaying((v) => !v)} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>{playing ? <><Icon name="pause" size={15} /> Pausa</> : <><Icon name="play" size={15} /> Reproducir</>}</button>
+            <button className="ghost" aria-label="Siguiente" title="Siguiente" onClick={() => { setPlaying(false); setIdx((i) => Math.min(last, i + 1)); }} disabled={idx === last}><Icon name="chevron-right" size={16} /></button>
+            <button className="ghost" aria-label="Ir al final" title="Final" onClick={() => { setPlaying(false); setIdx(last); }} disabled={idx === last}><Icon name="skip-forward" size={16} /></button>
             <input type="range" aria-label="Posición de la repetición" min={0} max={last} value={idx} onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} className="range" />
             <span className="muted">{idx + 1}/{last + 1}</span>
           </div>
@@ -235,28 +236,28 @@ export default function Watch() {
           </div>
 
           {idx === last && (
-            <p className="win-line">🏆 Gana <b>{replay.winner}</b> en {replay.turns} turnos.</p>
+            <p className="win-line"><Icon name="trophy" size={18} /> Gana <b>{replay.winner}</b> en {replay.turns} turnos.</p>
           )}
 
           <div className="act-block" style={{ marginTop: 10 }}>
             <span className="act-label">Descargar:</span>
-            <button className="ghost" onClick={exportJSON}>⬇ JSON (datos)</button>
-            <button className="ghost" onClick={exportTxt}>⬇ Texto (relato)</button>
+            <button className="ghost" onClick={exportJSON} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> JSON (datos)</button>
+            <button className="ghost" onClick={exportTxt} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> Texto (relato)</button>
           </div>
 
           <details className="legend">
             <summary>¿Qué significa cada cosa? (nomenclatura)</summary>
             <div className="legend-grid">
-              <span>▶ jugador en turno</span>
-              <span>♥ vida (roja si ≤ 10)</span>
-              <span>✋ cartas en mano</span>
-              <span>📚 cartas en biblioteca</span>
-              <span>⚰ cartas en cementerio</span>
-              <span>👑 comandante</span>
-              <span><b className="k-cmdr">🗡 N/21</b> = daño de comandante (21 elimina)</span>
-              <span><b className="k-cmdr">☣ N/10</b> = veneno (10 elimina)</span>
-              <span>☠ eliminado (por vida, daño de comandante o veneno)</span>
-              <span>🂠 carta rotada = tapeada (girada)</span>
+              <span><Icon name="play" size={12} /> jugador en turno</span>
+              <span><Icon name="heart-fill" size={13} /> vida (roja si ≤ 10)</span>
+              <span><Icon name="hand" size={13} /> cartas en mano</span>
+              <span><Icon name="library" size={13} /> cartas en biblioteca</span>
+              <span><Icon name="grave" size={13} /> cartas en cementerio</span>
+              <span><Icon name="crown" size={13} /> comandante</span>
+              <span><b className="k-cmdr"><Icon name="sword" size={13} /> N/21</b> = daño de comandante (21 elimina)</span>
+              <span><b className="k-cmdr"><Icon name="poison" size={13} /> N/10</b> = veneno (10 elimina)</span>
+              <span><Icon name="skull" size={13} /> eliminado (por vida, daño de comandante o veneno)</span>
+              <span>carta rotada = tapeada (girada)</span>
               <span><b className="k-atk">borde rojo</b> = atacando</span>
               <span><b className="k-pt">2/3</b> = fuerza/resistencia</span>
               <span><b className="k-dmg">−N</b> = daño recibido este turno</span>
@@ -269,7 +270,7 @@ export default function Watch() {
 
       {replay?.analysis && (
         <div className="card">
-          <h2>🧠 Análisis de la partida</h2>
+          <h2><Icon name="brain" size={20} /> Análisis de la partida</h2>
           <p style={{ marginTop: -4 }}>
             <span className="chip" style={{ marginRight: 8 }}>{replay.analysis.win_type}</span>
             {replay.analysis.summary}
@@ -325,7 +326,7 @@ export default function Watch() {
       {replay && (
         <div className="card">
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <h2 style={{ margin: 0 }}>📜 Jugadas</h2>
+            <h2 style={{ margin: 0 }}><Icon name="scroll" size={20} /> Jugadas</h2>
             <label className="muted" style={{ fontSize: ".85rem" }}>
               <input type="checkbox" checked={byTurn} onChange={(e) => setByTurn(e.target.checked)} />{" "}
               agrupar por turno
@@ -361,7 +362,7 @@ export default function Watch() {
 
       {replay && (
         <div className="card">
-          <h2>🔬 Análisis de los mazos</h2>
+          <h2><Icon name="flask" size={20} /> Análisis de los mazos</h2>
           <p className="muted" style={{ fontSize: ".82rem" }}>
             Fortalezas, debilidades, consistencia y combos POSIBLES (Commander Spellbook)
             de los mazos que jugaron — no necesariamente los combos que ocurrieron en esta

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getUser, getToken } from "../auth";
+import { Icon } from "../icons";
 
 type Stats = {
   counts: Record<string, number>;
@@ -31,7 +32,7 @@ export default function AdminPage() {
   if (isAdmin === false) {
     return (
       <div className="wrap">
-        <header><h1>🔒 Admin</h1></header>
+        <header><h1><Icon name="lock" size={24} /> Admin</h1></header>
         <div className="card"><p>Esta sección es solo para el admin. <Link href="/login">Ingresar</Link>.</p></div>
       </div>
     );
@@ -45,8 +46,8 @@ export default function AdminPage() {
 
   return (
     <div className="wrap">
-      <header><h1>📊 Panel admin</h1><p>Métricas globales del sitio.</p></header>
-      {err && <div className="card"><p className="err">{err}</p></div>}
+      <header><h1><Icon name="chart" size={24} /> Panel admin</h1><p>Métricas globales del sitio.</p></header>
+      {err && <div className="card"><p className="err" role="alert">{err}</p></div>}
       {stats && (
         <>
           <div className="card">

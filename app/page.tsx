@@ -6,6 +6,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { listDecks, removeDeck, type SavedDeck } from "./localDecks";
 import { effectiveCode, getToken } from "./auth";
 import { download, fileStamp } from "./download";
+import { Icon } from "./icons";
 
 const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6"];
 
@@ -167,7 +168,7 @@ export default function Home() {
   return (
     <div className="wrap">
       <header>
-        <h1>🎴 Simulador de partidas</h1>
+        <h1><Icon name="cards" size={26} /> Simulador de partidas</h1>
         <p>
           Elegí de 2 a 6 decks y mirá cuánto gana cada uno en muchas partidas.
           Creá y guardá tus decks en el <Link href="/deck">editor de decks →</Link>.
@@ -190,7 +191,8 @@ export default function Home() {
               onClick={() => toggle(p.id)}
             >
               <div className="name">
-                {p.mine ? "★ " : ""}
+                {p.mine ? <Icon name="star" size={13} /> : null}
+                {p.mine ? " " : ""}
                 {p.label}
               </div>
               <div className="sub">
@@ -211,7 +213,7 @@ export default function Home() {
                     }
                   }}
                 >
-                  ✕
+                  <Icon name="x" size={14} />
                 </span>
               )}
             </button>
@@ -255,7 +257,7 @@ export default function Home() {
             Ver una partida
           </button>
         </div>
-        {error && <p className="err">⚠ {error}</p>}
+        {error && <p className="err" role="alert"><Icon name="warning" size={15} /> {error}</p>}
       </div>
 
       {result && (
@@ -294,8 +296,8 @@ export default function Home() {
             «sin definir» = partidas que llegaron al límite sin un ganador claro.
           </p>
           <div className="row" style={{ marginTop: 12 }}>
-            <button className="ghost" onClick={exportJSON}>⬇ Exportar todo (JSON)</button>
-            <button className="ghost" onClick={exportCSV}>⬇ Exportar partidas (CSV)</button>
+            <button className="ghost" onClick={exportJSON} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> Exportar todo (JSON)</button>
+            <button className="ghost" onClick={exportCSV} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> Exportar partidas (CSV)</button>
           </div>
         </motion.div>
       )}
@@ -307,7 +309,7 @@ export default function Home() {
           animate={{ opacity: 1, y: 0 }}
           transition={reduce ? { duration: 0 } : { duration: 0.3, delay: 0.1 }}
         >
-          <h2>📝 Notas de la mesa</h2>
+          <h2><Icon name="edit" size={20} /> Notas de la mesa</h2>
           <p className="muted" style={{ marginTop: 0 }}>
             Duración media: <b>{result.notes.avg_rounds}</b> rondas ·{" "}
             {result.notes.decided_pct}% de las partidas tuvieron ganador.
@@ -361,7 +363,7 @@ export default function Home() {
 
       {ranking.length > 0 && (
         <div className="card">
-          <h2>🏆 Ranking global de comandantes</h2>
+          <h2><Icon name="trophy" size={20} /> Ranking global de comandantes</h2>
           <p className="muted" style={{ fontSize: ".82rem" }}>
             Winrate de las partidas vistas en "Ver una partida" por todos ({rankTotal} registradas).
           </p>

@@ -21,6 +21,7 @@ import {
 import { download, fileStamp } from "../download";
 import { KOFI_URL, PAYPAL_URL, FREE_SIM, FREE_DECKS } from "../support";
 import { effectiveCode, getToken, getUser } from "../auth";
+import { Icon } from "../icons";
 
 type Precon = { code: string; fileName: string; name: string; releaseDate: string };
 
@@ -183,7 +184,7 @@ function MissingFixer({ name, onPick }: { name: string; onPick: (n: string) => v
   return (
     <div style={{ borderTop: "1px solid var(--border)", padding: "12px 0" }}>
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-        <span className="err" style={{ minWidth: 140 }}>⚠ {name}</span>
+        <span className="err" style={{ minWidth: 140, display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="warning" size={14} /> {name}</span>
         <input value={q} aria-label="Nombre de la carta a corregir" onChange={(e) => setQ(e.target.value)} style={{ ...inp, width: 200 }} />
         <button className="ghost" onClick={search} disabled={busy}>Buscar</button>
         <span className="muted">o por set/#:</span>
@@ -237,9 +238,9 @@ function CardAdder({ onAdd, placeholder }: { onAdd: (name: string) => void; plac
       {sugg.length > 0 && (
         <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
           {sugg.map((s) => (
-            <button key={s} className="ghost" style={{ padding: "4px 10px" }}
+            <button key={s} className="ghost" style={{ padding: "4px 10px", display: "inline-flex", alignItems: "center", gap: 4 }}
               onClick={() => { onAdd(s); setSugg([]); setQ(""); }}>
-              + {s}
+              <Icon name="plus" size={12} /> {s}
             </button>
           ))}
         </div>
@@ -331,7 +332,7 @@ export default function DeckPage() {
         body: JSON.stringify({ action: "redeem", code: getSyncCode(), coupon }),
       });
       const d = await r.json();
-      if (d.supporter) { setSupporter(true); setSupMsg("¡Listo! Modo supporter activado. Gracias 🙏"); setCoupon(""); }
+      if (d.supporter) { setSupporter(true); setSupMsg("¡Listo! Modo supporter activado. ¡Gracias!"); setCoupon(""); }
       else setSupMsg(d.error || "Cupón inválido.");
     } catch { setSupMsg("Error al canjear."); }
   }
@@ -731,7 +732,7 @@ export default function DeckPage() {
   return (
     <div className="wrap">
       <header>
-        <h1>🛠️ Editor de decks</h1>
+        <h1><Icon name="wrench" size={24} /> Editor de decks</h1>
         <p>
           Traé tu lista, revisá las cartas y <strong>guardá el deck en tu perfil</strong>.
           Después lo elegís para jugar en la <Link href="/">página principal →</Link>.
@@ -739,7 +740,7 @@ export default function DeckPage() {
       </header>
 
       <div className="card">
-        <h2>👤 Mis decks (en este navegador)</h2>
+        <h2><Icon name="user" size={19} /> Mis decks (en este navegador)</h2>
         {noStorage ? (
           <p className="muted">
             Tu navegador bloquea el almacenamiento local (¿modo privado?), así que
@@ -778,7 +779,7 @@ export default function DeckPage() {
                           onClick={() => onLoadSaved(d)}>Cargar</button>
                         <button className="ghost" style={{ padding: "4px 8px" }}
                           aria-label={`Borrar deck ${d.name}`} title="Borrar"
-                          onClick={() => onDeleteSaved(d.id)}>✕</button>
+                          onClick={() => onDeleteSaved(d.id)}><Icon name="x" size={13} /></button>
                       </td>
                     </tr>
                   ))}
@@ -869,7 +870,7 @@ export default function DeckPage() {
             pegá tu lista (Moxfield / Archidekt / «1 Nombre»)
           </span>
         </div>
-        {error && <p className="err">⚠ {error}</p>}
+        {error && <p className="err" role="alert"><Icon name="warning" size={15} /> {error}</p>}
         <div className="row" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
           <span className="muted">¿No marca el comandante?</span>
           <button className="ghost" style={{ padding: "6px 12px" }} onClick={markFirstAsCommander}>
@@ -894,7 +895,7 @@ export default function DeckPage() {
 
       {resolved && !resolved.commander_name && (
         <div className="card">
-          <h2>⚑ Elegí tu comandante</h2>
+          <h2><Icon name="flag" size={19} /> Elegí tu comandante</h2>
           <p className="muted">
             No detecté el comandante en la lista (Moxfield no siempre lo marca).
             Elegí cuál es y lo pongo en la zona de mando:
@@ -933,7 +934,7 @@ export default function DeckPage() {
               <Tag r={resolved.commander} />
             </p>
           ) : (
-            <p className="err">Elegí tu comandante en el recuadro de arriba ⚑</p>
+            <p className="err">Elegí tu comandante en el recuadro de arriba <Icon name="flag" size={13} /></p>
           )}
           <p className="muted">
             {totalQty} cartas · {resolved.implemented} con efecto programado ·{" "}
@@ -942,7 +943,7 @@ export default function DeckPage() {
               ? ` · ~US$ ${resolved.price_total.toFixed(2)}` : ""}
           </p>
           {(resolved.illegal?.length || 0) > 0 && (
-            <p className="err">⛔ No legales en Commander: {resolved.illegal!.join(", ")}</p>
+            <p className="err"><Icon name="ban" size={14} /> No legales en Commander: {resolved.illegal!.join(", ")}</p>
           )}
           {!resolved.scryfall_online && (
             <p className="muted">
@@ -957,9 +958,9 @@ export default function DeckPage() {
             <CardAdder onAdd={addCardToDeck} placeholder="nombre de la carta…" />
           </div>
           <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-            <button className="ghost" onClick={copyList}>{copied ? "¡Copiado! ✔" : "Copiar lista"}</button>
-            <button className="ghost" onClick={exportTxt}>⬇ Descargar .txt</button>
-            <button className="ghost" onClick={shareDeck}>🔗 Compartir por link</button>
+            <button className="ghost" onClick={copyList} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>{copied ? <><Icon name="check" size={14} /> ¡Copiado!</> : "Copiar lista"}</button>
+            <button className="ghost" onClick={exportTxt} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> Descargar .txt</button>
+            <button className="ghost" onClick={shareDeck} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="link" size={14} /> Compartir por link</button>
           </div>
           {shareUrl && (
             <p className="muted" style={{ fontSize: ".82rem" }}>
@@ -984,7 +985,7 @@ export default function DeckPage() {
                   </td>
                   <td>
                     {c.name}
-                    {c.legal === false && <span title="No legal en Commander"> ⛔</span>}
+                    {c.legal === false && <span title="No legal en Commander" style={{ marginLeft: 4 }}><Icon name="ban" size={12} /></span>}
                   </td>
                   <td>{c.cost}</td>
                   <td className="muted">{c.type}</td>
@@ -999,7 +1000,7 @@ export default function DeckPage() {
                     )}
                   </td>
                   <td>
-                    <button className="ghost" style={{ padding: "4px 8px" }} aria-label={`Quitar ${c.name}`} title="Quitar" onClick={() => remove(i)}>✕</button>
+                    <button className="ghost" style={{ padding: "4px 8px" }} aria-label={`Quitar ${c.name}`} title="Quitar" onClick={() => remove(i)}><Icon name="x" size={13} /></button>
                   </td>
                 </tr>
               ))}
@@ -1010,7 +1011,7 @@ export default function DeckPage() {
 
       {resolved && (
         <div className="card">
-          <h2>⚔ Probar este deck</h2>
+          <h2><Icon name="swords" size={19} /> Probar este deck</h2>
           <p className="muted" style={{ fontSize: ".82rem" }}>
             Simula tu lista contra un rival (el sistema juega ambos). Aproximado y contra
             UN rival registrado — sirve como termómetro, no como veredicto.
@@ -1055,7 +1056,7 @@ export default function DeckPage() {
 
       {resolved && (
         <div className="card">
-          <h2>🏅 Poder del deck (bracket)</h2>
+          <h2><Icon name="medal" size={19} /> Poder del deck (bracket)</h2>
           <div className="row" style={{ gap: 24, alignItems: "flex-start" }}>
             <div>
               <div style={{ fontFamily: "var(--font-display)", fontSize: "2rem", fontWeight: 700, color: "var(--accent)" }}>
@@ -1093,7 +1094,7 @@ export default function DeckPage() {
 
       {resolved && (
         <div className="card">
-          <h2>🔬 Análisis del deck</h2>
+          <h2><Icon name="flask" size={19} /> Análisis del deck</h2>
           <p className="muted" style={{ marginTop: -6, fontSize: ".82rem" }}>
             Fortalezas, debilidades y sinergias (heurístico sobre el texto de las
             cartas) + combos reales de Commander Spellbook. Todo aproximado salvo
@@ -1102,11 +1103,11 @@ export default function DeckPage() {
           <button className="go" disabled={analyzing} onClick={analyzeDeck}>
             {analyzing ? "Analizando…" : "Analizar deck"}
           </button>
-          {analysisErr && <p className="err">Error: {analysisErr}</p>}
+          {analysisErr && <p className="err" role="alert">Error: {analysisErr}</p>}
 
           <div style={{ marginTop: 12 }}>
-            <button className="ghost" onClick={drawHand}>
-              {hand ? "Robar otra mano ↻" : "Robar mano de prueba"}
+            <button className="ghost" onClick={drawHand} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              {hand ? <>Robar otra mano <Icon name="refresh" size={13} /></> : "Robar mano de prueba"}
             </button>
             {hand && (
               <div style={{ marginTop: 8 }}>
@@ -1128,13 +1129,13 @@ export default function DeckPage() {
             <div style={{ marginTop: 16 }}>
               <div className="row" style={{ gap: 24, flexWrap: "wrap" }}>
                 <div style={{ flex: "1 1 280px" }}>
-                  <h3 style={{ color: "#7ad17a" }}>✔ Fortalezas</h3>
+                  <h3 style={{ color: "#7ad17a", display: "flex", alignItems: "center", gap: 6 }}><Icon name="check" size={16} /> Fortalezas</h3>
                   <ul className="abil">
                     {analysis.strengths.map((s, i) => <li key={i}>{s}</li>)}
                   </ul>
                 </div>
                 <div style={{ flex: "1 1 280px" }}>
-                  <h3 style={{ color: "#e0a35a" }}>▲ Debilidades</h3>
+                  <h3 style={{ color: "#e0a35a", display: "flex", alignItems: "center", gap: 6 }}><Icon name="warning" size={15} /> Debilidades</h3>
                   <ul className="abil">
                     {analysis.weaknesses.map((w, i) => <li key={i}>{w}</li>)}
                   </ul>
@@ -1143,7 +1144,7 @@ export default function DeckPage() {
 
               {analysis.recommendations.length > 0 && (
                 <>
-                  <h3 style={{ marginTop: 14, color: "#8ab4ff" }}>➜ Recomendaciones</h3>
+                  <h3 style={{ marginTop: 14, color: "#8ab4ff", display: "flex", alignItems: "center", gap: 6 }}><Icon name="arrow-right" size={16} /> Recomendaciones</h3>
                   <ul className="abil">
                     {analysis.recommendations.map((r, i) => (
                       <li key={i}>
@@ -1260,7 +1261,7 @@ export default function DeckPage() {
 
       {resolved && resolved.missing.length > 0 && (
         <div className="card">
-          <h2>⚠ Cartas no encontradas ({resolved.missing.length})</h2>
+          <h2><Icon name="warning" size={19} /> Cartas no encontradas ({resolved.missing.length})</h2>
           <p className="muted">
             Corregí el nombre (buscá y elegí la sugerencia correcta) o traela por
             código de set + número de colección. Al elegir, se reemplaza en la lista
@@ -1288,8 +1289,8 @@ export default function DeckPage() {
             />
             <button className="go" onClick={onSaveDeck}>Guardar deck</button>
             {justSaved && (
-              <span style={{ color: "var(--g)" }}>
-                ✓ «{justSaved}» guardado — ya lo podés elegir en la{" "}
+              <span style={{ color: "var(--g)", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <Icon name="check" size={14} /> «{justSaved}» guardado — ya lo podés elegir en la{" "}
                 <Link href="/">página principal</Link>.
               </span>
             )}
@@ -1299,7 +1300,7 @@ export default function DeckPage() {
 
       {!noStorage && (
         <div className="card">
-          <h2>☁️ Nube (sync entre dispositivos)</h2>
+          <h2><Icon name="cloud" size={19} /> Nube (sync entre dispositivos)</h2>
           <p className="muted" style={{ fontSize: ".82rem" }}>
             Sin cuentas: tus decks + binder se guardan bajo un <b>código</b>. Subí desde
             este dispositivo y bajá pegando el mismo código en otro. Quien tenga el código
@@ -1312,16 +1313,16 @@ export default function DeckPage() {
               onClick={() => { try { navigator.clipboard?.writeText(syncCode); setCloudMsg("Código copiado."); } catch { /* */ } }}>Copiar código</button>
           </div>
           <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-            <button className="go" disabled={cloudBusy} onClick={pushCloud}>⬆ Subir a la nube</button>
+            <button className="go" disabled={cloudBusy} onClick={pushCloud} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="upload" size={14} /> Subir a la nube</button>
             <input placeholder="pegá un código para bajar…" aria-label="Código para bajar de la nube" value={otherCode}
               onChange={(e) => setOtherCode(e.target.value)}
               style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 9px", width: 240 }} />
-            <button className="ghost" disabled={cloudBusy} onClick={pullCloud}>⬇ Bajar de la nube</button>
+            <button className="ghost" disabled={cloudBusy} onClick={pullCloud} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> Bajar de la nube</button>
           </div>
           {cloudMsg && <p className="muted" style={{ fontSize: ".82rem" }}>{cloudMsg}</p>}
           <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
             {supporter ? (
-              <p className="muted" style={{ fontSize: ".85rem" }}>💛 Sos <b>supporter</b>: topes ampliados (simulaciones grandes y más decks en la nube). ¡Gracias!</p>
+              <p className="muted" style={{ fontSize: ".85rem", display: "flex", alignItems: "center", gap: 5 }}><Icon name="heart-fill" size={14} /> Sos <b>supporter</b>: topes ampliados (simulaciones grandes y más decks en la nube). ¡Gracias!</p>
             ) : (
               <>
                 <p className="muted" style={{ fontSize: ".82rem" }}>
@@ -1333,7 +1334,7 @@ export default function DeckPage() {
                     onChange={(e) => setCoupon(e.target.value)}
                     style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 9px", width: 220 }} />
                   <button className="ghost" onClick={redeemCoupon} disabled={!coupon.trim()}>Canjear</button>
-                  <a className="ghost" href={KOFI_URL} target="_blank" rel="noreferrer" style={{ padding: "6px 12px", textDecoration: "none" }}>💛 Ko-fi</a>
+                  <a className="ghost" href={KOFI_URL} target="_blank" rel="noreferrer" style={{ padding: "6px 12px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="heart-fill" size={13} /> Ko-fi</a>
                   <a className="ghost" href={PAYPAL_URL} target="_blank" rel="noreferrer" style={{ padding: "6px 12px", textDecoration: "none" }}>PayPal</a>
                 </div>
               </>
@@ -1345,7 +1346,7 @@ export default function DeckPage() {
 
       {!noStorage && (
         <div className="card">
-          <h2>🗃️ Mi binder</h2>
+          <h2><Icon name="archive" size={19} /> Mi binder</h2>
           <p className="muted" style={{ fontSize: ".82rem" }}>
             Tu colección de cartas (guardada en este navegador). Agregá cartas y fijate
             en cuáles de tus decks guardados te sirve cada una.
@@ -1361,12 +1362,12 @@ export default function DeckPage() {
               {binder.map((c) => (
                 <div key={c.name} className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                   <span style={{ minWidth: 180 }}>{c.qty > 1 ? `${c.qty}× ` : ""}{c.name}</span>
-                  {resolved && <button className="ghost" style={{ padding: "3px 8px" }} onClick={() => addCardToDeck(c.name)}>+ al deck</button>}
+                  {resolved && <button className="ghost" style={{ padding: "3px 8px", display: "inline-flex", alignItems: "center", gap: 4 }} onClick={() => addCardToDeck(c.name)}><Icon name="plus" size={12} /> al deck</button>}
                   <button className="ghost" style={{ padding: "3px 8px" }} disabled={suggesting === c.name}
                     onClick={() => whereDoesItHelp(c.name)}>
                     {suggesting === c.name ? "Buscando…" : "¿Dónde me sirve?"}
                   </button>
-                  <button className="ghost" style={{ padding: "3px 8px" }} aria-label={`Quitar ${c.name} del binder`} title="Quitar" onClick={() => binderRemove(c.name)}>✕</button>
+                  <button className="ghost" style={{ padding: "3px 8px" }} aria-label={`Quitar ${c.name} del binder`} title="Quitar" onClick={() => binderRemove(c.name)}><Icon name="x" size={13} /></button>
                 </div>
               ))}
             </div>

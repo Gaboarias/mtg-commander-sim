@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getUser, type User } from "./auth";
+import { Icon } from "./icons";
 
 const LINKS = [
   { href: "/", label: "Simulador" },
@@ -32,7 +33,7 @@ function ThemeToggle() {
       aria-label="Cambiar tema"
       title={theme === "light" ? "Modo oscuro" : "Modo claro"}
     >
-      {theme === "light" ? "🌙" : "☀️"}
+      <Icon name={theme === "light" ? "moon" : "sun"} size={18} />
     </button>
   );
 }
@@ -45,7 +46,7 @@ export default function Nav() {
     <nav className="nav">
       <div className="nav-inner">
         <Link href="/" className="nav-brand">
-          🎴 <span>MTG Commander Sim</span>
+          <Icon name="cards" size={20} /> <span>MTG Commander Sim</span>
         </Link>
         <div className="nav-links">
           {LINKS.map((l) => {

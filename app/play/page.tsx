@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { Seat, type PlayerState, type Perm } from "../board";
 import { listDecks, type SavedDeck } from "../localDecks";
 import { download, fileStamp } from "../download";
+import { Icon } from "../icons";
 
 const PY_VERSION = "0.26.4";
 const PY_BASE = `https://cdn.jsdelivr.net/pyodide/v${PY_VERSION}/full/`;
@@ -331,7 +332,7 @@ export default function Play() {
   return (
     <div className="wrap">
       <header>
-        <h1>🕹️ Jugar contra el sistema</h1>
+        <h1><Icon name="gamepad" size={26} /> Jugar contra el sistema</h1>
         <p>Elegí tu deck y hasta 3 rivales. El motor corre en tu navegador (Pyodide); vos manejás tu turno.</p>
       </header>
 
@@ -339,12 +340,12 @@ export default function Play() {
         <div className="card">
           <h2><span className="step">1</span> Preparar la partida</h2>
           <p className="muted" style={{ marginTop: 0 }}>
-            Tus decks guardados (★) del <a href="/deck">editor</a> aparecen acá.
+            Tus decks guardados (<Icon name="star" size={12} />) del <a href="/deck">editor</a> aparecen acá.
             {pickables.some((p) => p.mine)
               ? " "
               : " Todavía no tenés decks guardados: creá y guardá uno en el editor."}
-            <button className="ghost" style={{ padding: "2px 10px", marginLeft: 8 }}
-              onClick={() => rebuild(examplesRef.current)}>↻ Actualizar mis decks</button>
+            <button className="ghost" style={{ padding: "2px 10px", marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 5 }}
+              onClick={() => rebuild(examplesRef.current)}><Icon name="refresh" size={13} /> Actualizar mis decks</button>
           </p>
           <div className="row" style={{ flexWrap: "wrap", gap: 14 }}>
             <label>Tu deck&nbsp;
@@ -369,7 +370,7 @@ export default function Play() {
           <div className="decks">
             {pickables.filter((p) => p.id !== mineId).map((p) => (
               <button key={p.id} className={`deck-btn ${foeIds.includes(p.id) ? "on" : ""}`} onClick={() => toggleFoe(p.id)}>
-                <div className="name">{p.mine ? "★ " : ""}{p.label}</div>
+                <div className="name">{p.mine ? <Icon name="star" size={13} /> : null}{p.mine ? " " : ""}{p.label}</div>
                 <div className="sub">{p.tag}</div>
               </button>
             ))}
@@ -379,10 +380,10 @@ export default function Play() {
               {booting ? "Preparando…" : "Empezar partida"}
             </button>
           </div>
-          {status && <p className="muted" style={{ marginTop: 10 }}>⏳ {status}</p>}
-          {error && <p className="err">⚠ {error}</p>}
+          {status && <p className="muted" style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}><Icon name="hourglass" size={14} /> {status}</p>}
+          {error && <p className="err" role="alert"><Icon name="warning" size={15} /> {error}</p>}
           <p className="muted" style={{ marginTop: 10, fontSize: ".8rem" }}>
-            Podés jugar con tus decks guardados (★) o los de ejemplo. Tus cartas
+            Podés jugar con tus decks guardados (<Icon name="star" size={12} />) o los de ejemplo. Tus cartas
             reales se resuelven con Scryfall (foto y texto) antes de empezar.
           </p>
         </div>
@@ -397,8 +398,8 @@ export default function Play() {
                 {state.phase === "over" ? "Partida terminada"
                   : myTurn ? "Tu turno — jugá tus cartas" : `Juega ${state.players[state.active]?.name}`}
               </span>
-              <button className="ghost" style={{ marginLeft: "auto" }} onClick={() => { setState(null); setError(null); }}>
-                ↩ Nueva partida
+              <button className="ghost" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5 }} onClick={() => { setState(null); setError(null); }}>
+                <Icon name="undo" size={14} /> Nueva partida
               </button>
             </div>
 
@@ -415,7 +416,7 @@ export default function Play() {
             </div>
 
             {state.winner && (
-              <p className="win-line">🏆 {state.winner === "EMPATE" ? "Empate (límite de turnos)." : <>Gana <b>{state.winner}</b>.</>}</p>
+              <p className="win-line"><Icon name="trophy" size={18} /> {state.winner === "EMPATE" ? "Empate (límite de turnos)." : <>Gana <b>{state.winner}</b>.</>}</p>
             )}
           </div>
 
@@ -427,13 +428,13 @@ export default function Play() {
               <h2 className="def-title">
                 <motion.span className="alert"
                   animate={reduce ? {} : { scale: [1, 1.15, 1] }}
-                  transition={reduce ? undefined : { repeat: Infinity, duration: 1.1 }}>⚔</motion.span>
+                  transition={reduce ? undefined : { repeat: Infinity, duration: 1.1 }}><Icon name="swords" size={18} /></motion.span>
                 {state.combat.from} te ataca — {state.combat.incoming_damage} de daño en camino
               </h2>
               <div className="def-attackers">
                 {state.combat.attackers.map((a) => (
                   <div key={a.uid} className={`atk-chip ${assign && Object.values(assign).includes(a.uid) ? "blocked" : ""}`}>
-                    {a.commander ? "👑 " : ""}{a.name} <b>{a.power}/{a.toughness}</b>
+                    {a.commander ? <Icon name="crown" size={13} /> : null}{a.commander ? " " : ""}{a.name} <b>{a.power}/{a.toughness}</b>
                     <span className="muted">{Object.values(assign).includes(a.uid) ? " · bloqueado" : " · sin bloquear"}</span>
                   </div>
                 ))}
@@ -443,8 +444,8 @@ export default function Play() {
                 <div className="act-block">
                   <span className="act-label">Responder (instantáneo):</span>
                   {state.combat.responses.map((r) => (
-                    <button key={r.i} className="ghost" onClick={() => respondCard(r)}>
-                      ⚡ {r.name}{r.target_spec ? " 🎯" : ""} <span className="muted">{r.cost}</span>
+                    <button key={r.i} className="ghost" onClick={() => respondCard(r)} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Icon name="bolt" size={13} /> {r.name}{r.target_spec ? <Icon name="target" size={12} /> : null} <span className="muted">{r.cost}</span>
                     </button>
                   ))}
                 </div>
@@ -477,10 +478,10 @@ export default function Play() {
               )}
 
               <div className="act-block">
-                <button className="go" onClick={() => doAct("defend", {
+                <button className="go" style={{ display: "inline-flex", alignItems: "center", gap: 6 }} onClick={() => doAct("defend", {
                   pairs: Object.entries(assign).map(([blk, atk]) => ({ blocker: Number(blk), attacker: atk })),
                 })}>
-                  {Object.keys(assign).length > 0 ? "Confirmar bloqueos ✔" : "Recibir el ataque ✔"}
+                  {Object.keys(assign).length > 0 ? <><Icon name="check" size={14} /> Confirmar bloqueos</> : <><Icon name="check" size={14} /> Recibir el ataque</>}
                 </button>
               </div>
               <p className="muted" style={{ fontSize: ".8rem" }}>
@@ -496,7 +497,7 @@ export default function Play() {
             const enough = bottom.length === m.to_bottom;
             return (
               <div className="card">
-                <h2>🤚 Mano inicial{m.mulls > 0 ? ` · mulligan ${m.mulls}` : ""}</h2>
+                <h2><Icon name="hand" size={19} /> Mano inicial{m.mulls > 0 ? ` · mulligan ${m.mulls}` : ""}</h2>
                 <p className="muted" style={{ marginTop: 0 }}>
                   {m.lands} tierra{m.lands === 1 ? "" : "s"} en mano.
                   {m.lands <= 1 && <b style={{ color: "#e0684f" }}> Pocas tierras — conviene mulligan.</b>}
@@ -520,19 +521,19 @@ export default function Play() {
                           style={art[hc.name] ? { backgroundImage: `url(${art[hc.name]})` } : undefined}>
                           {!art[hc.name] && <span>{hc.name}</span>}
                           {hc.cost && <span className="hc-cost">{hc.cost}</span>}
-                          {sel && <span className="cm-counter" style={{ left: "auto", right: 2 }}>↓ fondo</span>}
+                          {sel && <span className="cm-counter" style={{ left: "auto", right: 2, display: "inline-flex", alignItems: "center", gap: 2 }}><Icon name="arrow-down" size={11} /> fondo</span>}
                         </div>
                         <div className="hc-foot">
-                          <span className="hc-name" onClick={() => inspectCard(hc)}>{hc.name}{hc.is_land ? " 🏞" : ""}</span>
+                          <span className="hc-name" onClick={() => inspectCard(hc)}>{hc.name}{hc.is_land ? <> <Icon name="land" size={12} /></> : null}</span>
                         </div>
                       </div>
                     );
                   })}
                 </div>
                 <div className="act-block">
-                  <button className="ghost" onClick={() => doAct("mulligan")}>🔄 Mulligan</button>
-                  <button className="go" onClick={() => doAct("keep", { bottom })} disabled={m.to_bottom > 0 && !enough}>
-                    ✅ Mantener{m.to_bottom > 0 ? ` (fondo: ${bottom.length}/${m.to_bottom})` : ""}
+                  <button className="ghost" onClick={() => doAct("mulligan")} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="refresh" size={14} /> Mulligan</button>
+                  <button className="go" style={{ display: "inline-flex", alignItems: "center", gap: 5 }} onClick={() => doAct("keep", { bottom })} disabled={m.to_bottom > 0 && !enough}>
+                    <Icon name="check" size={14} /> Mantener{m.to_bottom > 0 ? ` (fondo: ${bottom.length}/${m.to_bottom})` : ""}
                   </button>
                 </div>
               </div>
@@ -561,8 +562,8 @@ export default function Play() {
                         <div className="hc-foot">
                           <span className="hc-name" onClick={() => inspectCard(hc)}>{hc.name}</span>
                           {canLand && <button className="go tiny" onClick={() => doAct("land", { i: hc.i })}>Jugar</button>}
-                          {castOpt && <button className="go tiny" onClick={() => castCard(castOpt)}>
-                            Lanzar{castOpt.target_spec ? " 🎯" : ""}
+                          {castOpt && <button className="go tiny" onClick={() => castCard(castOpt)} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            Lanzar{castOpt.target_spec ? <Icon name="target" size={12} /> : null}
                           </button>}
                         </div>
                       </div>
@@ -575,8 +576,8 @@ export default function Play() {
                   <div className="act-block">
                     <span className="act-label">Zona de mando:</span>
                     {commandCasts.map((c, k) => (
-                      <button key={k} className="ghost" onClick={() => castCard(c)}>
-                        👑 Lanzar {c.name}{c.target_spec ? " 🎯" : ""} <span className="muted">{c.cost}{c.tax ? ` +${c.tax}` : ""}</span>
+                      <button key={k} className="ghost" onClick={() => castCard(c)} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        <Icon name="crown" size={13} /> Lanzar {c.name}{c.target_spec ? <Icon name="target" size={12} /> : null} <span className="muted">{c.cost}{c.tax ? ` +${c.tax}` : ""}</span>
                       </button>
                     ))}
                   </div>
@@ -615,10 +616,11 @@ export default function Play() {
                     uids: [...picked],
                     target: atkTarget ?? legal?.attack_targets?.[0]?.index,
                   })}
-                    disabled={!legal?.can_attack || picked.size === 0}>
-                    ⚔ Atacar {picked.size > 0 ? `(${picked.size})` : ""}
+                    disabled={!legal?.can_attack || picked.size === 0}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <Icon name="swords" size={15} /> Atacar {picked.size > 0 ? `(${picked.size})` : ""}
                   </button>
-                  <button className="ghost" onClick={() => doAct("end")} disabled={!legal?.can_end}>Terminar turno ⏭</button>
+                  <button className="ghost" onClick={() => doAct("end")} disabled={!legal?.can_end} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Terminar turno <Icon name="skip-forward" size={14} /></button>
                 </div>
                 <p className="muted" style={{ fontSize: ".8rem" }}>
                   Tocá una carta para ver sus habilidades. Elegí criaturas tocándolas
@@ -635,8 +637,8 @@ export default function Play() {
             <div className="log">{(state.log || []).join("\n")}</div>
             <div className="act-block" style={{ marginTop: 10 }}>
               <span className="act-label">Exportar todas las jugadas:</span>
-              <button className="ghost" onClick={() => exportGame("json")}>⬇ JSON</button>
-              <button className="ghost" onClick={() => exportGame("txt")}>⬇ Texto</button>
+              <button className="ghost" onClick={() => exportGame("json")} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> JSON</button>
+              <button className="ghost" onClick={() => exportGame("txt")} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> Texto</button>
             </div>
           </div>
         </>
@@ -645,8 +647,8 @@ export default function Play() {
       {targeting && (
         <div className="inspect-back" onClick={() => setTargeting(null)}>
           <div className="inspect" onClick={(e) => e.stopPropagation()}>
-            <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setTargeting(null)}>✕</button>
-            <h3>🎯 Objetivo{targeting.count > 1 ? "s" : ""} de {targeting.name}</h3>
+            <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setTargeting(null)}><Icon name="x" size={16} /></button>
+            <h3><Icon name="target" size={17} /> Objetivo{targeting.count > 1 ? "s" : ""} de {targeting.name}</h3>
             <p className="muted" style={{ marginTop: 2 }}>
               {targeting.count > 1
                 ? `Elegí hasta ${targeting.count} objetivos (${tsel.length}/${targeting.count}):`
@@ -657,8 +659,8 @@ export default function Play() {
                 const tu = (t.uid ?? t.idx) as number;
                 const sel = tsel.includes(tu);
                 return (
-                  <button key={k} className={`ghost ${sel ? "on" : ""}`} onClick={() => chooseTarget(t)}>
-                    {targeting.count > 1 ? (sel ? "☑ " : "☐ ") : ""}
+                  <button key={k} className={`ghost ${sel ? "on" : ""}`} onClick={() => chooseTarget(t)} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    {targeting.count > 1 ? <Icon name={sel ? "check-circle" : "plus"} size={13} /> : null}
                     {t.name}{t.power != null ? ` ${t.power}/${t.toughness}` : ""}
                     {t.from ? <span className="muted"> · {t.from}</span> : null}
                   </button>
@@ -679,7 +681,7 @@ export default function Play() {
       {inspect && (
         <div className="inspect-back" onClick={() => setInspect(null)}>
           <div className="inspect" onClick={(e) => e.stopPropagation()}>
-            <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setInspect(null)}>✕</button>
+            <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setInspect(null)}><Icon name="x" size={16} /></button>
             {art[inspect.name] ? (
               <div className="inspect-art" style={{ backgroundImage: `url(${art[inspect.name]})` }} />
             ) : (
@@ -708,8 +710,8 @@ export default function Play() {
 
       <footer>
         El sistema juega los turnos rivales con la dificultad elegida. Podés usar
-        tus decks importados (★) con foto y texto real de Scryfall, o los de
-        ejemplo (ficha simple). Tocá cualquier carta (o su ⓘ) para verla.
+        tus decks importados (<Icon name="star" size={12} />) con foto y texto real de Scryfall, o los de
+        ejemplo (ficha simple). Tocá cualquier carta (o su <Icon name="info" size={12} />) para verla.
       </footer>
     </div>
   );
