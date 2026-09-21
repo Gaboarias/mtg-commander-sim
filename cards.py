@@ -372,10 +372,10 @@ def FaithlessLooting():
 
 
 def CronistaEspectral():
-    # auto-molienda barata: siembra el cementerio para el motor de Espiritus
+    # siembra el cementerio para el motor de Espiritus (carta real -> trae arte)
     def etb(game, ctrl, perm):
         mill(game, ctrl, 3)
-    c = creature("Spectral Chronicler", "1W", 1, 2, tags=("engine",), color_id=(W,))
+    c = creature("Doomed Traveler", "W", 1, 1, tags=("engine",), color_id=(W,))
     c.on_etb = etb
     return c
 
@@ -383,7 +383,7 @@ def CronistaEspectral():
 def MerodeadorDeTumbas():
     def etb(game, ctrl, perm):
         mill(game, ctrl, 2)
-    c = creature("Graveyard Prowler", "1R", 2, 1, tags=("engine",), color_id=(R,))
+    c = creature("Bloodrage Brawler", "1R", 4, 1, tags=("engine",), color_id=(R,))
     c.on_etb = etb
     return c
 
