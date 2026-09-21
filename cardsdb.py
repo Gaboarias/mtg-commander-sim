@@ -179,6 +179,21 @@ def _fragment_effect(seg: str):
             for tg in (targets or []):
                 game.deal_damage(None, tg, _n)
         return burn, "opp_creature", max(1, cnt or 1)
+    # quema a un JUGADOR elegido: "deals N damage to target player / any target /
+    # creature or player / player or planeswalker" -> el humano elige a qué rival.
+    mp = re.search(r"deals? (\w+) damage to (?:any target|target player|target opponent|"
+                   r"target creature or player|target planeswalker or player|"
+                   r"target player or planeswalker)", seg, re.I)
+    if mp and (n := _count_word(mp.group(1))):
+        def burnp(game, ctrl, targets, _n=n):
+            tgts = [t for t in (targets or []) if hasattr(t, "life")]  # jugadores
+            if not tgts:
+                opps = game.opponents(ctrl)
+                tgts = [min(opps, key=lambda o: o.life)] if opps else []
+            for tg in tgts:
+                game.deal_damage(None, tg, _n)
+                game.log(f"{ctrl.name}: {_n} de daño a {tg.name}")
+        return burnp, "opp_player", 1
     geff = _generic_amount_effect(seg)
     if geff is None:
         dm = re.search(r"draw (\w+) cards?", seg, re.I)

@@ -308,6 +308,9 @@ class InteractiveGame:
             pool = self.g.legal_creature_targets(p)
             pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
             return pool[:n]
+        if ts == "opp_player":
+            opps = self.g.opponents(p)
+            return [min(opps, key=lambda o: o.life)] if opps else []
         if ts == "stack_spell":
             return [self.g.stack[-1]] if self.g.stack else []
         return None
@@ -325,6 +328,10 @@ class InteractiveGame:
             return [{"uid": pm.uid, "name": pm.name, "power": pm.power,
                      "toughness": pm.toughness, "from": pm.controller.name}
                     for pm in self.g.legal_creature_targets(self.human())]
+        if ts == "opp_player":
+            return [{"idx": self.players.index(o), "name": o.name,
+                     "from": f"{o.life} de vida"}
+                    for o in self.g.opponents(self.human())]
         if ts == "stack_spell":
             return [{"idx": k, "name": getattr(o.source, "name", "?")}
                     for k, o in enumerate(self.g.stack)]
@@ -359,6 +366,15 @@ class InteractiveGame:
                 pm = self._find_any_perm(uid)
                 if pm is not None and self.g.can_target(self.human(), pm):
                     out.append(pm)
+            return out
+        if ts == "opp_player":
+            opps = self.g.opponents(self.human())
+            out = []
+            for uid in uids:
+                if isinstance(uid, int) and 0 <= uid < len(self.players):
+                    pl = self.players[uid]
+                    if pl in opps:
+                        out.append(pl)
             return out
         if ts == "stack_spell":
             return [self.g.stack[u] for u in uids if 0 <= u < len(self.g.stack)]

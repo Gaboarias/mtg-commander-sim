@@ -324,6 +324,43 @@ def test_interactive_attack_target_choice():
     assert st is not None
 
 
+def test_modal_damage_targets_chosen_player():
+    # Un modo de daño "a target player" debe exponer los rivales como objetivos
+    # (target_spec opp_player) y pegarle al rival ELEGIDO, no siempre al más débil.
+    import interactive
+    import cardsdb
+    import cards
+    import decks
+    defs = [("Tu deck",) + decks.build("marvel"),
+            ("Rival A",) + decks.build("strixhaven"),
+            ("Rival B",) + decks.build("lorehold")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    charm = cardsdb.build_card_from_data({
+        "name": "Boros Charm", "type_line": "Instant", "mana_cost": "{R}{W}",
+        "color_identity": ["R", "W"],
+        "oracle_text": ("Choose one —\n• Boros Charm deals 4 damage to target player "
+                        "or planeswalker.\n• Draw two cards.")})
+    hu.hand.append(charm)
+    for _ in range(2):
+        ig.g.move_to_battlefield(cards.land("Sacred Foundry", ["R", "W"]), hu)
+
+    entry = next(c for c in ig.legal()["casts"] if c["name"] == "Boros Charm")
+    dmg_mode = entry["modes"][0]
+    assert dmg_mode["target_spec"] == "opp_player"
+    assert len(dmg_mode["targets"]) == 2                 # los dos rivales
+    assert all("idx" in t and "from" in t for t in dmg_mode["targets"])
+
+    # elijo pegarle al rival B (índice de jugador 2), aunque no sea el más débil
+    victim = ig.players[2]
+    life0 = victim.life
+    idx = hu.hand.index(charm)
+    ig.cast(i=idx, zone="hand", mode=0, target_uids=[2])
+    assert victim.life == life0 - 4
+    assert ig.players[1].life == 40                       # el otro rival intacto
+
+
 def test_interactive_defense_window():
     # Fase 2: cuando un rival me ataca, la partida se pausa en "defense" y puedo
     # resolver (tomar el daño / bloquear) y continuar.
