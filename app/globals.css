@@ -435,9 +435,30 @@ ul.abil li { margin: 5px 0; line-height: 1.35; }
 .blk-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; max-width: 460px; margin: 6px 0; }
 
 .target-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
-.target-list .ghost { text-align: left; }
+.target-list .ghost { text-align: left; justify-content: flex-start; }
 
 .target-list .ghost.on { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(216,178,58,.5); color: var(--text); }
+
+/* --- Consistencia (Fase 4) ------------------------------------------- */
+/* alineado uniforme de íconos SVG + texto en todos los botones/enlaces
+   de acción (evita depender de estilos inline por botón) */
+button.go, button.ghost, a.go, a.ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+/* botón ⓘ sobre la carta: que el SVG (14px) entre bien */
+.cardmini .cm-info {
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+/* cerrar (modales): centrar el SVG */
+.inspect-x { display: inline-grid; place-items: center; width: 28px; height: 28px; }
+/* chips: usar el borde del tema (antes color fijo, no adaptaba a modo claro) */
+.chip { border-color: var(--border); }
+/* íconos dentro de headings/labels heredan el color del texto */
+h1 svg, h2 svg, h3 svg { color: currentColor; }
 
 /* ---- responsive / mobile ---- */
 @media (max-width: 640px) {
