@@ -13,7 +13,13 @@ type MatchSpec =
   | { kind: "custom"; name: string; text: string };
 type Pickable = { id: string; label: string; tag: string; spec: MatchSpec; mine: boolean };
 type Step = { turn: number; active: number; label: string; stack: string[]; players: PlayerState[] };
-type Replay = { players: string[]; winner: string; turns: number; steps: Step[]; log?: string[]; images: Record<string, string> };
+type KeyPlay = { turn: number; label: string; why?: string; delta?: number; step: number };
+type MatchAnalysis = {
+  win_type: string; summary: string;
+  key_plays: KeyPlay[]; best_moves: KeyPlay[];
+  mistakes: { player: string; note: string }[]; chain: KeyPlay[];
+};
+type Replay = { players: string[]; winner: string; turns: number; steps: Step[]; log?: string[]; analysis?: MatchAnalysis; images: Record<string, string> };
 type Combo = { id: string; cards: string[]; produces: string[] };
 type DeckAnalysis = {
   name: string;
@@ -258,6 +264,61 @@ export default function Watch() {
               <span>ficha de color = carta sin arte (casera)</span>
             </div>
           </details>
+        </div>
+      )}
+
+      {replay?.analysis && (
+        <div className="card">
+          <h2>🧠 Análisis de la partida</h2>
+          <p style={{ marginTop: -4 }}>
+            <span className="chip" style={{ marginRight: 8 }}>{replay.analysis.win_type}</span>
+            {replay.analysis.summary}
+          </p>
+          <p className="muted" style={{ fontSize: ".8rem" }}>
+            Lectura automática y aproximada de lo que decidió la partida. Tocá una jugada para saltar el tablero.
+          </p>
+          <div className="row" style={{ gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div style={{ flex: "1 1 260px" }}>
+              <h3 style={{ fontSize: ".95rem" }}>Jugadas clave</h3>
+              {replay.analysis.key_plays.length === 0 && <p className="muted">—</p>}
+              {replay.analysis.key_plays.map((k, i) => (
+                <button key={i} className="play-line" onClick={() => { setPlaying(false); setIdx(k.step); }}>
+                  <span className="pl-turn">T{k.turn}</span> {k.label}
+                  {k.why ? <span className="muted"> · {k.why}</span> : null}
+                </button>
+              ))}
+            </div>
+            <div style={{ flex: "1 1 260px" }}>
+              <h3 style={{ fontSize: ".95rem", color: "#7ad17a" }}>Movidas de mayor beneficio ({replay.winner})</h3>
+              {replay.analysis.best_moves.length === 0 && <p className="muted">—</p>}
+              {replay.analysis.best_moves.map((k, i) => (
+                <button key={i} className="play-line" onClick={() => { setPlaying(false); setIdx(k.step); }}>
+                  <span className="pl-turn">T{k.turn}</span> {k.label}
+                  {typeof k.delta === "number" ? <span className="muted"> · +{k.delta}</span> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+          {replay.analysis.mistakes.length > 0 && (
+            <>
+              <h3 style={{ fontSize: ".95rem", color: "#e0a35a" }}>Errores / puntos flojos</h3>
+              <ul className="abil">
+                {replay.analysis.mistakes.map((m, i) => <li key={i}><b>{m.player}</b>: {m.note}</li>)}
+              </ul>
+            </>
+          )}
+          {replay.analysis.chain.length > 0 && (
+            <>
+              <h3 style={{ fontSize: ".95rem" }}>Encadenamiento hacia la victoria</h3>
+              <div className="plays" style={{ maxHeight: 200 }}>
+                {replay.analysis.chain.map((k, i) => (
+                  <button key={i} className="play-line" onClick={() => { setPlaying(false); setIdx(k.step); }}>
+                    <span className="pl-turn">T{k.turn}</span> {k.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
 

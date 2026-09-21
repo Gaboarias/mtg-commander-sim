@@ -291,6 +291,10 @@ export default function DeckPage() {
   const [cloudMsg, setCloudMsg] = useState<string | null>(null);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [supporter, setSupporter] = useState(false);
+  const [coupon, setCoupon] = useState("");
+  const [supMsg, setSupMsg] = useState<string | null>(null);
+  const supportUrl = process.env.NEXT_PUBLIC_SUPPORT_URL || "https://ko-fi.com/";
   const [suggest, setSuggest] = useState<SuggestResp | null>(null);
   const [suggesting, setSuggesting] = useState<string | null>(null);
 
@@ -307,8 +311,26 @@ export default function DeckPage() {
     setProfileState(getProfile());
     setSavedDecks(listDecks());
     setBinder(listBinder());
-    setSyncCode(getSyncCode());
+    const code = getSyncCode();
+    setSyncCode(code);
+    fetch("/api/supporter", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "status", code }),
+    }).then((r) => r.json()).then((d) => setSupporter(!!d.supporter)).catch(() => {});
   }, []);
+
+  async function redeemCoupon() {
+    setSupMsg(null);
+    try {
+      const r = await fetch("/api/supporter", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "redeem", code: getSyncCode(), coupon }),
+      });
+      const d = await r.json();
+      if (d.supporter) { setSupporter(true); setSupMsg("¡Listo! Modo supporter activado. Gracias 🙏"); setCoupon(""); }
+      else setSupMsg(d.error || "Cupón inválido.");
+    } catch { setSupMsg("Error al canjear."); }
+  }
 
   // abrir un deck compartido por link (?share=<id>)
   useEffect(() => {
@@ -407,7 +429,7 @@ export default function DeckPage() {
           action: "simulate",
           cards: resolved.cards.filter((c) => c.qty > 0).map((c) => ({ name: c.name, qty: c.qty })),
           commander: resolved.commander_name || "",
-          opponent, n: simN,
+          opponent, n: simN, code: getSyncCode(),
         }),
       });
       const d = await r.json();
@@ -1004,6 +1026,11 @@ export default function DeckPage() {
             </button>
           </div>
           {!resolved.commander_name && <p className="muted" style={{ fontSize: ".8rem" }}>Marcá el comandante primero.</p>}
+          {!supporter && simN > 200 && (
+            <p className="muted" style={{ fontSize: ".8rem" }}>
+              Tope gratis: 200 partidas por corrida. <a href={supportUrl} target="_blank" rel="noreferrer">Apoyá</a> para subirlo.
+            </p>
+          )}
           {sim && (
             <div style={{ marginTop: 12 }}>
               {sim.results.map((r) => (
@@ -1287,6 +1314,27 @@ export default function DeckPage() {
             <button className="ghost" disabled={cloudBusy} onClick={pullCloud}>⬇ Bajar de la nube</button>
           </div>
           {cloudMsg && <p className="muted" style={{ fontSize: ".82rem" }}>{cloudMsg}</p>}
+          <div style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
+            {supporter ? (
+              <p className="muted" style={{ fontSize: ".85rem" }}>💛 Sos <b>supporter</b>: topes ampliados (simulaciones grandes y más decks en la nube). ¡Gracias!</p>
+            ) : (
+              <>
+                <p className="muted" style={{ fontSize: ".82rem" }}>
+                  Todo el sitio es gratis. Los topes gratis (simular hasta {200} partidas, hasta {10} decks en la nube)
+                  se amplían si <a href={supportUrl} target="_blank" rel="noreferrer">apoyás el proyecto</a> —
+                  es para bancar la infraestructura, no la IP de MTG.
+                </p>
+                <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                  <input placeholder="canjear código de supporter" value={coupon}
+                    onChange={(e) => setCoupon(e.target.value)}
+                    style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 9px", width: 220 }} />
+                  <button className="ghost" onClick={redeemCoupon} disabled={!coupon.trim()}>Canjear</button>
+                  <a className="ghost" href={supportUrl} target="_blank" rel="noreferrer" style={{ padding: "6px 12px", textDecoration: "none" }}>💛 Apoyar</a>
+                </div>
+              </>
+            )}
+            {supMsg && <p className="muted" style={{ fontSize: ".82rem" }}>{supMsg}</p>}
+          </div>
         </div>
       )}
 

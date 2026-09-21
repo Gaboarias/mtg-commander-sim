@@ -32,6 +32,11 @@ export default function RootLayout({
       <body>
         <Nav />
         {children}
+        <div style={{ textAlign: "center", padding: "24px 16px 40px", fontSize: ".78rem", opacity: 0.6 }}>
+          Datos de cartas: <a href="https://scryfall.com" target="_blank" rel="noreferrer">Scryfall</a> ·
+          {" "}Combos: <a href="https://commanderspellbook.com" target="_blank" rel="noreferrer">Commander Spellbook</a>.
+          {" "}Proyecto fan, no afiliado a Wizards of the Coast. Contenido bajo su Fan Content Policy.
+        </div>
       </body>
     </html>
   );

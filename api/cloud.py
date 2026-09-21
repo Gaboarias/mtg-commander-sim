@@ -21,8 +21,10 @@ from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _db  # noqa: E402
+from supporter import is_supporter  # noqa: E402
 
 _CODE_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
+FREE_DECKS = 10        # tope gratis de decks en la nube (supporter sin tope práctico)
 
 
 def _now():
@@ -60,9 +62,14 @@ def push(code, decks, binder):
     if not _CODE_RE.match(code or ""):
         raise ValueError("código inválido")
     _db.ensure_schema()
+    decks = decks or []
+    capped = False
+    if not is_supporter(code) and len(decks) > FREE_DECKS:
+        decks = decks[:FREE_DECKS]
+        capped = True
     stmts = [("DELETE FROM mtg_decks WHERE owner_code = ?", [code])]
     now = _now()
-    for d in (decks or [])[:200]:
+    for d in decks[:200]:
         stmts.append((
             "INSERT INTO mtg_decks (owner_code, deck_id, name, text, colors, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -73,7 +80,7 @@ def push(code, decks, binder):
         "INSERT OR REPLACE INTO mtg_binder (owner_code, cards, updated_at) VALUES (?, ?, ?)",
         [code, json.dumps(binder or []), now]))
     _db.run(stmts)
-    return {"ok": True, "updated_at": now}
+    return {"ok": True, "updated_at": now, "capped": capped, "limit": FREE_DECKS}
 
 
 def share_put(name, text, commander):

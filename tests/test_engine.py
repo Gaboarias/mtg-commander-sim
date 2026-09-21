@@ -580,6 +580,70 @@ def test_analysis_consistency_and_recommendations():
     assert "Sol Ring" not in ramp2["cards"] and "Arcane Signet" not in ramp2["cards"]
 
 
+def test_match_analysis_win_type_and_key_plays():
+    import importlib
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api"))
+    ma = importlib.import_module("_matchanalysis")
+
+    class P:
+        def __init__(self, n):
+            self.name = n
+            self.life = 40
+
+    def pl(n, life):
+        return {"name": n, "life": life, "cmdr_damage": {}, "poison": 0, "battlefield": []}
+
+    trace = [
+        {"turn": 1, "active": 0, "label": "A juega tierra", "players": [pl("A", 40), pl("B", 40)]},
+        {"turn": 5, "active": 0, "label": "A ataca fuerte", "players": [pl("A", 40), pl("B", 30)]},
+        {"turn": 7, "active": 0, "label": "GANA A", "players": [pl("A", 40), pl("B", 0)]},
+    ]
+    res = ma.analyze(trace, "A", [P("A"), P("B")])
+    assert res["win_type"] in ("combate/quema", "último en pie")
+    assert res["summary"].startswith("Ganó A")
+    assert any(k["why"] for k in res["key_plays"])          # detecta al menos una jugada clave
+    assert res["best_moves"] and res["best_moves"][0]["delta"] >= 8
+
+
+def test_supporter_redeem_and_status():
+    import importlib
+    import urllib.request
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api"))
+    _db = importlib.import_module("_db")
+    sup = importlib.import_module("supporter")
+    os.environ["SUPPORTER_CODES"] = "GOODCODE"
+    os.environ["TURSO_DATABASE_URL"] = "libsql://x.turso.io"
+    os.environ["TURSO_AUTH_TOKEN"] = "t"
+
+    # base simulada en memoria: registramos qué SQL se ejecutó
+    store = set()
+
+    def fake_run(statements, timeout=20):
+        out = []
+        for sql, args in statements:
+            s = sql.strip().lower()
+            if s.startswith("insert or ignore into mtg_supporters"):
+                store.add(args[0])
+                out.append({"rows": [], "affected": 1, "last_insert_rowid": None})
+            elif s.startswith("select 1 from mtg_supporters"):
+                out.append({"rows": [{"1": 1}] if args[0] in store else [], "affected": 0, "last_insert_rowid": None})
+            else:
+                out.append({"rows": [], "affected": 0, "last_insert_rowid": None})
+        return out
+
+    orig = _db.run
+    _db.run = fake_run
+    try:
+        assert sup.redeem("mycode-12", "WRONG") == {"supporter": False, "error": "cupón inválido"}
+        assert sup.is_supporter("mycode-12") is False
+        assert sup.redeem("mycode-12", "GOODCODE") == {"supporter": True}
+        assert sup.is_supporter("mycode-12") is True
+    finally:
+        _db.run = orig
+
+
 def test_turso_db_encode_decode_and_parse():
     import importlib
     import json as _json

@@ -11,7 +11,8 @@ import sys
 from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # api/ en el path
-from _sim import match, match_log  # noqa: E402
+from _sim import match, match_log, FREE_N  # noqa: E402
+from supporter import is_supporter  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):
@@ -33,6 +34,10 @@ class handler(BaseHTTPRequestHandler):
             if req.get("log"):
                 self._send(200, match_log(specs, level))
             else:
-                self._send(200, match(specs, req.get("n", 120), level))
+                cap = 500 if is_supporter(req.get("code")) else FREE_N
+                n = min(int(req.get("n", 120)), cap)
+                res = match(specs, n, level)
+                res["free_cap"] = cap
+                self._send(200, res)
         except Exception as exc:  # noqa: BLE001
             self._send(400, {"error": str(exc)})

@@ -125,6 +125,8 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS mtg_matches (
          id INTEGER PRIMARY KEY AUTOINCREMENT, winner TEXT, commanders TEXT,
          turns INTEGER, created_at INTEGER)""",
+    """CREATE TABLE IF NOT EXISTS mtg_supporters (
+         code TEXT PRIMARY KEY, since INTEGER)""",
 ]
 
 

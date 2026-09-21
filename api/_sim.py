@@ -18,6 +18,7 @@ import decklist       # noqa: E402
 import gamechangers   # noqa: E402
 from engine import Game, Player, COLORS  # noqa: E402
 from policy import Policy        # noqa: E402
+import _matchanalysis  # noqa: E402
 
 try:
     import _scry      # cliente Scryfall (solo en Vercel con red)
@@ -25,6 +26,7 @@ except Exception:     # noqa: BLE001
     _scry = None
 
 MAX_N = 2000          # tope de partidas por request (serverless timeout)
+FREE_N = 200          # tope gratis de partidas por request (supporter sube a MAX_N)
 MAX_CARDS = 200       # tope de entradas de decklist
 
 
@@ -396,6 +398,7 @@ def replay(specs, seed=0, level="intermedio"):
         "turns": g.turn,
         "steps": g.trace,
         "log": list(g.log_lines),      # relato completo (líneas T-prefijadas)
+        "analysis": _matchanalysis.analyze(g.trace, winner, players),
         "images": _card_images(names),
     }
 
