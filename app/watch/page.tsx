@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useReducedMotion } from "framer-motion";
 import { listDecks, type SavedDeck } from "../localDecks";
 import { Seat, type PlayerState } from "../board";
+import { download, fileStamp } from "../download";
 
 type RegDeck = { key: string; commander: string; identity: string[]; theme?: string };
 type MatchSpec =
@@ -12,7 +13,16 @@ type MatchSpec =
   | { kind: "custom"; name: string; text: string };
 type Pickable = { id: string; label: string; tag: string; spec: MatchSpec; mine: boolean };
 type Step = { turn: number; active: number; label: string; stack: string[]; players: PlayerState[] };
-type Replay = { players: string[]; winner: string; turns: number; steps: Step[]; images: Record<string, string> };
+type Replay = { players: string[]; winner: string; turns: number; steps: Step[]; log?: string[]; images: Record<string, string> };
+type Combo = { id: string; cards: string[]; produces: string[] };
+type DeckAnalysis = {
+  name: string;
+  consistency?: { score: number; land_prob: number };
+  strengths?: string[];
+  weaknesses?: string[];
+  combos?: { included: Combo[]; error: string | null };
+  error?: string;
+};
 
 export default function Watch() {
   const [pickables, setPickables] = useState<Pickable[]>([]);
@@ -24,6 +34,10 @@ export default function Watch() {
   const [replay, setReplay] = useState<Replay | null>(null);
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [ranDecks, setRanDecks] = useState<MatchSpec[]>([]);
+  const [byTurn, setByTurn] = useState(false);
+  const [analysis, setAnalysis] = useState<DeckAnalysis[] | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
   const reduce = useReducedMotion() ?? false;
 
   useEffect(() => {
@@ -75,14 +89,73 @@ export default function Watch() {
       let d;
       try { d = JSON.parse(raw); } catch { throw new Error(`HTTP ${r.status}: ${raw.slice(0, 200)}`); }
       if (d.error) throw new Error(d.error);
-      setReplay(d); setIdx(0);
+      setReplay(d); setIdx(0); setRanDecks(decks); setAnalysis(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   }
 
+  // relato en texto (usa el log del backend si viene; si no, de los steps)
+  function relatoLines(): string[] {
+    if (!replay) return [];
+    if (replay.log && replay.log.length) return replay.log;
+    return replay.steps.map((s) => `T${s.turn}  ${s.label}`);
+  }
+  function exportJSON() {
+    if (!replay) return;
+    download(`partida-${fileStamp()}.json`, JSON.stringify(replay, null, 2), "application/json");
+  }
+  function exportTxt() {
+    if (!replay) return;
+    const head = `Partida — ${replay.players.join(" vs ")}\nGanador: ${replay.winner || "sin definir"} · ${replay.turns} turnos\n\n`;
+    download(`partida-${fileStamp()}.txt`, head + relatoLines().join("\n"), "text/plain");
+  }
+
+  // agrupa los pasos por turno + un conteo simple (aprox, por texto)
+  function turnGroups() {
+    const groups: { turn: number; steps: { i: number; label: string }[] }[] = [];
+    (replay?.steps || []).forEach((s, i) => {
+      let g = groups[groups.length - 1];
+      if (!g || g.turn !== s.turn) { g = { turn: s.turn, steps: [] }; groups.push(g); }
+      g.steps.push({ i, label: s.label });
+    });
+    return groups.map((g) => {
+      const t = { lands: 0, casts: 0, deaths: 0 };
+      for (const s of g.steps) {
+        if (/juega tierra/i.test(s.label)) t.lands++;
+        else if (/lanza/i.test(s.label)) t.casts++;
+        if (/muere|cementerio|destru|pierde/i.test(s.label)) t.deaths++;
+      }
+      return { ...g, tally: t };
+    });
+  }
+
+  async function analyzeDecks() {
+    const customs = ranDecks.filter((d) => d.kind === "custom") as Extract<MatchSpec, { kind: "custom" }>[];
+    setAnalyzing(true);
+    try {
+      const out: DeckAnalysis[] = [];
+      for (const d of customs) {
+        try {
+          const r = await fetch("/api/analyze", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: d.text, commander: null }),
+          });
+          const j = await r.json();
+          if (j.error) out.push({ name: d.name, error: j.error });
+          else out.push({ name: d.name, consistency: j.consistency, strengths: j.strengths, weaknesses: j.weaknesses, combos: j.combos });
+        } catch (e) {
+          out.push({ name: d.name, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      setAnalysis(out);
+    } finally { setAnalyzing(false); }
+  }
+
   const step = replay?.steps[idx];
   const last = replay ? replay.steps.length - 1 : 0;
+  const customCount = ranDecks.filter((d) => d.kind === "custom").length;
+  const exampleCount = ranDecks.length - customCount;
 
   return (
     <div className="wrap">
@@ -152,6 +225,12 @@ export default function Watch() {
             <p className="win-line">🏆 Gana <b>{replay.winner}</b> en {replay.turns} turnos.</p>
           )}
 
+          <div className="act-block" style={{ marginTop: 10 }}>
+            <span className="act-label">Descargar:</span>
+            <button className="ghost" onClick={exportJSON}>⬇ JSON (datos)</button>
+            <button className="ghost" onClick={exportTxt}>⬇ Texto (relato)</button>
+          </div>
+
           <details className="legend">
             <summary>¿Qué significa cada cosa? (nomenclatura)</summary>
             <div className="legend-grid">
@@ -172,6 +251,98 @@ export default function Watch() {
               <span>ficha de color = carta sin arte (casera)</span>
             </div>
           </details>
+        </div>
+      )}
+
+      {replay && (
+        <div className="card">
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <h2 style={{ margin: 0 }}>📜 Jugadas</h2>
+            <label className="muted" style={{ fontSize: ".85rem" }}>
+              <input type="checkbox" checked={byTurn} onChange={(e) => setByTurn(e.target.checked)} />{" "}
+              agrupar por turno
+            </label>
+          </div>
+          <p className="muted" style={{ fontSize: ".82rem" }}>
+            Tocá una jugada para saltar el tablero a ese momento.
+          </p>
+          <div className="plays">
+            {!byTurn && replay.steps.map((s, i) => (
+              <button key={i} className={`play-line${i === idx ? " on" : ""}`}
+                onClick={() => { setPlaying(false); setIdx(i); }}>
+                <span className="pl-turn">T{s.turn}</span> {s.label}
+              </button>
+            ))}
+            {byTurn && turnGroups().map((g) => (
+              <div key={g.turn} className="turn-group">
+                <div className="turn-head">
+                  Turno {g.turn}
+                  <span className="muted"> · {g.tally.lands} tierras · {g.tally.casts} hechizos{g.tally.deaths ? ` · ${g.tally.deaths} bajas` : ""}</span>
+                </div>
+                {g.steps.map((s) => (
+                  <button key={s.i} className={`play-line${s.i === idx ? " on" : ""}`}
+                    onClick={() => { setPlaying(false); setIdx(s.i); }}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {replay && (
+        <div className="card">
+          <h2>🔬 Análisis de los mazos</h2>
+          <p className="muted" style={{ fontSize: ".82rem" }}>
+            Fortalezas, debilidades, consistencia y combos POSIBLES (Commander Spellbook)
+            de los mazos que jugaron — no necesariamente los combos que ocurrieron en esta
+            partida (para eso está el relato de arriba).
+          </p>
+          {customCount === 0 ? (
+            <p className="muted">
+              Esta partida usó solo decks de ejemplo, que vienen armados y no se analizan.
+              Importá tus decks en el <Link href="/deck">editor</Link> para analizarlos.
+            </p>
+          ) : (
+            <>
+              <button className="go" disabled={analyzing} onClick={analyzeDecks}>
+                {analyzing ? "Analizando…" : `Analizar los mazos (${customCount})`}
+              </button>
+              {exampleCount > 0 && (
+                <p className="muted" style={{ fontSize: ".8rem" }}>
+                  ({exampleCount} deck(s) de ejemplo no se analizan.)
+                </p>
+              )}
+              {analysis && analysis.map((a, k) => (
+                <div key={k} className="combo" style={{ marginTop: 12 }}>
+                  <div><b>{a.name}</b>{a.consistency ? <span className="muted"> · consistencia {a.consistency.score}/100</span> : null}</div>
+                  {a.error ? (
+                    <p className="muted">No se pudo analizar: {a.error}</p>
+                  ) : (
+                    <div className="row" style={{ gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
+                      <div style={{ flex: "1 1 220px" }}>
+                        <div style={{ color: "#7ad17a", fontSize: ".85rem" }}>Fortalezas</div>
+                        <ul className="abil">{(a.strengths || []).slice(0, 3).map((s, i) => <li key={i}>{s}</li>)}</ul>
+                      </div>
+                      <div style={{ flex: "1 1 220px" }}>
+                        <div style={{ color: "#e0a35a", fontSize: ".85rem" }}>Debilidades</div>
+                        <ul className="abil">{(a.weaknesses || []).slice(0, 3).map((w, i) => <li key={i}>{w}</li>)}</ul>
+                      </div>
+                      <div style={{ flex: "1 1 220px" }}>
+                        <div style={{ fontSize: ".85rem" }}>Combos posibles</div>
+                        {a.combos?.error ? <p className="muted" style={{ fontSize: ".8rem" }}>no disponibles</p>
+                          : (a.combos?.included || []).length === 0 ? <p className="muted" style={{ fontSize: ".8rem" }}>ninguno detectado</p>
+                          : (a.combos!.included).slice(0, 4).map((c) => (
+                            <div key={c.id} style={{ fontSize: ".82rem" }}>{c.cards.join(" + ")}</div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
 

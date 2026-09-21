@@ -541,6 +541,20 @@ def test_deck_analysis_strengths_and_weaknesses():
     assert any(t["key"] == "tokens" for t in rep2["themes"])
 
 
+def test_replay_includes_log_for_watch():
+    # /watch necesita el relato para exportarlo y mostrar las jugadas.
+    import importlib
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api"))
+    _sim = importlib.import_module("_sim")
+    r = _sim.replay([{"kind": "registered", "key": "marvel"},
+                     {"kind": "registered", "key": "strixhaven"}], seed=1)
+    assert "log" in r and isinstance(r["log"], list) and len(r["log"]) > 0
+    assert "steps" in r and len(r["steps"]) > 0
+    import json
+    json.dumps(r)                                    # serializable para la web
+
+
 def test_analysis_consistency_and_recommendations():
     an = _analyze_mod()
     good = an._consistency(100, 37, {"ramp": 10, "tutor": 3}, 3.0)

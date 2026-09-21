@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Seat, type PlayerState, type Perm } from "../board";
 import { listDecks, type SavedDeck } from "../localDecks";
+import { download, fileStamp } from "../download";
 
 const PY_VERSION = "0.26.4";
 const PY_BASE = `https://cdn.jsdelivr.net/pyodide/v${PY_VERSION}/full/`;
@@ -235,13 +236,6 @@ export default function Play() {
     setPicked((s) => { const n = new Set(s); n.has(uid) ? n.delete(uid) : n.add(uid); return n; });
   }
 
-  function download(name: string, text: string, type: string) {
-    const blob = new Blob([text], { type });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = name; a.click();
-    URL.revokeObjectURL(url);
-  }
   function exportGame(fmt: "json" | "txt") {
     const py = pyRef.current;
     if (!py) return;
@@ -249,7 +243,7 @@ export default function Play() {
     const raw = fn();
     fn.destroy?.();
     const data = JSON.parse(raw);
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const stamp = fileStamp();
     if (fmt === "json") {
       download(`partida-${stamp}.json`, JSON.stringify(data, null, 2), "application/json");
     } else {

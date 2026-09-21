@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import { listDecks, removeDeck, type SavedDeck } from "./localDecks";
+import { download, fileStamp } from "./download";
 
 const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6"];
 
@@ -129,20 +130,9 @@ export default function Home() {
     }
   }
 
-  function download(name: string, text: string, type: string) {
-    const blob = new Blob([text], { type });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
   function exportJSON() {
     if (!result) return;
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    download(`mesa-${stamp}.json`, JSON.stringify(result, null, 2), "application/json");
+    download(`mesa-${fileStamp()}.json`, JSON.stringify(result, null, 2), "application/json");
   }
 
   function exportCSV() {
@@ -150,8 +140,7 @@ export default function Home() {
     const rows = [["partida", "ganador", "turnos"]];
     result.games.forEach((g) => rows.push([String(g.seed + 1), g.winner, String(g.turns)]));
     const csv = rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    download(`partidas-${stamp}.csv`, csv, "text/csv");
+    download(`partidas-${fileStamp()}.csv`, csv, "text/csv");
   }
 
   const reduce = useReducedMotion();
