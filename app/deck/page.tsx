@@ -251,10 +251,10 @@ function CardAdder({ onAdd, placeholder }: { onAdd: (name: string) => void; plac
 
 function Tag({ r }: { r: Row }) {
   const map: Record<string, [string, string]> = {
-    registry: ["#2f6b3a", "con efecto"],
+    registry: ["#2f6b3a", "con habilidad"],
     basic: ["#3a3f4a", "básica"],
-    scryfall: ["#3a5a8a", "datos reales"],
-    missing: ["#7a3030", "no encontrada"],
+    scryfall: ["#3a5a8a", "carta real"],
+    missing: ["#7a3030", "sin encontrar"],
   };
   const [bg, label] = map[r.source] || ["#3a3f4a", r.source];
   return (
@@ -937,8 +937,8 @@ export default function DeckPage() {
             <p className="err">Elegí tu comandante en el recuadro de arriba <Icon name="flag" size={13} /></p>
           )}
           <p className="muted">
-            {totalQty} cartas · {resolved.implemented} con efecto programado ·{" "}
-            {resolved.missing.length} no encontradas
+            {totalQty} cartas · {resolved.implemented} con habilidad ya cargada ·{" "}
+            {resolved.missing.length} sin encontrar
             {typeof resolved.price_total === "number" && resolved.price_total > 0
               ? ` · ~US$ ${resolved.price_total.toFixed(2)}` : ""}
           </p>
@@ -947,8 +947,8 @@ export default function DeckPage() {
           )}
           {!resolved.scryfall_online && (
             <p className="muted">
-              (Sin conexión a la base de cartas: solo se reconocen las cartas ya
-              programadas y las tierras básicas. En el sitio publicado se
+              (Ahora mismo no hay conexión a la base de cartas, así que solo se reconocen
+              las que ya vienen cargadas y las tierras básicas. En el sitio online se
               reconocen todas.)
             </p>
           )}
@@ -1085,9 +1085,9 @@ export default function DeckPage() {
             </div>
           </div>
           <p className="muted" style={{ marginTop: 12, fontSize: ".8rem" }}>
-            La lista de Game Changers es curada (subconjunto de la oficial de WotC,
-            que se actualiza); el bracket estimado es una guía por cantidad de
-            Game Changers, no considera combos ni negación masiva de tierras.
+            Nuestra lista de Game Changers es una selección de la oficial de WotC (que
+            va cambiando). El bracket es solo una guía por cuántos Game Changers tenés:
+            no mira combos ni cartas que dejan a la mesa sin tierras.
           </p>
         </div>
       )}
@@ -1096,9 +1096,9 @@ export default function DeckPage() {
         <div className="card">
           <h2><Icon name="flask" size={19} /> Análisis del deck</h2>
           <p className="muted" style={{ marginTop: -6, fontSize: ".82rem" }}>
-            Fortalezas, debilidades y sinergias (heurístico sobre el texto de las
-            cartas) + combos reales de Commander Spellbook. Todo aproximado salvo
-            los combos, que son por nombre.
+            Fortalezas, debilidades y sinergias (leyendo el texto de tus cartas) más
+            los combos reales de Commander Spellbook. Tomalo como una guía; los combos
+            sí son exactos, por nombre de carta.
           </p>
           <button className="go" disabled={analyzing} onClick={analyzeDeck}>
             {analyzing ? "Analizando…" : "Analizar deck"}
@@ -1173,8 +1173,8 @@ export default function DeckPage() {
                   {analysis.consistency.score}/100
                 </div>
                 <div className="muted" style={{ fontSize: ".84rem" }}>
-                  {Math.round(analysis.consistency.land_prob * 100)}% de manos iniciales
-                  con 2–5 tierras (jugables sin mulligan).
+                  En el {Math.round(analysis.consistency.land_prob * 100)}% de las manos
+                  iniciales arrancás con 2–5 tierras, o sea jugable sin mulligan.
                 </div>
               </div>
 
@@ -1326,8 +1326,8 @@ export default function DeckPage() {
             ) : (
               <>
                 <p className="muted" style={{ fontSize: ".82rem" }}>
-                  Todo el sitio es gratis. Los topes gratis (simular hasta {FREE_SIM} partidas, hasta {FREE_DECKS} decks en la nube)
-                  se amplían si apoyás el proyecto — es para bancar la infraestructura, no la IP de MTG.
+                  Todo el sitio es gratis. Los topes gratis (simular hasta {FREE_SIM} partidas y guardar hasta {FREE_DECKS} decks en la nube)
+                  se agrandan si apoyás el proyecto — es para pagar los servidores, no a la marca MTG.
                 </p>
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                   <input placeholder="canjear código de supporter" aria-label="Código de supporter" value={coupon}
@@ -1389,9 +1389,8 @@ export default function DeckPage() {
       )}
 
       <footer>
-        Las cartas con efecto programado se juegan con su habilidad; el resto usa
-        sus datos reales (coste, fuerza, resistencia, tipos). No se inventan datos
-        de cartas.
+        Las cartas con habilidad ya cargada la usan en la partida; el resto juega con su
+        coste, fuerza, resistencia y tipos reales. Nunca inventamos datos de una carta.
       </footer>
     </div>
   );

@@ -170,8 +170,9 @@ export default function Home() {
       <header>
         <h1><Icon name="cards" size={26} /> Simulador de partidas</h1>
         <p>
-          Elegí de 2 a 6 decks y mirá cuánto gana cada uno en muchas partidas.
-          Creá y guardá tus decks en el <Link href="/deck">editor de decks →</Link>.
+          Elegí de 2 a 6 decks, corré la mesa un montón de veces y mirá cuánto
+          gana cada uno. ¿Querés probar con los tuyos? Armalos en el{" "}
+          <Link href="/deck">editor de decks →</Link>.
         </p>
       </header>
 
@@ -293,7 +294,8 @@ export default function Home() {
             </div>
           ))}
           <p className="muted" style={{ marginTop: 8 }}>
-            «sin definir» = partidas que llegaron al límite sin un ganador claro.
+            «sin definir» son las partidas que se estiraron hasta el límite de turnos
+            sin un ganador claro.
           </p>
           <div className="row" style={{ marginTop: 12 }}>
             <button className="ghost" onClick={exportJSON} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> Exportar todo (JSON)</button>
@@ -311,8 +313,8 @@ export default function Home() {
         >
           <h2><Icon name="edit" size={20} /> Notas de la mesa</h2>
           <p className="muted" style={{ marginTop: 0 }}>
-            Duración media: <b>{result.notes.avg_rounds}</b> rondas ·{" "}
-            {result.notes.decided_pct}% de las partidas tuvieron ganador.
+            Las partidas duraron <b>{result.notes.avg_rounds}</b> rondas en promedio y{" "}
+            {result.notes.decided_pct}% terminaron con un ganador.
           </p>
           {result.notes.decks.map((d) => (
             <div key={d.deck} className="note-block">
@@ -346,8 +348,8 @@ export default function Home() {
             </div>
           ))}
           <p className="muted" style={{ marginTop: 8 }}>
-            El % indica en cuántas partidas se llegó a lanzar la carta. Uno bajo
-            suele señalar un coste alto, poca rampa, o que depende de otras piezas.
+            El % es en cuántas partidas la carta llegó a jugarse. Si es bajo, casi
+            siempre es porque cuesta mucho, falta rampa, o necesita otras piezas para salir.
           </p>
         </motion.div>
       )}
@@ -365,7 +367,8 @@ export default function Home() {
         <div className="card">
           <h2><Icon name="trophy" size={20} /> Ranking global de comandantes</h2>
           <p className="muted" style={{ fontSize: ".82rem" }}>
-            Winrate de las partidas vistas en "Ver una partida" por todos ({rankTotal} registradas).
+            Cuánto gana cada comandante en las partidas que la gente miró en "Ver una
+            partida" ({rankTotal} registradas hasta ahora).
           </p>
           {ranking.map((r) => (
             <div key={r.commander} className="bar-row" style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0" }}>
@@ -380,9 +383,9 @@ export default function Home() {
       )}
 
       <footer>
-        Los resultados son estimaciones de muchas partidas jugadas por el
-        sistema. Las cartas con efecto programado usan su habilidad; el resto se
-        juega con sus datos reales (coste, fuerza, resistencia).
+        Los números salen de simular muchas partidas, así que son una estimación, no
+        una verdad absoluta. Las cartas con habilidad ya cargada la usan; el resto juega
+        con su coste, fuerza y resistencia reales.
       </footer>
     </div>
   );

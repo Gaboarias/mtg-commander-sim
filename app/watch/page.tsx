@@ -175,7 +175,7 @@ export default function Watch() {
     <div className="wrap">
       <header>
         <h1><Icon name="film" size={26} /> Ver una partida</h1>
-        <p>Elegí de 2 a 6 decks y mirá cómo el sistema juega la mesa, turno a turno.</p>
+        <p>Elegí de 2 a 6 decks y mirá la partida completa, turno a turno, como si estuvieras en la mesa.</p>
       </header>
 
       <div className="card">
@@ -246,7 +246,7 @@ export default function Watch() {
           </div>
 
           <details className="legend">
-            <summary>¿Qué significa cada cosa? (nomenclatura)</summary>
+            <summary>¿Qué significa cada símbolo?</summary>
             <div className="legend-grid">
               <span><Icon name="play" size={12} /> jugador en turno</span>
               <span><Icon name="heart-fill" size={13} /> vida (roja si ≤ 10)</span>
@@ -276,7 +276,7 @@ export default function Watch() {
             {replay.analysis.summary}
           </p>
           <p className="muted" style={{ fontSize: ".8rem" }}>
-            Lectura automática y aproximada de lo que decidió la partida. Tocá una jugada para saltar el tablero.
+            Una lectura rápida de qué inclinó la partida. Tocá cualquier jugada para saltar el tablero a ese momento.
           </p>
           <div className="row" style={{ gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
             <div style={{ flex: "1 1 260px" }}>
@@ -290,7 +290,7 @@ export default function Watch() {
               ))}
             </div>
             <div style={{ flex: "1 1 260px" }}>
-              <h3 style={{ fontSize: ".95rem", color: "#7ad17a" }}>Movidas de mayor beneficio ({replay.winner})</h3>
+              <h3 style={{ fontSize: ".95rem", color: "#7ad17a" }}>Las mejores jugadas de {replay.winner}</h3>
               {replay.analysis.best_moves.length === 0 && <p className="muted">—</p>}
               {replay.analysis.best_moves.map((k, i) => (
                 <button key={i} className="play-line" onClick={() => { setPlaying(false); setIdx(k.step); }}>
@@ -310,7 +310,7 @@ export default function Watch() {
           )}
           {replay.analysis.chain.length > 0 && (
             <>
-              <h3 style={{ fontSize: ".95rem" }}>Encadenamiento hacia la victoria</h3>
+              <h3 style={{ fontSize: ".95rem" }}>Cómo se encadenó la victoria</h3>
               <div className="plays" style={{ maxHeight: 200 }}>
                 {replay.analysis.chain.map((k, i) => (
                   <button key={i} className="play-line" onClick={() => { setPlaying(false); setIdx(k.step); }}>
@@ -364,14 +364,14 @@ export default function Watch() {
         <div className="card">
           <h2><Icon name="flask" size={20} /> Análisis de los mazos</h2>
           <p className="muted" style={{ fontSize: ".82rem" }}>
-            Fortalezas, debilidades, consistencia y combos POSIBLES (Commander Spellbook)
-            de los mazos que jugaron — no necesariamente los combos que ocurrieron en esta
-            partida (para eso está el relato de arriba).
+            Fortalezas, debilidades, qué tan consistente es cada mazo y los combos que
+            <b> podrían</b> armar (según Commander Spellbook). Ojo: son los combos posibles,
+            no necesariamente los que pasaron en esta partida — para eso mirá el relato de arriba.
           </p>
           {customCount === 0 ? (
             <p className="muted">
-              Esta partida usó solo decks de ejemplo, que vienen armados y no se analizan.
-              Importá tus decks en el <Link href="/deck">editor</Link> para analizarlos.
+              Esta partida usó solo decks de ejemplo, que ya vienen armados y no se analizan.
+              Cargá los tuyos en el <Link href="/deck">editor</Link> para verlos en detalle.
             </p>
           ) : (
             <>
@@ -416,9 +416,9 @@ export default function Watch() {
       )}
 
       <footer>
-        La partida la juega el sistema (dificultad elegida). Las cartas con arte real vienen
-        de Scryfall; las cartas de ejemplo caseras usan una ficha simple.
-        Para ver decks reales con arte, importalos en el <Link href="/deck">editor</Link> y guardalos.
+        La partida la juega el sistema, en la dificultad que elijas. Las cartas reales van
+        con su ilustración; las de ejemplo usan una ficha simple.
+        Para ver tus decks con arte, cargalos y guardalos en el <Link href="/deck">editor</Link>.
       </footer>
     </div>
   );

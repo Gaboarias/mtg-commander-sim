@@ -7,7 +7,7 @@ import { Icon } from "./icons";
 export const metadata: Metadata = {
   title: "MTG Commander Sim",
   description:
-    "Motor de simulacion de Magic: The Gathering (Commander) en Python puro, con interfaz web. Corre miles de partidas y mide tasas de victoria.",
+    "Simulá partidas de Magic: The Gathering (Commander) online. Corré miles de partidas, probá tus decks y mirá cuánto gana cada uno.",
 };
 
 export default function RootLayout({
@@ -53,7 +53,7 @@ export default function RootLayout({
             </a>
           </div>
           <div style={{ fontSize: ".8rem", color: "var(--muted)", maxWidth: 640, margin: "0 auto", lineHeight: 1.5 }}>
-            El sitio es gratis; apoyar banca la infraestructura, no la IP de MTG.
+            El sitio es gratis; apoyar ayuda a pagar los servidores, no a la marca MTG.
             {" "}Datos de cartas: <a href="https://scryfall.com" target="_blank" rel="noreferrer">Scryfall</a> ·
             {" "}Combos: <a href="https://commanderspellbook.com" target="_blank" rel="noreferrer">Commander Spellbook</a>.
             {" "}Proyecto fan, no afiliado a Wizards of the Coast. Contenido bajo su Fan Content Policy.

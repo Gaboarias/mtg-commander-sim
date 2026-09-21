@@ -94,7 +94,7 @@ export default function LoginPage() {
     <div className="wrap">
       <header>
         <h1><Icon name="user" size={24} /> Ingresar / crear cuenta</h1>
-        <p>Con cuenta, tus decks y binder quedan atados a vos (en cualquier dispositivo). Es opcional: sin cuenta seguís con el código anónimo.</p>
+        <p>Con una cuenta, tus decks y tu binder te siguen a cualquier dispositivo. Es opcional: sin cuenta seguís usando tu código de sync.</p>
       </header>
       <div className="card" style={{ maxWidth: 460 }}>
         <div className="act-block" style={{ gap: 6 }}>
@@ -116,8 +116,8 @@ export default function LoginPage() {
           {err && <p className="err" role="alert">{err}</p>}
         </div>
         <p className="muted" style={{ fontSize: ".78rem", marginTop: 12 }}>
-          Seguridad: contraseñas cifradas (pbkdf2). Sin verificación por email — la recuperación
-          es por el código que te damos. <Link href="/">Volver</Link>
+          Tu contraseña se guarda cifrada, nunca en texto plano. No mandamos mails: si la
+          olvidás, la recuperás con el código que te damos al crear la cuenta. <Link href="/">Volver</Link>
         </p>
       </div>
     </div>

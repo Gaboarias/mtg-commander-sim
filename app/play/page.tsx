@@ -151,7 +151,7 @@ export default function Play() {
 
   async function ensurePyodide() {
     if (pyRef.current) return pyRef.current;
-    setStatus("Cargando el motor (Python en el navegador)… puede tardar unos segundos la primera vez.");
+    setStatus("Preparando el motor… la primera vez puede tardar unos segundos.");
     if (!(window as any).loadPyodide) await loadScript(PY_BASE + "pyodide.js");
     const py = await (window as any).loadPyodide({ indexURL: PY_BASE });
     setStatus("Cargando reglas del juego…");
@@ -182,7 +182,7 @@ export default function Play() {
       let datamap: Record<string, any> = {};
       const customTexts = specs.filter((s) => s.kind === "custom").map((s) => (s as { text: string }).text);
       if (customTexts.length > 0) {
-        setStatus("Resolviendo tus cartas con Scryfall…");
+        setStatus("Buscando las fotos y los textos de tus cartas…");
         const r = await fetch("/api/resolvedeck", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ texts: customTexts }),
@@ -333,7 +333,7 @@ export default function Play() {
     <div className="wrap">
       <header>
         <h1><Icon name="gamepad" size={26} /> Jugar contra el sistema</h1>
-        <p>Elegí tu deck y hasta 3 rivales. El motor corre en tu navegador (Pyodide); vos manejás tu turno.</p>
+        <p>Elegí tu deck y hasta 3 rivales. Todo corre en tu navegador y vos manejás tu turno; el resto lo juega el sistema.</p>
       </header>
 
       {!state && (
@@ -383,8 +383,8 @@ export default function Play() {
           {status && <p className="muted" style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}><Icon name="hourglass" size={14} /> {status}</p>}
           {error && <p className="err" role="alert"><Icon name="warning" size={15} /> {error}</p>}
           <p className="muted" style={{ marginTop: 10, fontSize: ".8rem" }}>
-            Podés jugar con tus decks guardados (<Icon name="star" size={12} />) o los de ejemplo. Tus cartas
-            reales se resuelven con Scryfall (foto y texto) antes de empezar.
+            Podés jugar con tus decks guardados (<Icon name="star" size={12} />) o los de ejemplo.
+            A tus cartas les buscamos la foto y el texto antes de empezar.
           </p>
         </div>
       )}
@@ -500,8 +500,8 @@ export default function Play() {
                 <h2><Icon name="hand" size={19} /> Mano inicial{m.mulls > 0 ? ` · mulligan ${m.mulls}` : ""}</h2>
                 <p className="muted" style={{ marginTop: 0 }}>
                   {m.lands} tierra{m.lands === 1 ? "" : "s"} en mano.
-                  {m.lands <= 1 && <b style={{ color: "#e0684f" }}> Pocas tierras — conviene mulligan.</b>}
-                  {" "}Regla Commander: el primer mulligan es <b>gratis</b>; después ponés 1 carta al fondo por cada mulligan extra.
+                  {m.lands <= 1 && <b style={{ color: "#e0684f" }}> Con tan pocas tierras, conviene mulligan.</b>}
+                  {" "}En Commander el primer mulligan es <b>gratis</b>; a partir del segundo, mandás 1 carta al fondo por cada uno.
                 </p>
                 {m.to_bottom > 0 && (
                   <p className="muted">Elegí <b>{m.to_bottom}</b> carta{m.to_bottom === 1 ? "" : "s"} para el fondo ({bottom.length}/{m.to_bottom}).</p>
@@ -709,9 +709,9 @@ export default function Play() {
       )}
 
       <footer>
-        El sistema juega los turnos rivales con la dificultad elegida. Podés usar
-        tus decks importados (<Icon name="star" size={12} />) con foto y texto real de Scryfall, o los de
-        ejemplo (ficha simple). Tocá cualquier carta (o su <Icon name="info" size={12} />) para verla.
+        Los rivales los juega el sistema, en la dificultad que elijas. Tus decks
+        (<Icon name="star" size={12} />) van con foto y texto real; los de ejemplo usan una ficha simple.
+        Tocá cualquier carta (o su <Icon name="info" size={12} />) para verla de cerca.
       </footer>
     </div>
   );
