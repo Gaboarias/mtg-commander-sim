@@ -6,6 +6,7 @@ combos por nombre sí son exactos porque los da Commander Spellbook. La llamada
 externa se aísla: si falla, el resto del análisis igual se devuelve.
 """
 import json
+import math
 import re
 import urllib.request
 
@@ -187,6 +188,8 @@ def analyze(entries, commander_name=None):
 
     strengths, weaknesses = _judge(total, lands, ramp_eff, roles, counts,
                                    avg_cmc, curve, demand, sources, themes)
+    recommendations = _recommend(lands, roles, counts, avg_cmc, demand, sources)
+    consistency = _consistency(total, lands, roles, avg_cmc)
 
     return {
         "commander": commander_name,
@@ -200,6 +203,8 @@ def analyze(entries, commander_name=None):
         "themes": themes,
         "strengths": strengths,
         "weaknesses": weaknesses,
+        "recommendations": recommendations,
+        "consistency": consistency,
     }
 
 
@@ -293,6 +298,73 @@ def _judge(total, lands, ramp_eff, roles, counts, avg_cmc, curve,
     if not W:
         W.append("No se detectaron debilidades estructurales obvias. ¡Buen mazo!")
     return S, W
+
+
+# --------------------------------------------------------------------------- #
+# Recomendaciones (qué sumar/cortar) y consistencia
+# --------------------------------------------------------------------------- #
+
+# staples curados por rol (autocontenido, sin depender de EDHREC)
+_STAPLES = {
+    "ramp": "Sol Ring, Arcane Signet, Cultivate, Kodama's Reach, Fellwar Stone",
+    "draw": "Rhystic Study, Phyrexian Arena, Night's Whisper, Guardian Project",
+    "removal": "Swords to Plowshares, Beast Within, Generous Gift, Chaos Warp, Go for the Throat",
+    "wipe": "Blasphemous Act, Damnation, Wrath of God, Toxic Deluge",
+    "protection": "Heroic Intervention, Teferi's Protection, Flawless Maneuver",
+}
+_FIX = {
+    "W": "Plains, duales blancas, Command Tower, fetchlands",
+    "U": "Island, duales azules, Command Tower, fetchlands",
+    "B": "Swamp, duales negras, Command Tower, fetchlands",
+    "R": "Mountain, duales rojas, Command Tower, fetchlands",
+    "G": "Forest, duales verdes, Command Tower, fetchlands",
+}
+
+
+def _recommend(lands, roles, counts, avg_cmc, demand, sources):
+    """Sugerencias ACCIONABLES a partir de las mismas líneas base que _judge."""
+    recs = []
+    if lands < 36:
+        recs.append(f"Sumá {36 - lands} tierras (apuntá a ~36–38) para no trabarte.")
+    elif lands > 40:
+        recs.append(f"Bajá ~{lands - 38} tierras y meté hechizos: te vas a inundar.")
+    if roles["ramp"] < 10:
+        recs.append(f"Sumá ~{10 - roles['ramp']} piezas de ramp — {_STAPLES['ramp']}.")
+    if roles["draw"] < 10:
+        recs.append(f"Sumá motores de robo — {_STAPLES['draw']}.")
+    if roles["removal"] < 8:
+        recs.append(f"Sumá remoción puntual — {_STAPLES['removal']}.")
+    if roles["wipe"] == 0:
+        recs.append(f"Meté 1–2 barridas — {_STAPLES['wipe']}.")
+    if counts["creature"] >= 28 and roles["protection"] < 3:
+        recs.append(f"Protegé tu tablero de barridas — {_STAPLES['protection']}.")
+    for c in _COLORS:
+        if demand[c] >= 8 and sources[c] < max(5, demand[c] // 3):
+            recs.append(f"Reforzá fuentes de {_COLOR_ES[c]} — {_FIX[c]}.")
+    if not recs:
+        recs.append("El mazo está bien balanceado; afiná según tu meta local.")
+    return recs
+
+
+def _consistency(total, lands, roles, avg_cmc):
+    """Prob. de una mano inicial jugable (2–5 tierras en 7) + score 0–100.
+    Hipergeométrico exacto con math.comb (stdlib)."""
+    n = total or 100
+    hand = min(7, n)
+    prob = 0.0
+    if 0 < lands <= n:
+        denom = math.comb(n, hand)
+        for k in range(2, 6):                       # 2..5 tierras = mano jugable
+            if 0 <= k <= lands and 0 <= hand - k <= n - lands:
+                prob += math.comb(lands, k) * math.comb(n - lands, hand - k) / denom
+    prob = round(prob, 3)
+
+    score = prob * 55                                # peso principal: base de maná
+    score += min(roles["ramp"], 10) / 10 * 20        # ramp
+    score += min(roles["tutor"], 6) / 6 * 10         # tutores
+    score += max(0.0, (3.6 - avg_cmc)) / 1.6 * 15    # curva baja ayuda
+    score = max(0, min(100, round(score)))
+    return {"land_prob": prob, "score": score}
 
 
 # --------------------------------------------------------------------------- #

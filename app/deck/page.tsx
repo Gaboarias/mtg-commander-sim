@@ -52,6 +52,8 @@ type Analysis = {
   themes: { key: string; label: string; count: number; cards: string[] }[];
   strengths: string[];
   weaknesses: string[];
+  recommendations: string[];
+  consistency: { land_prob: number; score: number };
   combos: { included: Combo[]; almost: Combo[]; error: string | null };
 };
 
@@ -216,6 +218,7 @@ export default function DeckPage() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisErr, setAnalysisErr] = useState<string | null>(null);
+  const [hand, setHand] = useState<Row[] | null>(null);
 
   // plantilla al azar al abrir (solo en cliente, para no romper la hidratación)
   useEffect(() => {
@@ -289,6 +292,19 @@ export default function DeckPage() {
     } finally {
       setAnalyzing(false);
     }
+  }
+
+  function drawHand() {
+    if (!resolved) return;
+    const pool: Row[] = [];
+    for (const c of resolved.cards) {
+      for (let i = 0; i < Math.max(0, c.qty); i++) pool.push(c);
+    }
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    setHand(pool.slice(0, 7));
   }
 
   function deckColors(): string[] {
@@ -768,6 +784,26 @@ export default function DeckPage() {
           </button>
           {analysisErr && <p className="err">Error: {analysisErr}</p>}
 
+          <div style={{ marginTop: 12 }}>
+            <button className="ghost" onClick={drawHand}>
+              {hand ? "Robar otra mano ↻" : "Robar mano de prueba"}
+            </button>
+            {hand && (
+              <div style={{ marginTop: 8 }}>
+                <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                  {hand.map((c, i) => (
+                    <span key={i} className={`chip${(c.type || "").includes("land") ? " land" : ""}`}>
+                      {c.name}
+                    </span>
+                  ))}
+                </div>
+                <p className="muted" style={{ fontSize: ".82rem" }}>
+                  {hand.filter((c) => (c.type || "").includes("land")).length} tierras en la mano.
+                </p>
+              </div>
+            )}
+          </div>
+
           {analysis && (
             <div style={{ marginTop: 16 }}>
               <div className="row" style={{ gap: 24, flexWrap: "wrap" }}>
@@ -782,6 +818,26 @@ export default function DeckPage() {
                   <ul className="abil">
                     {analysis.weaknesses.map((w, i) => <li key={i}>{w}</li>)}
                   </ul>
+                </div>
+              </div>
+
+              {analysis.recommendations.length > 0 && (
+                <>
+                  <h3 style={{ marginTop: 14, color: "#8ab4ff" }}>➜ Recomendaciones</h3>
+                  <ul className="abil">
+                    {analysis.recommendations.map((r, i) => <li key={i}>{r}</li>)}
+                  </ul>
+                </>
+              )}
+
+              <h3 style={{ marginTop: 14 }}>Consistencia</h3>
+              <div className="row" style={{ gap: 16, alignItems: "center" }}>
+                <div style={{ fontFamily: "var(--font-display)", fontSize: "1.8rem", fontWeight: 700, color: "var(--accent)" }}>
+                  {analysis.consistency.score}/100
+                </div>
+                <div className="muted" style={{ fontSize: ".84rem" }}>
+                  {Math.round(analysis.consistency.land_prob * 100)}% de manos iniciales
+                  con 2–5 tierras (jugables sin mulligan).
                 </div>
               </div>
 

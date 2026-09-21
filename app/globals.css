@@ -379,6 +379,7 @@ textarea:focus { border-color: var(--accent-2) !important; }
 ul.abil { margin: 6px 0; padding-left: 18px; font-size: .88rem; }
 ul.abil li { margin: 5px 0; line-height: 1.35; }
 .chip { background: rgba(255,255,255,.05); border: 1px solid #2a2f3a; border-radius: 999px; padding: 3px 10px; font-size: .8rem; }
+.chip.land { background: rgba(120,200,120,.12); border-color: #3f6b3f; }
 .curve { display: flex; align-items: flex-end; gap: 8px; height: 120px; margin: 8px 0 4px; }
 .curve-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; }
 .curve-bar { width: 26px; background: linear-gradient(180deg, var(--accent), #8a6f20); border-radius: 4px 4px 0 0; }

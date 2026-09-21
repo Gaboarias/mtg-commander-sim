@@ -523,6 +523,20 @@ def test_deck_analysis_strengths_and_weaknesses():
     assert any(t["key"] == "tokens" for t in rep2["themes"])
 
 
+def test_analysis_consistency_and_recommendations():
+    an = _analyze_mod()
+    good = an._consistency(100, 37, {"ramp": 10, "tutor": 3}, 3.0)
+    poor = an._consistency(100, 20, {"ramp": 2, "tutor": 0}, 4.2)
+    assert good["land_prob"] > poor["land_prob"]
+    assert good["score"] > poor["score"] and 0 <= poor["score"] <= 100
+    recs = an._recommend(20, {"ramp": 2, "draw": 3, "removal": 2, "wipe": 0,
+                              "protection": 0},
+                         {"creature": 30}, 4.2,
+                         {c: 0 for c in "WUBRG"}, {c: 0 for c in "WUBRG"})
+    low = " ".join(recs).lower()
+    assert "ramp" in low and "barrida" in low and "tierras" in low
+
+
 def test_commander_spellbook_variant_parsing():
     an = _analyze_mod()
     data = {"results": {
