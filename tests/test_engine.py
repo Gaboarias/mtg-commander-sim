@@ -569,6 +569,45 @@ def test_analysis_consistency_and_recommendations():
     assert "ramp" in low and "barrida" in low and "tierras" in low
 
 
+def test_price_and_legality_from_scryfall():
+    import importlib
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api"))
+    _sim = importlib.import_module("_sim")
+    p, legal = _sim._price_legal(
+        {"prices": {"usd": "3.50"}, "legalities": {"commander": "legal"}})
+    assert p == 3.5 and legal is True
+    p2, legal2 = _sim._price_legal(
+        {"prices": {"usd": None}, "legalities": {"commander": "banned"}})
+    assert p2 is None and legal2 is False
+    assert _sim._price_legal(None) == (None, True)      # sin datos: no marca ilegal
+
+
+def test_binder_suggest_decks():
+    an = _analyze_mod()
+
+    def c(name, tl, ot="", ci=None):
+        return {"name": name, "type_line": tl, "oracle_text": ot,
+                "color_identity": ci or [], "cmc": 2, "mana_cost": ""}
+
+    cache = {}
+    def put(x):
+        cache[an._norm(x["name"])] = x
+    put(c("Cultivate", "Sorcery", "Search your library for two basic land cards", ["G"]))
+    put(c("Green Cmdr", "Legendary Creature", ci=["G"]))
+    put(c("Red Cmdr", "Legendary Creature", ci=["R"]))
+    decks = [
+        {"name": "Verde", "parsed": {"commander": "Green Cmdr", "cards": [(1, "Green Cmdr")]}},
+        {"name": "Rojo", "parsed": {"commander": "Red Cmdr", "cards": [(1, "Red Cmdr")]}},
+    ]
+    res = an.suggest_decks("Cultivate", decks, cache)
+    verde = next(d for d in res["decks"] if d["name"] == "Verde")
+    rojo = next(d for d in res["decks"] if d["name"] == "Rojo")
+    assert verde["in_color"] and "ramp" in verde["fills"]     # encaja y cubre ramp
+    assert not rojo["in_color"]                                # azul/verde fuera de rojo
+    assert res["decks"][0]["name"] == "Verde"                  # rankeado primero
+
+
 def test_commander_spellbook_variant_parsing():
     an = _analyze_mod()
     data = {"results": {

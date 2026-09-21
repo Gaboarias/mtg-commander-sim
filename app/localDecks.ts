@@ -3,6 +3,7 @@
 
 const PROFILE_KEY = "mtgsim:profile";
 const DECKS_KEY = "mtgsim:decks";
+const BINDER_KEY = "mtgsim:binder";
 
 export type SavedDeck = {
   id: string;
@@ -65,6 +66,28 @@ export function saveDeck(name: string, text: string, colors?: string[], id?: str
 export function removeDeck(id: string): SavedDeck[] {
   write(DECKS_KEY, listDecks().filter((d) => d.id !== id));
   return listDecks();
+}
+
+// ---- Mi binder (colección personal de cartas) ---------------------------- //
+export type BinderCard = { name: string; qty: number };
+
+export function listBinder(): BinderCard[] {
+  const b = read<BinderCard[]>(BINDER_KEY, []);
+  return Array.isArray(b) ? b : [];
+}
+
+export function addToBinder(name: string, qty = 1): BinderCard[] {
+  const b = listBinder();
+  const i = b.findIndex((c) => c.name.toLowerCase() === name.toLowerCase());
+  if (i >= 0) b[i] = { ...b[i], qty: b[i].qty + qty };
+  else b.push({ name, qty });
+  write(BINDER_KEY, b);
+  return listBinder();
+}
+
+export function removeFromBinder(name: string): BinderCard[] {
+  write(BINDER_KEY, listBinder().filter((c) => c.name.toLowerCase() !== name.toLowerCase()));
+  return listBinder();
 }
 
 export function storageAvailable(): boolean {

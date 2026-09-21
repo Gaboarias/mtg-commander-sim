@@ -9,8 +9,13 @@ import {
   saveDeck,
   removeDeck,
   storageAvailable,
+  listBinder,
+  addToBinder,
+  removeFromBinder,
   type SavedDeck,
+  type BinderCard,
 } from "../localDecks";
+import { download, fileStamp } from "../download";
 
 type Precon = { code: string; fileName: string; name: string; releaseDate: string };
 
@@ -25,6 +30,8 @@ type Row = {
   cost: string;
   pt: string;
   colors?: string[];
+  price?: number | null;
+  legal?: boolean;
 };
 type Resolved = {
   commander: Row | null;
@@ -39,7 +46,12 @@ type Resolved = {
   bracket_estimate?: number;
   bracket_label?: string;
   bracket_declared?: number | null;
+  price_total?: number;
+  illegal?: string[];
 };
+type SimResult = { n: number; opponent: string; results: { deck: string; wins: number; pct: number }[] };
+type Suggestion = { name: string; in_color: boolean; fills: string[]; verdict: string; score: number };
+type SuggestResp = { card: string; roles: string[]; colors: string[]; decks: Suggestion[] };
 type Combo = { id: string; cards: string[]; produces: string[]; missing: string[] };
 type Analysis = {
   commander: string | null;
@@ -186,6 +198,49 @@ function MissingFixer({ name, onPick }: { name: string; onPick: (n: string) => v
   );
 }
 
+// Caja con autocompletado para agregar una carta por nombre (reusa /api/cardsearch).
+function CardAdder({ onAdd, placeholder }: { onAdd: (name: string) => void; placeholder: string }) {
+  const [q, setQ] = useState("");
+  const [sugg, setSugg] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  async function search() {
+    if (!q.trim()) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/cardsearch?q=${encodeURIComponent(q)}`);
+      const d = await r.json();
+      setSugg(d.suggestions || []);
+    } catch {
+      setSugg([]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        <input value={q} placeholder={placeholder}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") search(); }}
+          style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 9px", width: 240 }} />
+        <button className="ghost" onClick={search} disabled={busy}>Buscar</button>
+      </div>
+      {sugg.length > 0 && (
+        <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+          {sugg.map((s) => (
+            <button key={s} className="ghost" style={{ padding: "4px 10px" }}
+              onClick={() => { onAdd(s); setSugg([]); setQ(""); }}>
+              + {s}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Tag({ r }: { r: Row }) {
   const map: Record<string, [string, string]> = {
     registry: ["#2f6b3a", "con efecto"],
@@ -219,6 +274,15 @@ export default function DeckPage() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisErr, setAnalysisErr] = useState<string | null>(null);
   const [hand, setHand] = useState<Row[] | null>(null);
+  const [sim, setSim] = useState<SimResult | null>(null);
+  const [simming, setSimming] = useState(false);
+  const [opponent, setOpponent] = useState("");
+  const [simN, setSimN] = useState(200);
+  const [opponents, setOpponents] = useState<{ key: string; label: string }[]>([]);
+  const [copied, setCopied] = useState(false);
+  const [binder, setBinder] = useState<BinderCard[]>([]);
+  const [suggest, setSuggest] = useState<SuggestResp | null>(null);
+  const [suggesting, setSuggesting] = useState<string | null>(null);
 
   // plantilla al azar al abrir (solo en cliente, para no romper la hidratación)
   useEffect(() => {
@@ -232,6 +296,19 @@ export default function DeckPage() {
     }
     setProfileState(getProfile());
     setSavedDecks(listDecks());
+    setBinder(listBinder());
+  }, []);
+
+  // rivales para "probar el deck" (decks registrados del catálogo)
+  useEffect(() => {
+    fetch("/api/catalog")
+      .then((r) => r.json())
+      .then((d) => {
+        const opts = (d.decks || []).map((x: { key: string; commander: string }) => ({ key: x.key, label: x.commander }));
+        setOpponents(opts);
+        if (opts[0]) setOpponent((o) => o || opts[0].key);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -264,6 +341,78 @@ export default function DeckPage() {
     lines.push("", "Deck");
     for (const c of resolved.cards) if (c.qty > 0) lines.push(`${c.qty} ${c.name}`);
     return lines.join("\n");
+  }
+
+  // agregar una carta al deck abierto (por búsqueda o desde el binder)
+  function addCardToDeck(name: string) {
+    if (resolved) {
+      const i = resolved.cards.findIndex((c) => c.name.toLowerCase() === name.toLowerCase());
+      if (i >= 0) { setQty(i, resolved.cards[i].qty + 1); return; }
+    }
+    const base = currentDeckText().replace(/\s*$/, "");
+    const next = `${base}\n1 ${name}`;
+    setText(next);
+    resolve(next);
+  }
+
+  // exportar / copiar la lista
+  function copyList() {
+    const txt = currentDeckText();
+    try {
+      navigator.clipboard?.writeText(txt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch { /* sin portapapeles: el usuario puede usar Descargar */ }
+  }
+  function exportTxt() {
+    download(`deck-${fileStamp()}.txt`, currentDeckText(), "text/plain");
+  }
+
+  // probar el deck contra un rival registrado
+  async function simulateDeck() {
+    if (!resolved) return;
+    setSimming(true);
+    setSim(null);
+    try {
+      const r = await fetch("/api/deck", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "simulate",
+          cards: resolved.cards.filter((c) => c.qty > 0).map((c) => ({ name: c.name, qty: c.qty })),
+          commander: resolved.commander_name || "",
+          opponent, n: simN,
+        }),
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      setSim(d as SimResult);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setSimming(false); }
+  }
+
+  // binder
+  function binderAdd(name: string) { setBinder(addToBinder(name)); }
+  function binderRemove(name: string) {
+    setBinder(removeFromBinder(name));
+    if (suggest?.card.toLowerCase() === name.toLowerCase()) setSuggest(null);
+  }
+  async function whereDoesItHelp(card: string) {
+    const decks = listDecks();
+    if (decks.length === 0) { setError("Guardá al menos un deck para ver dónde te sirve."); return; }
+    setSuggesting(card);
+    setSuggest(null);
+    try {
+      const r = await fetch("/api/suggest", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ card, decks: decks.map((d) => ({ name: d.name, text: d.text })) }),
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      setSuggest(d as SuggestResp);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setSuggesting(null); }
   }
 
   async function analyzeDeck() {
@@ -688,7 +837,12 @@ export default function DeckPage() {
           <p className="muted">
             {totalQty} cartas · {resolved.implemented} con efecto programado ·{" "}
             {resolved.missing.length} no encontradas
+            {typeof resolved.price_total === "number" && resolved.price_total > 0
+              ? ` · ~US$ ${resolved.price_total.toFixed(2)}` : ""}
           </p>
+          {(resolved.illegal?.length || 0) > 0 && (
+            <p className="err">⛔ No legales en Commander: {resolved.illegal!.join(", ")}</p>
+          )}
           {!resolved.scryfall_online && (
             <p className="muted">
               (Sin conexión a la base de cartas: solo se reconocen las cartas ya
@@ -696,11 +850,21 @@ export default function DeckPage() {
               reconocen todas.)
             </p>
           )}
+
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", margin: "6px 0 4px" }}>
+            <span className="muted">Agregar carta:</span>
+            <CardAdder onAdd={addCardToDeck} placeholder="nombre de la carta…" />
+          </div>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <button className="ghost" onClick={copyList}>{copied ? "¡Copiado! ✔" : "Copiar lista"}</button>
+            <button className="ghost" onClick={exportTxt}>⬇ Descargar .txt</button>
+          </div>
+
           <table>
             <thead>
               <tr>
                 <th>Cant.</th><th>Carta</th><th>Coste</th><th>Tipo</th>
-                <th>F/R</th><th>Estado</th><th></th>
+                <th>F/R</th><th>Precio</th><th>Estado</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -711,10 +875,14 @@ export default function DeckPage() {
                       onChange={(e) => setQty(i, Number(e.target.value))}
                       style={{ width: 56 }} />
                   </td>
-                  <td>{c.name}</td>
+                  <td>
+                    {c.name}
+                    {c.legal === false && <span title="No legal en Commander"> ⛔</span>}
+                  </td>
                   <td>{c.cost}</td>
                   <td className="muted">{c.type}</td>
                   <td>{c.pt}</td>
+                  <td className="muted">{typeof c.price === "number" ? `$${c.price.toFixed(2)}` : "—"}</td>
                   <td>
                     <Tag r={c} />
                     {c.generic && (
@@ -730,6 +898,46 @@ export default function DeckPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {resolved && (
+        <div className="card">
+          <h2>⚔ Probar este deck</h2>
+          <p className="muted" style={{ fontSize: ".82rem" }}>
+            Simula tu lista contra un rival (el sistema juega ambos). Aproximado y contra
+            UN rival registrado — sirve como termómetro, no como veredicto.
+          </p>
+          <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+            <label>Rival&nbsp;
+              <select value={opponent} onChange={(e) => setOpponent(e.target.value)}
+                style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px" }}>
+                {opponents.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+              </select>
+            </label>
+            <label>Partidas&nbsp;
+              <input type="number" min={10} max={2000} value={simN}
+                onChange={(e) => setSimN(Number(e.target.value))} style={{ width: 80 }} />
+            </label>
+            <button className="go" onClick={simulateDeck} disabled={simming || !opponent || !resolved.commander_name}>
+              {simming ? "Simulando…" : "Simular"}
+            </button>
+          </div>
+          {!resolved.commander_name && <p className="muted" style={{ fontSize: ".8rem" }}>Marcá el comandante primero.</p>}
+          {sim && (
+            <div style={{ marginTop: 12 }}>
+              {sim.results.map((r) => (
+                <div key={r.deck} className="bar-row" style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0" }}>
+                  <span style={{ width: 120 }}>{r.deck === "importado" ? "Tu deck" : r.deck === "EMPATE" ? "Empates" : r.deck}</span>
+                  <span className="bar-track" style={{ flex: 1, background: "var(--panel-2)", borderRadius: 6, height: 14, overflow: "hidden" }}>
+                    <span className="bar-fill" style={{ display: "block", height: "100%", width: `${r.pct}%`, background: r.deck === "importado" ? "var(--accent)" : "#5a6172" }} />
+                  </span>
+                  <span className="muted" style={{ width: 70, textAlign: "right" }}>{r.pct}% ({r.wins})</span>
+                </div>
+              ))}
+              <p className="muted" style={{ fontSize: ".8rem" }}>{sim.n} partidas vs {sim.opponent}.</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -953,6 +1161,50 @@ export default function DeckPage() {
               </span>
             )}
           </div>
+        </div>
+      )}
+
+      {!noStorage && (
+        <div className="card">
+          <h2>🗃️ Mi binder</h2>
+          <p className="muted" style={{ fontSize: ".82rem" }}>
+            Tu colección de cartas (guardada en este navegador). Agregá cartas y fijate
+            en cuáles de tus decks guardados te sirve cada una.
+          </p>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <span className="muted">Agregar al binder:</span>
+            <CardAdder onAdd={binderAdd} placeholder="nombre de la carta…" />
+          </div>
+          {binder.length === 0 ? (
+            <p className="muted">Tu binder está vacío.</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {binder.map((c) => (
+                <div key={c.name} className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ minWidth: 180 }}>{c.qty > 1 ? `${c.qty}× ` : ""}{c.name}</span>
+                  {resolved && <button className="ghost" style={{ padding: "3px 8px" }} onClick={() => addCardToDeck(c.name)}>+ al deck</button>}
+                  <button className="ghost" style={{ padding: "3px 8px" }} disabled={suggesting === c.name}
+                    onClick={() => whereDoesItHelp(c.name)}>
+                    {suggesting === c.name ? "Buscando…" : "¿Dónde me sirve?"}
+                  </button>
+                  <button className="ghost" style={{ padding: "3px 8px" }} onClick={() => binderRemove(c.name)}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {suggest && (
+            <div style={{ marginTop: 12 }}>
+              <b>{suggest.card}</b>
+              <span className="muted"> · {suggest.colors.length ? suggest.colors.join("") : "incolora"}{suggest.roles.length ? ` · ${suggest.roles.join(", ")}` : ""}</span>
+              {suggest.decks.length === 0 ? (
+                <p className="muted">No tenés decks guardados para comparar.</p>
+              ) : suggest.decks.map((d) => (
+                <div key={d.name} className="combo" style={{ borderLeftColor: d.in_color ? (d.fills.length ? "var(--accent)" : "#5a6172") : "#7a3030" }}>
+                  <div><b>{d.name}</b> <span className="muted">— {d.verdict}</span></div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

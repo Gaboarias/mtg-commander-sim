@@ -368,6 +368,78 @@ def _consistency(total, lands, roles, avg_cmc):
 
 
 # --------------------------------------------------------------------------- #
+# Sugerencia: ¿en qué deck me sirve una carta?
+# --------------------------------------------------------------------------- #
+
+_ROLE_ES = {"ramp": "ramp", "draw": "robo", "removal": "remoción",
+            "wipe": "barridas", "counter": "counters", "protection": "protección",
+            "recursion": "recursión", "tutor": "tutores"}
+
+
+def _needs(report):
+    """Roles que a un deck le FALTAN, según su reporte de analyze()."""
+    roles = report["roles"]
+    counts = report["counts"]
+    need = set()
+    if roles["ramp"] < 10:
+        need.add("ramp")
+    if roles["draw"] < 10:
+        need.add("draw")
+    if roles["removal"] < 8:
+        need.add("removal")
+    if roles["wipe"] == 0:
+        need.add("wipe")
+    if counts.get("creature", 0) >= 28 and roles["protection"] < 3:
+        need.add("protection")
+    return need
+
+
+def suggest_decks(card_name, decks, cache):
+    """¿En cuáles de `decks` sirve `card_name`? Puro y testeable: la resolución de
+    Scryfall se hace afuera y se pasa en `cache` {nombre_norm: dict}.
+    `decks`: [{"name", "parsed": {commander, cards:[(qty,name)]}}]."""
+    craw = cache.get(_norm(card_name))
+    card_roles, _ = _roles(craw) if craw else (set(), False)
+    card_roles &= set(_ROLE_ES)                       # solo roles “de necesidad”
+    card_colors = set((craw or {}).get("color_identity") or [])
+
+    out = []
+    for d in decks:
+        parsed = d["parsed"]
+        # identidad del deck = la del comandante; si no, unión de las cartas
+        ident = set()
+        cmd = parsed.get("commander")
+        cmd_raw = cache.get(_norm(cmd)) if cmd else None
+        if cmd_raw:
+            ident = set(cmd_raw.get("color_identity") or [])
+        if not ident:
+            for _q, cn in parsed["cards"]:
+                r = cache.get(_norm(cn))
+                if r:
+                    ident |= set(r.get("color_identity") or [])
+        in_color = card_colors <= ident
+
+        entries = [(q, cn, cache.get(_norm(cn))) for q, cn in parsed["cards"]]
+        report = analyze(entries, cmd)
+        fills = sorted(card_roles & _needs(report))
+        score = (2 if in_color else 0) + (len(fills) if in_color else 0)
+
+        if not in_color:
+            verdict = "Fuera de color"
+        elif fills:
+            verdict = "Encaja y cubre " + ", ".join(_ROLE_ES[f] for f in fills)
+        else:
+            verdict = "Encaja en color (no cubre un hueco claro)"
+
+        out.append({"name": d["name"], "in_color": in_color,
+                    "fills": [_ROLE_ES[f] for f in fills],
+                    "verdict": verdict, "score": score})
+    out.sort(key=lambda x: x["score"], reverse=True)
+    return {"card": card_name, "roles": sorted(_ROLE_ES[r] for r in card_roles),
+            "colors": sorted(card_colors), "decks": out}
+
+
+# --------------------------------------------------------------------------- #
 # Commander Spellbook: combos reales por nombre
 # --------------------------------------------------------------------------- #
 

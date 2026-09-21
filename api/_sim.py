@@ -82,6 +82,21 @@ def _make_fetch(names):
     return _scry.make_fetch([n for n in names if n])
 
 
+def _price_legal(raw):
+    """Del dict crudo de Scryfall: (precio_usd|None, legal_en_commander:bool)."""
+    if not raw:
+        return None, True
+    price = None
+    try:
+        v = (raw.get("prices") or {}).get("usd")
+        price = float(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        price = None
+    leg = (raw.get("legalities") or {}).get("commander")
+    legal = leg in (None, "legal", "restricted")   # desconocido = no marcar ilegal
+    return price, legal
+
+
 def _card_row(name, qty, card):
     """Descriptor para la tabla editable del frontend."""
     if card is None:
@@ -118,20 +133,34 @@ def resolve_decklist(text):
             [n for _, n in parsed["cards"]]
     fetch = _make_fetch(names)
 
+    def _attach_price_legal(row, name, qty):
+        price, legal = _price_legal(fetch(name)) if fetch else (None, True)
+        row["price"] = price
+        row["legal"] = legal
+        return price
+
     cmd_name = parsed.get("commander")
     cmd_card = cardsdb.resolve(cmd_name, fetch) if cmd_name else None
     commander = None
     if cmd_card is not None:
         commander = _card_row(cmd_name, 1, cmd_card)
+        _attach_price_legal(commander, cmd_name, 1)
 
     rows = []
     missing = []
+    illegal = []
     implemented = 0
     total = 0
+    price_total = 0.0
     suggested = None
     for qty, name in parsed["cards"]:
         card = cardsdb.resolve(name, fetch)
         row = _card_row(name, qty, card)
+        price = _attach_price_legal(row, name, qty)
+        if price:
+            price_total += price * qty
+        if row.get("legal") is False:
+            illegal.append(row["name"])
         rows.append(row)
         total += qty
         if card is None:
@@ -141,6 +170,8 @@ def resolve_decklist(text):
         # auto-sugerir comandante: primera legendaria criatura/planeswalker
         if suggested is None and row.get("can_command"):
             suggested = row["name"]
+    if commander and commander.get("price"):
+        price_total += commander["price"]
     # Game Changers + estimacion de bracket (#4)
     all_names = ([cmd_name] if cmd_name else []) + [n for _, n in parsed["cards"]]
     gcs = gamechangers.find_in(all_names)
@@ -161,6 +192,8 @@ def resolve_decklist(text):
         "bracket_estimate": est_bracket,
         "bracket_label": est_label,
         "bracket_declared": declared_bracket,
+        "price_total": round(price_total, 2),
+        "illegal": illegal,
     }
 
 
