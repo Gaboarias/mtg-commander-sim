@@ -222,7 +222,9 @@ class Policy:
         opps = game.opponents(me)
         if not opps:
             return []
-        attackers = [p for p in me.creatures() if p.can_attack()]
+        # solo atacar con criaturas que hacen daño (>0): mandar una 0/x no aporta
+        # y solo la expone a morir.
+        attackers = [p for p in me.creatures() if p.can_attack() and p.power > 0]
         if not attackers:
             return []
         target = min(opps, key=lambda o: o.life)
