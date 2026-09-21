@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Nav from "./Nav";
+import { KOFI_URL, PAYPAL_URL } from "./support";
 
 export const metadata: Metadata = {
   title: "MTG Commander Sim",
@@ -32,10 +33,23 @@ export default function RootLayout({
       <body>
         <Nav />
         {children}
-        <div style={{ textAlign: "center", padding: "24px 16px 40px", fontSize: ".78rem", opacity: 0.6 }}>
-          Datos de cartas: <a href="https://scryfall.com" target="_blank" rel="noreferrer">Scryfall</a> ·
-          {" "}Combos: <a href="https://commanderspellbook.com" target="_blank" rel="noreferrer">Commander Spellbook</a>.
-          {" "}Proyecto fan, no afiliado a Wizards of the Coast. Contenido bajo su Fan Content Policy.
+        <div style={{ textAlign: "center", padding: "24px 16px 40px" }}>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", marginBottom: 14 }}>
+            <a href={KOFI_URL} target="_blank" rel="noreferrer"
+               style={{ padding: "8px 16px", borderRadius: 999, background: "var(--accent, #d8b23a)", color: "#1a1400", fontWeight: 700, textDecoration: "none" }}>
+              💛 Apoyar en Ko-fi
+            </a>
+            <a href={PAYPAL_URL} target="_blank" rel="noreferrer"
+               style={{ padding: "8px 16px", borderRadius: 999, border: "1px solid var(--border, #3a4150)", color: "inherit", textDecoration: "none" }}>
+              Apoyar por PayPal
+            </a>
+          </div>
+          <div style={{ fontSize: ".78rem", opacity: 0.6 }}>
+            El sitio es gratis; apoyar banca la infraestructura, no la IP de MTG.
+            {" "}Datos de cartas: <a href="https://scryfall.com" target="_blank" rel="noreferrer">Scryfall</a> ·
+            {" "}Combos: <a href="https://commanderspellbook.com" target="_blank" rel="noreferrer">Commander Spellbook</a>.
+            {" "}Proyecto fan, no afiliado a Wizards of the Coast. Contenido bajo su Fan Content Policy.
+          </div>
         </div>
       </body>
     </html>

@@ -24,7 +24,7 @@ import _db  # noqa: E402
 from supporter import is_supporter  # noqa: E402
 
 _CODE_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
-FREE_DECKS = 10        # tope gratis de decks en la nube (supporter sin tope práctico)
+FREE_DECKS = 5         # tope gratis de decks en la nube (supporter sin tope práctico)
 
 
 def _now():

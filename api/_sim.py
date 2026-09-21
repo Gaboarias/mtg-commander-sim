@@ -26,7 +26,7 @@ except Exception:     # noqa: BLE001
     _scry = None
 
 MAX_N = 2000          # tope de partidas por request (serverless timeout)
-FREE_N = 200          # tope gratis de partidas por request (supporter sube a MAX_N)
+FREE_N = 100          # tope gratis de partidas por request (supporter sube a MAX_N)
 MAX_CARDS = 200       # tope de entradas de decklist
 
 

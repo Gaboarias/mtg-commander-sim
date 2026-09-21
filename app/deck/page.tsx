@@ -19,6 +19,7 @@ import {
   type BinderCard,
 } from "../localDecks";
 import { download, fileStamp } from "../download";
+import { KOFI_URL, PAYPAL_URL, FREE_SIM, FREE_DECKS } from "../support";
 
 type Precon = { code: string; fileName: string; name: string; releaseDate: string };
 
@@ -282,7 +283,7 @@ export default function DeckPage() {
   const [sim, setSim] = useState<SimResult | null>(null);
   const [simming, setSimming] = useState(false);
   const [opponent, setOpponent] = useState("");
-  const [simN, setSimN] = useState(200);
+  const [simN, setSimN] = useState(100);
   const [opponents, setOpponents] = useState<{ key: string; label: string }[]>([]);
   const [copied, setCopied] = useState(false);
   const [binder, setBinder] = useState<BinderCard[]>([]);
@@ -294,7 +295,7 @@ export default function DeckPage() {
   const [supporter, setSupporter] = useState(false);
   const [coupon, setCoupon] = useState("");
   const [supMsg, setSupMsg] = useState<string | null>(null);
-  const supportUrl = process.env.NEXT_PUBLIC_SUPPORT_URL || "https://ko-fi.com/";
+  const supportUrl = KOFI_URL;
   const [suggest, setSuggest] = useState<SuggestResp | null>(null);
   const [suggesting, setSuggesting] = useState<string | null>(null);
 
@@ -1026,9 +1027,9 @@ export default function DeckPage() {
             </button>
           </div>
           {!resolved.commander_name && <p className="muted" style={{ fontSize: ".8rem" }}>Marcá el comandante primero.</p>}
-          {!supporter && simN > 200 && (
+          {!supporter && simN > FREE_SIM && (
             <p className="muted" style={{ fontSize: ".8rem" }}>
-              Tope gratis: 200 partidas por corrida. <a href={supportUrl} target="_blank" rel="noreferrer">Apoyá</a> para subirlo.
+              Tope gratis: {FREE_SIM} partidas por corrida. <a href={KOFI_URL} target="_blank" rel="noreferrer">Apoyá</a> para subirlo.
             </p>
           )}
           {sim && (
@@ -1320,16 +1321,16 @@ export default function DeckPage() {
             ) : (
               <>
                 <p className="muted" style={{ fontSize: ".82rem" }}>
-                  Todo el sitio es gratis. Los topes gratis (simular hasta {200} partidas, hasta {10} decks en la nube)
-                  se amplían si <a href={supportUrl} target="_blank" rel="noreferrer">apoyás el proyecto</a> —
-                  es para bancar la infraestructura, no la IP de MTG.
+                  Todo el sitio es gratis. Los topes gratis (simular hasta {FREE_SIM} partidas, hasta {FREE_DECKS} decks en la nube)
+                  se amplían si apoyás el proyecto — es para bancar la infraestructura, no la IP de MTG.
                 </p>
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                   <input placeholder="canjear código de supporter" value={coupon}
                     onChange={(e) => setCoupon(e.target.value)}
                     style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 9px", width: 220 }} />
                   <button className="ghost" onClick={redeemCoupon} disabled={!coupon.trim()}>Canjear</button>
-                  <a className="ghost" href={supportUrl} target="_blank" rel="noreferrer" style={{ padding: "6px 12px", textDecoration: "none" }}>💛 Apoyar</a>
+                  <a className="ghost" href={KOFI_URL} target="_blank" rel="noreferrer" style={{ padding: "6px 12px", textDecoration: "none" }}>💛 Ko-fi</a>
+                  <a className="ghost" href={PAYPAL_URL} target="_blank" rel="noreferrer" style={{ padding: "6px 12px", textDecoration: "none" }}>PayPal</a>
                 </div>
               </>
             )}
