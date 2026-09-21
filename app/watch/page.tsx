@@ -214,12 +214,12 @@ export default function Watch() {
       {replay && step && (
         <div className="card">
           <div className="scrub">
-            <button className="ghost" onClick={() => { setPlaying(false); setIdx(0); }} disabled={idx === 0}>⏮</button>
-            <button className="ghost" onClick={() => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }} disabled={idx === 0}>◀</button>
+            <button className="ghost" aria-label="Ir al inicio" title="Inicio" onClick={() => { setPlaying(false); setIdx(0); }} disabled={idx === 0}>⏮</button>
+            <button className="ghost" aria-label="Anterior" title="Anterior" onClick={() => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }} disabled={idx === 0}>◀</button>
             <button className="go" onClick={() => setPlaying((v) => !v)}>{playing ? "⏸ Pausa" : "▶ Reproducir"}</button>
-            <button className="ghost" onClick={() => { setPlaying(false); setIdx((i) => Math.min(last, i + 1)); }} disabled={idx === last}>▶</button>
-            <button className="ghost" onClick={() => { setPlaying(false); setIdx(last); }} disabled={idx === last}>⏭</button>
-            <input type="range" min={0} max={last} value={idx} onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} className="range" />
+            <button className="ghost" aria-label="Siguiente" title="Siguiente" onClick={() => { setPlaying(false); setIdx((i) => Math.min(last, i + 1)); }} disabled={idx === last}>▶</button>
+            <button className="ghost" aria-label="Ir al final" title="Final" onClick={() => { setPlaying(false); setIdx(last); }} disabled={idx === last}>⏭</button>
+            <input type="range" aria-label="Posición de la repetición" min={0} max={last} value={idx} onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} className="range" />
             <span className="muted">{idx + 1}/{last + 1}</span>
           </div>
           <div className="now">

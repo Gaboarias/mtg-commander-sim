@@ -184,11 +184,11 @@ function MissingFixer({ name, onPick }: { name: string; onPick: (n: string) => v
     <div style={{ borderTop: "1px solid var(--border)", padding: "12px 0" }}>
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
         <span className="err" style={{ minWidth: 140 }}>⚠ {name}</span>
-        <input value={q} onChange={(e) => setQ(e.target.value)} style={{ ...inp, width: 200 }} />
+        <input value={q} aria-label="Nombre de la carta a corregir" onChange={(e) => setQ(e.target.value)} style={{ ...inp, width: 200 }} />
         <button className="ghost" onClick={search} disabled={busy}>Buscar</button>
         <span className="muted">o por set/#:</span>
-        <input placeholder="set" value={setCode} onChange={(e) => setSetCode(e.target.value)} style={{ ...inp, width: 64 }} />
-        <input placeholder="n°" value={num} onChange={(e) => setNum(e.target.value)} style={{ ...inp, width: 64 }} />
+        <input placeholder="set" aria-label="Código de set" value={setCode} onChange={(e) => setSetCode(e.target.value)} style={{ ...inp, width: 64 }} />
+        <input placeholder="n°" aria-label="Número de colección" value={num} onChange={(e) => setNum(e.target.value)} style={{ ...inp, width: 64 }} />
         <button className="ghost" onClick={byNumber} disabled={busy}>Traer</button>
       </div>
       {sugg.length > 0 && (
@@ -228,7 +228,7 @@ function CardAdder({ onAdd, placeholder }: { onAdd: (name: string) => void; plac
   return (
     <div>
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-        <input value={q} placeholder={placeholder}
+        <input value={q} placeholder={placeholder} aria-label={placeholder}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") search(); }}
           style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 9px", width: 240 }} />
@@ -753,7 +753,7 @@ export default function DeckPage() {
                 <input
                   value={profile}
                   onChange={(e) => onProfileChange(e.target.value)}
-                  placeholder="tu nombre"
+                  placeholder="tu nombre" aria-label="Tu nombre de perfil"
                   style={{
                     background: "var(--panel-2)", color: "var(--text)",
                     border: "1px solid var(--border)", borderRadius: 8,
@@ -777,6 +777,7 @@ export default function DeckPage() {
                         <button className="ghost" style={{ padding: "4px 10px", marginRight: 6 }}
                           onClick={() => onLoadSaved(d)}>Cargar</button>
                         <button className="ghost" style={{ padding: "4px 8px" }}
+                          aria-label={`Borrar deck ${d.name}`} title="Borrar"
                           onClick={() => onDeleteSaved(d.id)}>✕</button>
                       </td>
                     </tr>
@@ -799,7 +800,7 @@ export default function DeckPage() {
           {precons.length > 0 ? (
             <>
               <input
-                placeholder="filtrar precon…"
+                placeholder="filtrar precon…" aria-label="Filtrar precons"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 style={{
@@ -876,7 +877,7 @@ export default function DeckPage() {
           </button>
           <span className="muted">o</span>
           <input
-            placeholder="nombre del comandante"
+            placeholder="nombre del comandante" aria-label="Nombre del comandante"
             value={cmdName}
             onChange={(e) => setCmdName(e.target.value)}
             style={{
@@ -998,7 +999,7 @@ export default function DeckPage() {
                     )}
                   </td>
                   <td>
-                    <button className="ghost" style={{ padding: "4px 8px" }} onClick={() => remove(i)}>✕</button>
+                    <button className="ghost" style={{ padding: "4px 8px" }} aria-label={`Quitar ${c.name}`} title="Quitar" onClick={() => remove(i)}>✕</button>
                   </td>
                 </tr>
               ))}
@@ -1312,7 +1313,7 @@ export default function DeckPage() {
           </div>
           <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
             <button className="go" disabled={cloudBusy} onClick={pushCloud}>⬆ Subir a la nube</button>
-            <input placeholder="pegá un código para bajar…" value={otherCode}
+            <input placeholder="pegá un código para bajar…" aria-label="Código para bajar de la nube" value={otherCode}
               onChange={(e) => setOtherCode(e.target.value)}
               style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 9px", width: 240 }} />
             <button className="ghost" disabled={cloudBusy} onClick={pullCloud}>⬇ Bajar de la nube</button>
@@ -1328,7 +1329,7 @@ export default function DeckPage() {
                   se amplían si apoyás el proyecto — es para bancar la infraestructura, no la IP de MTG.
                 </p>
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                  <input placeholder="canjear código de supporter" value={coupon}
+                  <input placeholder="canjear código de supporter" aria-label="Código de supporter" value={coupon}
                     onChange={(e) => setCoupon(e.target.value)}
                     style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 9px", width: 220 }} />
                   <button className="ghost" onClick={redeemCoupon} disabled={!coupon.trim()}>Canjear</button>
@@ -1365,7 +1366,7 @@ export default function DeckPage() {
                     onClick={() => whereDoesItHelp(c.name)}>
                     {suggesting === c.name ? "Buscando…" : "¿Dónde me sirve?"}
                   </button>
-                  <button className="ghost" style={{ padding: "3px 8px" }} onClick={() => binderRemove(c.name)}>✕</button>
+                  <button className="ghost" style={{ padding: "3px 8px" }} aria-label={`Quitar ${c.name} del binder`} title="Quitar" onClick={() => binderRemove(c.name)}>✕</button>
                 </div>
               ))}
             </div>

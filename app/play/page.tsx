@@ -427,7 +427,7 @@ export default function Play() {
               <h2 className="def-title">
                 <motion.span className="alert"
                   animate={reduce ? {} : { scale: [1, 1.15, 1] }}
-                  transition={{ repeat: Infinity, duration: 1.1 }}>⚔</motion.span>
+                  transition={reduce ? undefined : { repeat: Infinity, duration: 1.1 }}>⚔</motion.span>
                 {state.combat.from} te ataca — {state.combat.incoming_damage} de daño en camino
               </h2>
               <div className="def-attackers">
@@ -645,7 +645,7 @@ export default function Play() {
       {targeting && (
         <div className="inspect-back" onClick={() => setTargeting(null)}>
           <div className="inspect" onClick={(e) => e.stopPropagation()}>
-            <button className="inspect-x" onClick={() => setTargeting(null)}>✕</button>
+            <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setTargeting(null)}>✕</button>
             <h3>🎯 Objetivo{targeting.count > 1 ? "s" : ""} de {targeting.name}</h3>
             <p className="muted" style={{ marginTop: 2 }}>
               {targeting.count > 1
@@ -679,7 +679,7 @@ export default function Play() {
       {inspect && (
         <div className="inspect-back" onClick={() => setInspect(null)}>
           <div className="inspect" onClick={(e) => e.stopPropagation()}>
-            <button className="inspect-x" onClick={() => setInspect(null)}>✕</button>
+            <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setInspect(null)}>✕</button>
             {art[inspect.name] ? (
               <div className="inspect-art" style={{ backgroundImage: `url(${art[inspect.name]})` }} />
             ) : (

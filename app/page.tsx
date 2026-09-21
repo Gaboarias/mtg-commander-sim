@@ -200,9 +200,16 @@ export default function Home() {
                 <span
                   className="del"
                   role="button"
+                  tabIndex={0}
                   aria-label={`Borrar ${p.label}`}
                   title="Borrar este deck"
                   onClick={(e) => deleteMine(p.id, p.label, e)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      deleteMine(p.id, p.label, e as unknown as React.MouseEvent);
+                    }
+                  }}
                 >
                   ✕
                 </span>

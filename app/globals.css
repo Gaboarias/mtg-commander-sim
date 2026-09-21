@@ -8,6 +8,8 @@
   --muted: #a99d84;
   --accent: #d8b23a;      /* oro */
   --accent-2: #6f95ff;
+  --r: #e5556b;           /* error/peligro */
+  --g: #57c07a;           /* éxito */
   --font-display: "Cinzel", Georgia, "Times New Roman", serif;
   /* paleta categorica validada (dataviz, modo OSCURO) para las barras */
   --s1: #3987e5;
@@ -34,6 +36,8 @@
   --muted: #6f6145;
   --accent: #8a5a12;      /* bronce/oro oscuro para contraste */
   --accent-2: #2f5aa8;
+  --r: #c0392b;           /* error/peligro (oscuro para contraste en claro) */
+  --g: #2e7d46;           /* éxito */
   /* paleta categorica validada (dataviz, modo CLARO) para las barras */
   --s1: #2a78d6;
   --s2: #eb6834;
@@ -49,6 +53,25 @@
 }
 
 * { box-sizing: border-box; }
+
+/* foco de teclado visible y consistente (accesibilidad) */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* no quitar el foco al usar mouse, pero sí evitar doble contorno feo */
+:focus:not(:focus-visible) { outline: none; }
+
+/* respetar "reduce motion" del sistema operativo */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 
 html, body {
   margin: 0;
@@ -90,7 +113,9 @@ html, body {
   letter-spacing: -0.01em;
 }
 .nav-brand span { font-size: 1rem; font-family: var(--font-display); letter-spacing: .02em; }
-.nav-links { display: flex; gap: 6px; }
+.nav-links { display: flex; gap: 6px; align-items: center; min-width: 0; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.nav-links::-webkit-scrollbar { display: none; }
+.nav-links .nav-link { flex: 0 0 auto; white-space: nowrap; }
 .nav-link {
   color: var(--muted);
   text-decoration: none;
@@ -427,4 +452,13 @@ ul.abil li { margin: 5px 0; line-height: 1.35; }
   /* la curva del análisis no debe desbordar */
   .curve { overflow-x: auto; }
   header h1 { font-size: 1.6rem; }
+  /* targets de toque ≥40px en celular (accesibilidad) */
+  button.go, button.ghost, .act-block .ghost, .act-block .go,
+  .scrub .ghost, .scrub .go, .nav-link, a.ghost {
+    min-height: 40px; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .go.tiny { min-height: 34px; }
+  .theme-toggle { width: 40px; height: 40px; }
+  .deck-btn .del { width: 32px; height: 32px; }
+  .play-line { min-height: 36px; }
 }

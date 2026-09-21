@@ -37,7 +37,7 @@ export function CardMini({
       style={onClick ? { cursor: "pointer" } : undefined}
     >
       {onInspect && (
-        <button className="cm-info" title="Ver carta"
+        <button className="cm-info" title="Ver carta" aria-label="Ver detalle de la carta"
           onClick={(e) => { e.stopPropagation(); onInspect(); }}>ⓘ</button>
       )}
       {art ? (
