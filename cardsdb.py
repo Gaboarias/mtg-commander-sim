@@ -458,6 +458,32 @@ def _cmc(perm):
     return c.cost.cmc if getattr(c, "cost", None) else 0
 
 
+def _human_target_choice(game, ctrl, kind, prompt, options, apply_one,
+                         allow_none=False):
+    """Elección de objetivo genérica para efectos (p. ej. ETB dirigidos).
+    `options` = lista de (etiqueta, objeto). El HUMANO elige vía pending_choice
+    (mismo modal que scry/revelar); los bots aplican al primero (auto)."""
+    if not options:
+        return
+    if ctrl is getattr(game, "interactive_human", None):
+        objs = [o for _lbl, o in options]
+
+        def _apply(idx, _objs=objs, _fn=apply_one):
+            if idx is not None and 0 <= idx < len(_objs):
+                _fn(_objs[idx])
+
+        game.pending_choice = {
+            "kind": kind,
+            "prompt": prompt,
+            "options": [{"i": i, "name": lbl, "ok": True}
+                        for i, (lbl, _o) in enumerate(options)],
+            "allow_none": bool(allow_none),
+            "_apply": _apply,
+        }
+    else:
+        apply_one(options[0][1])
+
+
 def _count_word(w):
     """Palabra o dígito -> int, o None."""
     w = (w or "").strip().lower()
@@ -802,35 +828,70 @@ def _generic_amount_effect(oracle: str):
             game.log(f"{ctrl.name} tomará un turno extra")
         return eff
 
-    # destruir una tierra NO básica (p. ej. White Orchid Phantom): auto-elige la de
-    # un rival; su dueño puede buscar una básica tapeada (compensación).
+    # destruir una tierra NO básica (p. ej. White Orchid Phantom). El humano ELIGE
+    # cuál; su dueño puede buscar una básica tapeada (compensación).
     if re.search(r"destroy (?:up to )?(?:one |a )?target nonbasic land", t):
         give = "basic land" in t and "search" in t
-        def eff(game, ctrl, *_a, _give=give):
-            victim = None
-            for o in game.opponents(ctrl):
-                for pm in o.battlefield:
-                    if pm.card.is_land() and "basic" not in pm.card.supertypes:
-                        victim = pm
-                        break
-                if victim:
-                    break
-            if victim is None:
+        opt = "up to" in t
+        def eff(game, ctrl, *_a, _give=give, _opt=opt):
+            cands = [(f"{pm.name} · {pm.controller.name}", pm)
+                     for o in game.opponents(ctrl) for pm in o.battlefield
+                     if pm.card.is_land() and "basic" not in pm.card.supertypes]
+            if not cands:
                 game.log(f"{ctrl.name}: no hay tierra no básica para destruir")
                 return
-            owner = victim.controller
-            game.destroy(victim, "destrucción de tierra")
-            game.log(f"{ctrl.name} destruye {victim.name} (no básica) de {owner.name}")
-            if _give:
-                basics = [c for c in owner.library
-                          if c.is_land() and "basic" in c.supertypes]
-                if basics:
-                    b = basics[0]
-                    owner.library.remove(b)
-                    p = game.move_to_battlefield(b, owner)
-                    p.tapped = True
-                    game.rng.shuffle(owner.library)
-                    game.log(f"{owner.name} busca una tierra básica (tapeada)")
+
+            def _do(victim):
+                owner = victim.controller
+                game.destroy(victim, "destrucción de tierra")
+                game.log(f"{ctrl.name} destruye {victim.name} (no básica) de {owner.name}")
+                if _give:
+                    basics = [c for c in owner.library
+                              if c.is_land() and "basic" in c.supertypes]
+                    if basics:
+                        b = basics[0]
+                        owner.library.remove(b)
+                        p = game.move_to_battlefield(b, owner)
+                        p.tapped = True
+                        game.rng.shuffle(owner.library)
+                        game.log(f"{owner.name} busca una tierra básica (tapeada)")
+
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí una tierra no básica para destruir"
+                                 + (" (o ninguna)" if _opt else ""),
+                                 cands, _do, allow_none=_opt)
+        return eff
+
+    # destruir / exiliar una criatura objetivo como ETB (p. ej. Ravenous Chupacabra):
+    # el humano elige a cuál; el bot toma la más grande del rival.
+    m = re.search(r"(destroy|exile) (?:up to )?(?:one |a |target )?target creature", t)
+    if m:
+        mode = "exile" if m.group(1) == "exile" else "destroy"
+        opt = "up to" in t
+        def eff(game, ctrl, *_a, _mode=mode, _opt=opt):
+            pool = game.legal_creature_targets(ctrl)
+            if not pool:
+                return
+            pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness} · {pm.controller.name}", pm)
+                     for pm in pool]
+
+            def _do(pm):
+                if pm not in pm.controller.battlefield:
+                    return
+                if _mode == "exile":
+                    owner = pm.controller
+                    owner.battlefield.remove(pm)
+                    if not pm.is_token and pm.card is not owner.commander_card:
+                        owner.exile.append(pm.card)
+                    game.log(f"{ctrl.name} exilia {pm.name}")
+                else:
+                    game.destroy(pm, "ETB")
+                    game.log(f"{ctrl.name} destruye {pm.name}")
+
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí una criatura" + (" (o ninguna)" if _opt else ""),
+                                 cands, _do, allow_none=_opt)
         return eff
 
     # fichas de recurso (Treasure/Clue/Food/Blood): visibles en el tablero.
@@ -1135,6 +1196,16 @@ def build_card_from_data(data: dict) -> Card:
                 # solo como ETB si el texto tiene un disparo de entrada; si el efecto
                 # pertenece a otro disparo (p. ej. "whenever ~ attacks"), no lo duplicamos
                 card.on_etb = geff
+
+    # ETB dirigido en un PERMANENTE (p. ej. destruir criatura/tierra al entrar):
+    # se cablea aunque tenga tag removal/wipe (esos tags apuntan al camino de CAST,
+    # que no aplica a una criatura/artefacto que entra al campo).
+    if (not card.on_etb and not card.modes
+            and {"creature", "artifact", "enchantment"} & types
+            and re.search(r"\benters?\b", (data.get("oracle_text", "") or "").lower())):
+        geff = _generic_amount_effect(data.get("oracle_text", ""))
+        if geff is not None:
+            card.on_etb = geff
 
     # habilidades activadas con coste de maná (creaturas/permanentes/tierras):
     # "{cost}: efecto" -> se pueden activar en juego pagando el maná.

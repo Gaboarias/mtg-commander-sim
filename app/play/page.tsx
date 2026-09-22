@@ -774,8 +774,10 @@ export default function Play() {
           scry: "Scry", surveil: "Surveil", fateseal: "Fateseal (biblioteca rival)",
           explore: "Explorar", search: "Buscar en la biblioteca",
           look_take: "Elegí una carta", reveal_land: "Elegí una carta",
+          etb_target: "Elegí un objetivo",
         };
         const title = titles[ch.kind] || "Elegí una carta";
+        const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno" : "No llevarme ninguna";
         return (
           <div className="inspect-back">
             <div className="inspect" onClick={(e) => e.stopPropagation()}>
@@ -798,7 +800,7 @@ export default function Play() {
               {ch.allow_none && (
                 <div className="act-block" style={{ marginTop: 10 }}>
                   <button className="ghost" onClick={() => doAct("choose", { index: null })}>
-                    No llevarme ninguna
+                    {noneLabel}
                   </button>
                 </div>
               )}

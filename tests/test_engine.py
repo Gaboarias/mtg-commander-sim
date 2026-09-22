@@ -489,6 +489,35 @@ def test_creature_enters_watcher_ignores_big_creatures():
     assert len(me.hand) == h0                # CMV 6 > 3 -> no dispara
 
 
+def test_etb_target_human_chooses_creature():
+    # ETB "destroy target creature": el HUMANO elige a cuál (pending_choice etb_target).
+    import interactive, cardsdb, cards, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    op = ig.g.opponents(hu)[0]
+    ig.g.move_to_battlefield(cards.creature("Ogre", "2B", 3, 3), op)
+    rat = ig.g.move_to_battlefield(cards.creature("Rat", "1B", 1, 1), op)
+    chup = cardsdb.build_card_from_data({
+        "name": "Chupacabra", "type_line": "Creature", "mana_cost": "{2}{B}",
+        "power": "2", "toughness": "2", "color_identity": ["B"],
+        "oracle_text": "When Chupacabra enters, destroy target creature "
+                       "an opponent controls."})
+    assert chup.on_etb is not None
+    hu.hand.append(chup)
+    for _ in range(3):
+        ig.g.move_to_battlefield(cards.land("Swamp", ["B"], basic=True), hu)
+    st = ig.cast(i=hu.hand.index(chup), zone="hand")
+    assert st["phase"] == "choose" and st["choice"]["kind"] == "etb_target"
+    idx = next(o["i"] for o in st["choice"]["options"] if "Rat" in o["name"])
+    ig.resolve_choice(idx)
+    assert rat not in op.battlefield              # se destruyó la elegida
+    assert any(pm.name == "Ogre" for pm in op.battlefield)  # la otra sigue
+    import json
+    json.dumps(st)
+
+
 def test_etb_destroy_nonbasic_land_and_ramp():
     import cardsdb, cards
     from engine import Game, Player
