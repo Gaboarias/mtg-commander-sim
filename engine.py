@@ -861,13 +861,17 @@ class Game:
                     p.lost = True
                     changed = True
                     self.log(f"{p.name} pierde por dano de comandante")
-            # criaturas muertas
+            # criaturas muertas: resistencia <= 0 muere SIEMPRE (no es destrucción);
+            # el daño letal la destruye SALVO que sea indestructible.
             for p in self.players:
                 for perm in list(p.battlefield):
                     if not perm.is_creature():
                         continue
-                    if perm.toughness <= 0 or perm.damage >= perm.toughness:
-                        self.to_graveyard(perm, "sba")
+                    if perm.toughness <= 0:
+                        self.to_graveyard(perm, "resistencia 0")
+                        changed = True
+                    elif perm.damage >= perm.toughness and not perm.has("indestructible"):
+                        self.to_graveyard(perm, "daño letal")
                         changed = True
             # planeswalkers sin lealtad
             for p in self.players:

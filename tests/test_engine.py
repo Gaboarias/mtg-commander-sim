@@ -2490,6 +2490,26 @@ def test_optional_may_draw_asks_human_auto_for_bot():
     assert ig.g.pending_choice is None and len(op.hand) == ob + 1
 
 
+def test_indestructible_survives_lethal_damage():
+    # daño letal NO destruye a una criatura indestructible; resistencia <= 0 sí.
+    import cards
+    from engine import Game, Player
+    me = Player("me", [cards.land("Forest", ["G"], basic=True) for _ in range(10)],
+                cards.creature("C", "2G", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Island", ["U"], basic=True) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    wall = g.move_to_battlefield(cards.creature("Muro", "1G", 1, 4, kw=("indestructible",)), me)
+    wall.damage = 10                       # daño letal
+    g.sba()
+    assert wall in me.battlefield          # sobrevive (indestructible)
+    g.destroy(wall, "test")                # destroy también lo respeta
+    assert wall in me.battlefield
+    wall.temp_pt = [0, -10]                # resistencia <= 0: muere igual
+    g.sba()
+    assert wall not in me.battlefield
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
