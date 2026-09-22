@@ -154,6 +154,14 @@ class Policy:
             n = max(1, getattr(card, "target_count", 1))
             pool.sort(key=lambda p: (p.power, p.toughness), reverse=True)
             return pool[:n]           # las N más grandes
+        if spec == "opp_player":
+            opps = game.opponents(me)
+            return [min(opps, key=lambda o: o.life)] if opps else []
+        if spec == "own_perm":
+            mine = [pm for pm in me.battlefield if pm.card.on_etb] or me.battlefield
+            if not mine:
+                return []
+            return [max(mine, key=lambda x: (x.card.cost.cmc if x.card.cost else 0))]
         return []
 
     def _activate_planeswalkers(self, game, me):

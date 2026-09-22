@@ -733,6 +733,74 @@ def test_impulse_playable_from_exile_interactively():
     assert spell not in hu.impulse and len(hu.battlefield) == bf0 + 1
 
 
+def test_blink_reexecutes_etb():
+    # Parpadeo: exiliar y devolver una criatura re-dispara su ETB.
+    import cardsdb, cards
+    from engine import Game, Player
+    blink = cardsdb.build_card_from_data({
+        "name": "Flicker", "type_line": "Instant", "mana_cost": "{1}{W}",
+        "color_identity": ["W"],
+        "oracle_text": "Exile target creature you control, then return it to the "
+                       "battlefield under its owner's control."})
+    assert blink.on_cast_resolve is not None and blink.target_spec == "own_perm"
+    etb = cardsdb.build_card_from_data({
+        "name": "Maker", "type_line": "Creature", "mana_cost": "{1}{W}",
+        "power": "1", "toughness": "1", "color_identity": ["W"],
+        "oracle_text": "When Maker enters, create a 1/1 white Soldier creature token."})
+    me = Player("yo", [cards.creature("F", "1W", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    perm = g.move_to_battlefield(etb, me)         # ETB #1 -> 1 token
+    bf1 = len(me.battlefield)
+    blink.on_cast_resolve(g, me, [perm])          # parpadeo -> ETB #2 -> otro token
+    assert len(me.battlefield) == bf1 + 1         # +1 ficha nueva (la criatura vuelve)
+    assert any(pm.name == "Maker" for pm in me.battlefield)
+
+
+def test_threaten_steals_then_returns_at_end_of_turn():
+    import cardsdb, cards
+    from engine import Game, Player
+    threaten = cardsdb.build_card_from_data({
+        "name": "Threaten", "type_line": "Sorcery", "mana_cost": "{2}{R}",
+        "color_identity": ["R"],
+        "oracle_text": "Gain control of target creature until end of turn. Untap it. "
+                       "It gains haste until end of turn."})
+    assert threaten.on_cast_resolve is not None
+    me = Player("yo", [cards.creature("F", "1R", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    victim = g.move_to_battlefield(cards.creature("Ogre", "2B", 3, 3), op)
+    threaten.on_cast_resolve(g, me, [victim])
+    assert victim in me.battlefield and victim.controller is me
+    g.end_turn(me)
+    assert victim in op.battlefield and victim.controller is op   # vuelve al dueño
+
+
+def test_clone_copies_target():
+    import cardsdb, cards
+    from engine import Game, Player
+    clone = cardsdb.build_card_from_data({
+        "name": "Clone", "type_line": "Sorcery", "mana_cost": "{3}{U}",
+        "color_identity": ["U"],
+        "oracle_text": "Create a token that's a copy of target creature."})
+    assert clone.on_cast_resolve is not None
+    me = Player("yo", [cards.creature("F", "1U", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    victim = g.move_to_battlefield(cards.creature("Dragon", "4R", 5, 5), op)
+    bf0 = len(me.battlefield)
+    clone.on_cast_resolve(g, me, [victim])
+    assert len(me.battlefield) == bf0 + 1
+    tok = me.battlefield[-1]
+    assert tok.name == "Dragon" and tok.power == 5 and tok.is_token
+
+
 def test_activated_ability_pays_mana():
     # Habilidad activada "{2}{R}: deals 2 damage to each opponent": debe parsearse
     # y, al activarla, pagar el maná y aplicar el efecto.

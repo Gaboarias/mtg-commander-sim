@@ -157,6 +157,74 @@ def _targeted_spell(oracle: str):
     return None
 
 
+def _blink_effect():
+    """Parpadeo: exilia el/los permanente(s) objetivo y los devuelve al campo
+    (re-dispara ETB). Los tokens desaparecen."""
+    def eff(game, ctrl, targets):
+        for perm in list(targets or []):
+            if perm not in perm.controller.battlefield:
+                continue
+            owner = perm.controller
+            owner.battlefield.remove(perm)
+            if perm.is_token:
+                game.log(f"{perm.name} parpadea y desaparece (ficha)")
+                continue
+            game.log(f"{ctrl.name} hace parpadear {perm.card.name}")
+            game.move_to_battlefield(perm.card, owner)   # vuelve y re-dispara ETB
+    return eff
+
+
+def _control_effect(temp):
+    """Robo de control: mueve el permanente al campo de ctrl. Si temp=True
+    (Threaten/Act of Treason) lo devuelve al fin del turno con haste."""
+    def eff(game, ctrl, targets):
+        for perm in list(targets or []):
+            if perm not in perm.controller.battlefield or perm.controller is ctrl:
+                continue
+            old = perm.controller
+            old.battlefield.remove(perm)
+            perm.controller = ctrl
+            ctrl.battlefield.append(perm)
+            perm.summoning_sick = False        # entra listo para atacar
+            perm.tapped = False
+            game.log(f"{ctrl.name} toma el control de {perm.card.name}")
+            if temp:
+                perm.return_to = old
+                game.control_returns.append(perm)
+    return eff
+
+
+def _clone_effect():
+    """Clon: crea una ficha copia (P/T + keywords) del objetivo."""
+    def eff(game, ctrl, targets):
+        tg = (list(targets or []) or [None])[0]
+        if tg is None:
+            return
+        cards.make_token(game, ctrl, tg.card.name, tg.card.power, tg.card.toughness,
+                         kw=tuple(tg.card.keywords))
+        game.log(f"{ctrl.name} crea una copia de {tg.card.name}")
+    return eff
+
+
+def _targeted_special(oracle: str):
+    """Detecta hechizos dirigidos especiales -> (effect, target_spec, count).
+    Parpadeo, robo de control y clon. None si no matchea."""
+    t = re.sub(r"\s+", " ", (oracle or "").lower())
+    # robo de control
+    if re.search(r"gain control of (?:up to \w+ )?target", t):
+        temp = "until end of turn" in t or "end of turn" in t
+        return _control_effect(temp), "opp_creature", 1
+    # clon
+    if re.search(r"copy of (?:up to \w+ )?target (?:creature|permanent)", t):
+        return _clone_effect(), "opp_creature", 1
+    # parpadeo (exiliar y devolver al campo)
+    if re.search(r"exile (?:up to \w+ )?target (?:creature|permanent)"
+                 r"[^.]{0,80}?return (?:it|that card|them)[^.]{0,40}?battlefield", t):
+        spec = "own_perm" if "you control" in t else "opp_creature"
+        return _blink_effect(), spec, 1
+    return None
+
+
 def _short_label(s, n=52):
     s = re.sub(r"\s+", " ", (s or "")).strip()
     return s if len(s) <= n else s[:n - 1] + "…"
@@ -838,9 +906,20 @@ def build_card_from_data(data: dict) -> Card:
                     break
             card.tags = card.tags | {"modal"}
 
+    # hechizos DIRIGIDOS especiales (parpadeo / robo de control / clon): se cablean
+    # ANTES de la remoción para no colapsarlos a "destruir".
+    if {"instant", "sorcery"} & types and not card.modes and not card.on_cast_resolve:
+        sp = _targeted_special(data.get("oracle_text", ""))
+        if sp is not None:
+            eff, spec, count = sp
+            card.on_cast_resolve = eff
+            card.target_spec = spec
+            card.target_count = max(1, count)
+            card.tags = card.tags | {"targeted"}
+
     # remoción / bounce DIRIGIDA (instantáneo o conjuro): dejar elegir objetivos.
     # Se cablea ANTES de la capa genérica para que no la reemplace.
-    if {"instant", "sorcery"} & types and not card.modes:
+    if {"instant", "sorcery"} & types and not card.modes and not card.on_cast_resolve:
         spec = _targeted_spell(data.get("oracle_text", ""))
         if spec is not None:
             mode, count = spec

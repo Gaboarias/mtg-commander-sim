@@ -429,6 +429,10 @@ class Game:
         # efecto que requiere elegir (revelar, etc.) hasta resolve_choice().
         self.interactive_human = None
         self.pending_choice = None
+        # control temporal (Threaten): permanentes a devolver al fin del turno
+        self.control_returns: list = []
+        # turnos extra pendientes (para el mismo jugador)
+        self.extra_turns: list = []
         for p in players:
             p.setup(self.rng)
         if mulligan:
@@ -1083,6 +1087,18 @@ class Game:
         if p.impulse:
             p.exile.extend(p.impulse)
             p.impulse.clear()
+        # control temporal (Threaten): devolver los permanentes a su dueño original
+        if self.control_returns:
+            for perm in list(self.control_returns):
+                back = getattr(perm, "return_to", None)
+                if back is not None and perm in perm.controller.battlefield:
+                    perm.controller.battlefield.remove(perm)
+                    perm.controller = back
+                    back.battlefield.append(perm)
+                    perm.tapped = True   # se "usó" este turno
+                    self.log(f"{perm.name} vuelve al control de {back.name}")
+                perm.return_to = None
+            self.control_returns.clear()
         self.sba()
 
     def run_turn(self):

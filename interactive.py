@@ -311,6 +311,11 @@ class InteractiveGame:
         if ts == "opp_player":
             opps = self.g.opponents(p)
             return [min(opps, key=lambda o: o.life)] if opps else []
+        if ts == "own_perm":
+            mine = [pm for pm in p.battlefield if pm.card.on_etb] or p.battlefield
+            if not mine:
+                return []
+            return [max(mine, key=lambda x: (x.card.cost.cmc if x.card.cost else 0))]
         if ts == "stack_spell":
             return [self.g.stack[-1]] if self.g.stack else []
         return None
@@ -332,6 +337,12 @@ class InteractiveGame:
             return [{"idx": self.players.index(o), "name": o.name,
                      "from": f"{o.life} de vida"}
                     for o in self.g.opponents(self.human())]
+        if ts == "own_perm":
+            return [{"uid": pm.uid, "name": pm.name,
+                     "power": pm.power if pm.is_creature() else None,
+                     "toughness": pm.toughness if pm.is_creature() else None,
+                     "from": "tuyo"}
+                    for pm in self.human().battlefield]
         if ts == "stack_spell":
             return [{"idx": k, "name": getattr(o.source, "name", "?")}
                     for k, o in enumerate(self.g.stack)]
@@ -365,6 +376,13 @@ class InteractiveGame:
             for uid in uids:
                 pm = self._find_any_perm(uid)
                 if pm is not None and self.g.can_target(self.human(), pm):
+                    out.append(pm)
+            return out
+        if ts == "own_perm":
+            out = []
+            for uid in uids:
+                pm = self._find_any_perm(uid)
+                if pm is not None and pm.controller is self.human():
                     out.append(pm)
             return out
         if ts == "opp_player":
