@@ -35,7 +35,7 @@ type Legal = {
   exile_play?: { i: number; name: string; cost: string; is_land: boolean; playable: boolean }[];
   foretell_hand?: { i: number; name: string; playable: boolean }[];
   gy_abilities?: { i: number; index: number; name: string; label: string; cost: string; playable: boolean }[];
-  attack_targets: { index: number; name: string; life: number }[];
+  attack_targets: { index: number; name: string; life: number; pw_uid?: number }[];
   can_attack: boolean; can_end: boolean; can_undo?: boolean;
 };
 type CardInfo = { art?: string; type?: string; oracle?: string };
@@ -43,11 +43,11 @@ type Inspect = {
   name: string; cost?: string; types?: string[]; power?: number | null;
   toughness?: number | null; keywords?: string[]; abilities?: string[];
 };
-type CombatAtk = { uid: number; name: string; power: number; toughness: number; commander: boolean; from: string; vs_pw?: string | null };
+type CombatAtk = { uid: number; name: string; power: number; toughness: number; commander: boolean; from: string; vs_pw?: string | null; flying?: boolean };
 type Combat = {
   from: string; incoming_damage: number;
   attackers: CombatAtk[];
-  blockers: { uid: number; name: string; power: number; toughness: number }[];
+  blockers: { uid: number; name: string; power: number; toughness: number; can_block_flyers?: boolean }[];
   responses: { i: number; name: string; cost: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number }[];
 };
 type Mulligan = { mulls: number; to_bottom: number; lands: number };
@@ -84,7 +84,7 @@ def act(kind, arg_json):
     g = _IG['g']; a = json.loads(arg_json or '{}')
     if kind == 'land': g.play_land(a['i'])
     elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'), a.get('target_uids'), a.get('mode'))
-    elif kind == 'attack': g.attack(a.get('uids', []), a.get('target'), a.get('assign'))
+    elif kind == 'attack': g.attack(a.get('uids', []), a.get('target'), a.get('assign'), a.get('target_pw'))
     elif kind == 'foretell': g.foretell(a.get('i'))
     elif kind == 'activate_gy': g.activate_gy(a.get('i'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'end': g.end_turn()
@@ -126,7 +126,8 @@ export default function Play() {
   const infoReq = useRef<Set<string>>(new Set());  // nombres ya pedidos
   const [assign, setAssign] = useState<Record<number, number>>({});  // bloqueador -> atacante
   const [targeting, setTargeting] = useState<{ kind: "cast" | "respond" | "ability"; i?: number; zone?: string; name: string; targets: TargetOpt[]; count: number; mode?: number; uid?: number; index?: number } | null>(null);
-  const [modePick, setModePick] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; modes: ModeOpt[] } | null>(null);
+  const [modePick, setModePick] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; modes: ModeOpt[]; pick?: number } | null>(null);
+  const [modeSel, setModeSel] = useState<number[]>([]);  // modos elegidos (choose two)
   const [tsel, setTsel] = useState<number[]>([]);  // objetivos elegidos (multi)
   const [bottom, setBottom] = useState<number[]>([]);  // cartas al fondo tras mulligan
 
@@ -329,7 +330,8 @@ export default function Play() {
   // lanzar: si es modal, elegir modo; si necesita objetivo, abrir el selector
   function castCard(c: CastOpt) {
     if (c.modes && c.modes.length > 0) {
-      setModePick({ kind: "cast", i: c.i, zone: c.zone, name: c.name, modes: c.modes });
+      setModeSel([]);
+      setModePick({ kind: "cast", i: c.i, zone: c.zone, name: c.name, modes: c.modes, pick: c.mode_pick || 1 });
     } else if (c.target_spec && c.targets && c.targets.length > 0) {
       setTsel([]);
       setTargeting({ kind: "cast", i: c.i, zone: c.zone, name: c.name, targets: c.targets, count: c.target_count || 1 });
@@ -337,9 +339,10 @@ export default function Play() {
       doAct("cast", { i: c.i, zone: c.zone });
     }
   }
-  function respondCard(r: { i: number; name: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[] }) {
+  function respondCard(r: { i: number; name: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number }) {
     if (r.modes && r.modes.length > 0) {
-      setModePick({ kind: "respond", i: r.i, name: r.name, modes: r.modes });
+      setModeSel([]);
+      setModePick({ kind: "respond", i: r.i, name: r.name, modes: r.modes, pick: r.mode_pick || 1 });
     } else if (r.target_spec && r.targets && r.targets.length > 0) {
       setTsel([]);
       setTargeting({ kind: "respond", i: r.i, name: r.name, targets: r.targets, count: r.target_count || 1 });
@@ -359,6 +362,18 @@ export default function Play() {
     } else {
       doAct(base.kind, { i: base.i, zone: base.zone, mode: m.i });
     }
+  }
+  // "choose two/more": acumular modos y confirmar (objetivos se autoeligen, aprox)
+  function toggleMode(m: ModeOpt) {
+    setModeSel((s) => s.includes(m.i) ? s.filter((x) => x !== m.i) : [...s, m.i]);
+  }
+  function confirmModes() {
+    if (!modePick) return;
+    const base = modePick;
+    const sel = [...modeSel].sort((a, b) => a - b);
+    setModePick(null);
+    setModeSel([]);
+    if (sel.length > 0) doAct(base.kind, { i: base.i, zone: base.zone, mode: sel });
   }
   function useAbility(uid: number, ab: AbilityOpt) {
     if (ab.target_spec && ab.targets && ab.targets.length > 0) {
@@ -531,7 +546,7 @@ export default function Play() {
                   <span className="act-label">Tus bloqueadores:</span>
                   {state.combat.blockers.map((b) => (
                     <div key={b.uid} className="blk-row">
-                      <span>{b.name} <b>{b.power}/{b.toughness}</b></span>
+                      <span>{b.name} <b>{b.power}/{b.toughness}</b>{b.can_block_flyers ? <span className="muted"> · puede bloquear voladores</span> : null}</span>
                       <select value={assign[b.uid] ?? ""}
                         onChange={(e) => setAssign((m) => {
                           const v = e.target.value;
@@ -541,8 +556,10 @@ export default function Play() {
                         })}
                         style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 8px" }}>
                         <option value="">No bloquea</option>
-                        {state.combat!.attackers.map((a) => (
-                          <option key={a.uid} value={a.uid}>bloquea a {a.name} ({a.power}/{a.toughness})</option>
+                        {state.combat!.attackers
+                          .filter((a) => b.can_block_flyers || !a.flying)   // sin volar/alcance no puede bloquear voladores
+                          .map((a) => (
+                          <option key={a.uid} value={a.uid}>bloquea a {a.name} ({a.power}/{a.toughness}){a.flying ? " ✦vuela" : ""}</option>
                         ))}
                       </select>
                     </div>
@@ -774,18 +791,18 @@ export default function Play() {
 
                 {(legal?.attack_targets?.length || 0) > 1 && picked.size > 0 && (
                   <div className="act-block" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
-                    <span className="act-label">A quién ataca cada criatura (podés repartir entre varios rivales):</span>
+                    <span className="act-label">A quién ataca cada criatura (rivales o sus planeswalkers):</span>
                     {[...picked].map((uid) => {
                       const atk = legal!.attackers.find((a) => a.uid === uid);
-                      const def = atkTarget ?? legal!.attack_targets[0].index;
+                      const def = atkTarget ?? 0;   // posición en attack_targets
                       return (
                         <label key={"asg" + uid} className="muted" style={{ fontSize: ".82rem", display: "flex", alignItems: "center", gap: 6 }}>
                           <Icon name="swords" size={12} />
                           <b style={{ color: "#eef1f6" }}>{atk?.name ?? "?"}</b> →{" "}
                           <select value={atkAssign[uid] ?? def}
                             onChange={(e) => setAtkAssign((m) => ({ ...m, [uid]: Number(e.target.value) }))}>
-                            {legal!.attack_targets.map((t) => (
-                              <option key={t.index} value={t.index}>{t.name} ({t.life}♥)</option>
+                            {legal!.attack_targets.map((t, pos) => (
+                              <option key={pos} value={pos}>{t.name} {t.pw_uid ? `(${t.life}⬧)` : `(${t.life}♥)`}</option>
                             ))}
                           </select>
                         </label>
@@ -795,12 +812,18 @@ export default function Play() {
                 )}
                 <div className="act-block">
                   <button className="go" onClick={() => {
-                    const multi = (legal?.attack_targets?.length || 0) > 1;
-                    const def = atkTarget ?? legal?.attack_targets?.[0]?.index;
+                    const at = legal?.attack_targets || [];
+                    const multi = at.length > 1;
+                    const defPos = atkTarget ?? 0;
+                    const tgt = (pos: number) => {
+                      const t = at[pos] || at[0];
+                      return { target: t?.index, pw: t?.pw_uid };
+                    };
                     if (multi) {
-                      doAct("attack", { assign: [...picked].map((uid) => ({ uid, target: atkAssign[uid] ?? def })) });
+                      doAct("attack", { assign: [...picked].map((uid) => ({ uid, ...tgt(atkAssign[uid] ?? defPos) })) });
                     } else {
-                      doAct("attack", { uids: [...picked], target: def });
+                      const t0 = tgt(0);
+                      doAct("attack", { uids: [...picked], target: t0.target, target_pw: t0.pw });
                     }
                     setAtkAssign({});
                   }}
@@ -838,15 +861,29 @@ export default function Play() {
         <div className="inspect-back" onClick={() => setModePick(null)}>
           <div className="inspect" onClick={(e) => e.stopPropagation()}>
             <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setModePick(null)}><Icon name="x" size={16} /></button>
-            <h3><Icon name="sparkles" size={17} /> {modePick.name} — elegí un modo</h3>
-            <p className="muted" style={{ marginTop: 2 }}>¿Qué querés que haga?</p>
+            <h3><Icon name="sparkles" size={17} /> {modePick.name} — {(modePick.pick || 1) > 1 ? `elegí ${modePick.pick} modos` : "elegí un modo"}</h3>
+            <p className="muted" style={{ marginTop: 2 }}>
+              {(modePick.pick || 1) > 1 ? `Tocá los modos que querés (${modeSel.length}/${modePick.pick}):` : "¿Qué querés que haga?"}
+            </p>
             <div className="target-list">
-              {modePick.modes.map((m) => (
-                <button key={m.i} className="ghost" onClick={() => chooseMode(m)} style={{ textAlign: "left" }}>
-                  {m.label}{m.target_spec ? <Icon name="target" size={12} /> : null}
-                </button>
-              ))}
+              {modePick.modes.map((m) => {
+                const multi = (modePick.pick || 1) > 1;
+                const on = modeSel.includes(m.i);
+                return (
+                  <button key={m.i} className={`ghost ${on ? "on" : ""}`}
+                    onClick={() => multi ? toggleMode(m) : chooseMode(m)}
+                    style={{ textAlign: "left", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    {multi ? <Icon name={on ? "check-circle" : "plus"} size={13} /> : null}
+                    {m.label}{m.target_spec ? <Icon name="target" size={12} /> : null}
+                  </button>
+                );
+              })}
             </div>
+            {(modePick.pick || 1) > 1 && (
+              <button className="go" style={{ marginTop: 10, display: "inline-flex", alignItems: "center", gap: 6 }}
+                disabled={modeSel.length !== modePick.pick}
+                onClick={confirmModes}><Icon name="check" size={14} /> Confirmar</button>
+            )}
           </div>
         </div>
       )}

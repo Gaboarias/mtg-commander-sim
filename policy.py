@@ -74,14 +74,23 @@ class Policy:
             # novato: a veces se olvida de jugar algo
             if nov and game.rng.random() < 0.22:
                 continue
-            targets = self.choose_targets(game, me, card)
-            if card.target_spec and not targets:
-                continue
+            chosen_modes = None
+            if getattr(card, "modes", ()):
+                chosen_modes = self._pick_modes(game, me, card)
+                targets = []
+                for mi in (chosen_modes or []):
+                    sp = card.modes[mi].get("target_spec")
+                    if sp:
+                        targets += self._spec_targets(game, me, sp, 1)
+            else:
+                targets = self.choose_targets(game, me, card)
+                if card.target_spec and not targets:
+                    continue
             cmc = card.cost.cmc if card.cost else 0
             if reserve and me.available_mana() - cmc < reserve:
                 continue
             if me.can_pay(card.cost):
-                game.cast(me, card, targets=targets)
+                game.cast(me, card, targets=targets, chosen_modes=chosen_modes)
 
         # 5) las MISMAS jugadas fuera del campo que puede hacer el humano:
         # cementerio (flashback/unearth/embalm/recur), exilio (foretell), y las
@@ -146,6 +155,26 @@ class Policy:
                 if game.activate_ability(perm, j, targets=tgt):
                     used += 1
                     break              # una habilidad por permanente por turno
+
+    def _pick_modes(self, game, me, card):
+        """Elige qué modo(s) de una carta modal jugar (los bots ya no van siempre
+        al modo 0). Prefiere modos con objetivo válido; devuelve una lista de
+        índices de tamaño `mode_pick`."""
+        modes = getattr(card, "modes", ())
+        if not modes:
+            return None
+        pick = max(1, getattr(card, "mode_pick", 1))
+        scored = []
+        for i, m in enumerate(modes):
+            spec = m.get("target_spec")
+            ok = True
+            if spec == "opp_creature":
+                ok = bool(game.legal_creature_targets(me))
+            elif spec == "opp_player":
+                ok = bool(game.opponents(me))
+            scored.append((1 if ok else -1, i))
+        scored.sort(reverse=True)
+        return sorted(i for _s, i in scored[:pick])
 
     def _spec_targets(self, game, me, spec, count):
         if spec == "opp_creature":

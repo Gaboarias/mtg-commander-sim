@@ -152,8 +152,11 @@ class InteractiveGame:
 
     def _advance_to_human(self):
         """Corre turnos rivales hasta que sea el turno del humano, se pause por
-        una defensa, o termine la partida."""
+        una defensa, o termine la partida. Antes de cada turno normal agota los
+        turnos extra encolados (mismo criterio que engine.play)."""
         while True:
+            if self._run_extra_turns():   # frenó: turno extra humano o me atacan
+                return
             if len(self.g.alive()) <= 1 or self.g.turn >= self.g.max_turns:
                 self._finish()
                 return
@@ -172,6 +175,31 @@ class InteractiveGame:
                 return
             if self._ai_turn(p):     # pausó porque me atacan
                 return
+
+    def _run_extra_turns(self):
+        """Agota `game.extra_turns` tras el turno recién jugado (tope 4). Devuelve
+        True si hay que frenar el avance: el humano toma un turno extra, o un bot
+        que toma su turno extra me ataca (pausa de defensa)."""
+        taken = 0
+        while (self.g.extra_turns and taken < 4
+               and len(self.g.alive()) > 1 and self.g.turn < self.g.max_turns):
+            who = self.g.extra_turns.pop(0)
+            if who.lost:
+                continue
+            self.g.active_index = self.g.players.index(who)
+            self.g.log(f"{who.name} toma un turno extra")
+            taken += 1
+            if who is self.human():
+                self.g.begin_turn(who)
+                self.g.sba()
+                if who.lost:
+                    continue
+                self.phase = "main"
+                self.attacked = False
+                return True          # el humano juega su turno extra
+            if self._ai_turn(who):
+                return True          # el bot me ataca en su turno extra
+        return False
 
     # -- turno rival, con pausa en mi defensa ---------------------------- #
     def _ai_turn(self, p):
@@ -299,6 +327,14 @@ class InteractiveGame:
         for pm in self.human().battlefield:
             if pm.uid == uid:
                 return pm
+        return None
+
+    def _find_any_perm(self, uid):
+        """Busca un permanente en CUALQUIER campo (p. ej. un planeswalker rival)."""
+        for pl in self.players:
+            for pm in pl.battlefield:
+                if pm.uid == uid:
+                    return pm
         return None
 
     def _auto_targets(self, card):
@@ -446,9 +482,15 @@ class InteractiveGame:
         if card is not None:
             modes = getattr(card, "modes", ())
             chosen = spec = None
-            if modes and mode is not None and 0 <= mode < len(modes):
-                chosen = [mode]
-                spec = modes[mode].get("target_spec")
+            if modes and mode is not None:
+                # `mode` puede ser un índice o una lista (cartas "choose two")
+                idxs = mode if isinstance(mode, list) else [mode]
+                chosen = [m for m in idxs if 0 <= m < len(modes)]
+                # objetivo del primer modo elegido que pida uno
+                for m in chosen:
+                    if modes[m].get("target_spec"):
+                        spec = modes[m].get("target_spec")
+                        break
             self.g.cast(p, card, from_command=bool(from_command),
                         targets=self._chosen_targets(card, target_uids, spec=spec),
                         chosen_modes=chosen)
@@ -502,10 +544,10 @@ class InteractiveGame:
             self.g.activate_gy_ability(p, p.graveyard[i], index)
         return self.state()
 
-    def attack(self, uids=None, target_index=None, assign=None):
-        """Declara atacantes. Con `assign` (lista de {uid, target}) cada atacante
-        puede ir contra un rival distinto (varios jugadores a la vez). Si no,
-        todos los `uids` atacan al rival `target_index` (o al primero vivo)."""
+    def attack(self, uids=None, target_index=None, assign=None, target_pw=None):
+        """Declara atacantes. Con `assign` (lista de {uid, target, pw}) cada atacante
+        puede ir contra un rival o planeswalker distinto. Si no, todos los `uids`
+        atacan al rival `target_index` (o al planeswalker `target_pw`)."""
         if not self._my_turn() or self.attacked:
             return self.state()
         p = self.human()
@@ -520,15 +562,24 @@ class InteractiveGame:
                         return f
             return foes[0]
 
+        def _target(idx, pw_uid):
+            # un planeswalker rival tiene prioridad si se indicó su uid
+            if pw_uid is not None:
+                pm = self._find_any_perm(pw_uid)
+                if (pm is not None and "planeswalker" in pm.card.types
+                        and pm.controller in foes):
+                    return pm
+            return _foe(idx)
+
         self.g._begin_combat(p)
         chosen = []
-        if assign:                       # asignación por atacante (multi-jugador)
+        if assign:                       # asignación por atacante (multi-objetivo)
             for a in assign:
                 pm = self._find_perm(a.get("uid"))
                 if pm is not None and pm.can_attack():
-                    chosen.append((pm, _foe(a.get("target"))))
+                    chosen.append((pm, _target(a.get("target"), a.get("pw"))))
         else:
-            target = _foe(target_index)
+            target = _target(target_index, target_pw)
             for uid in (uids or []):
                 pm = self._find_perm(uid)
                 if pm is not None and pm.can_attack():
@@ -689,6 +740,13 @@ class InteractiveGame:
             for f in self.g.opponents(p):
                 atk_targets.append({"index": self.players.index(f),
                                     "name": f.name, "life": f.life})
+                # planeswalkers del rival: también son objetivo de ataque
+                for pm in f.battlefield:
+                    if "planeswalker" in pm.card.types:
+                        atk_targets.append({
+                            "index": self.players.index(f), "pw_uid": pm.uid,
+                            "name": f"{pm.name} (PW de {f.name})",
+                            "life": pm.counters.get("loyalty", 0)})
         return {"lands": lands, "casts": casts, "attackers": attackers,
                 "activatables": activatables, "abilities": abilities,
                 "impulse": impulse,
@@ -738,9 +796,11 @@ class InteractiveGame:
             # (un Permanent tiene .card; el jugador no).
             "vs_pw": (getattr(a.attacking, "name", None)
                       if hasattr(a.attacking, "card") else None),
+            "flying": a.has("flying"),   # solo bloqueable con volar/alcance
         } for a in incoming]
         blockers = [{
             "uid": pm.uid, "name": pm.name, "power": pm.power, "toughness": pm.toughness,
+            "can_block_flyers": pm.has("flying") or pm.has("reach"),
         } for pm in me.creatures() if not pm.tapped]
         responses = [{
             "i": i, "name": c.name, "cost": _cost_str(c),

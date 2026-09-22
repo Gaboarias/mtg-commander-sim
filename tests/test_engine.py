@@ -2285,6 +2285,101 @@ def test_bot_plays_from_graveyard():
     assert any(pm.name == "Botcrawler" for pm in me.battlefield)   # el bot lo reanimó
 
 
+def test_flying_only_blocked_by_flyers_or_reach():
+    import cards
+    from engine import Game, Player
+    me = Player("me", [cards.land("Plains", ["W"], basic=True) for _ in range(10)],
+                cards.creature("C", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Island", ["U"], basic=True) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    flyer = g.move_to_battlefield(cards.creature("Drake", "2U", 2, 2, kw=("flying",)), me)
+    flyer.summoning_sick = False
+    ground = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), op)
+    g._apply_block_pairs([flyer], [(flyer, ground)])
+    assert ground not in flyer.blocked_by                    # tierra no bloquea volador
+    reach = g.move_to_battlefield(cards.creature("Spider", "1G", 1, 3, kw=("reach",)), op)
+    g._apply_block_pairs([flyer], [(flyer, reach)])
+    assert reach in flyer.blocked_by                         # alcance sí
+
+
+def test_human_can_attack_planeswalker():
+    import interactive, cards, decks, cardsdb
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    op = ig.g.opponents(hu)[0]
+    pw = cardsdb.build_card_from_data({
+        "name": "Jace PW", "type_line": "Legendary Planeswalker — Jace",
+        "loyalty": "5", "color_identity": ["U"], "oracle_text": "+1: Nada."})
+    pwperm = ig.g.move_to_battlefield(pw, op)
+    atk = ig.g.move_to_battlefield(cards.creature("Bear", "1G", 3, 3), hu)
+    atk.summoning_sick = False
+    ig.g.resolve_stack()
+    tgt = next(t for t in ig.legal()["attack_targets"] if t.get("pw_uid") == pwperm.uid)
+    loy0 = pwperm.counters.get("loyalty", 0)
+    ig.attack(uids=[atk.uid], target_pw=tgt["pw_uid"])
+    assert pwperm.counters.get("loyalty", 0) == loy0 - 3      # el PW recibió el daño
+
+
+def test_extra_turn_in_interactive():
+    import interactive, cardsdb, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    t0 = ig.g.turn
+    ig.g.extra_turns.append(hu)          # el humano encola un turno extra
+    ig.end_turn()
+    # tras terminar, el humano vuelve a estar en su turno (turno extra), no un rival
+    assert ig.g.active_index == ig.human_index and ig.phase == "main"
+    assert ig.g.turn == t0               # el turno extra no avanza el contador
+
+
+def test_bot_picks_useful_mode_not_always_zero():
+    import cardsdb, cards
+    from engine import Game, Player
+    from policy import Policy
+    # modal: modo 0 requiere criatura rival (no hay), modo 1 gana vida (siempre útil)
+    c = cardsdb.build_card_from_data({
+        "name": "Charm", "type_line": "Instant", "mana_cost": "{1}{W}",
+        "color_identity": ["W"],
+        "oracle_text": "Choose one —\n• Destroy target creature.\n• You gain 5 life."})
+    assert c.modes and len(c.modes) == 2
+    me = Player("me", [cards.land("Plains", ["W"], basic=True) for _ in range(10)],
+                cards.creature("C", "2W", 3, 3, legendary=True), policy=Policy("intermedio"))
+    op = Player("op", [cards.land("Island", ["U"], basic=True) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True), policy=Policy("intermedio"))
+    g = Game([me, op], seed=1)             # op sin criaturas en el campo
+    picks = me.policy._pick_modes(g, me, c)
+    assert picks == [1]                    # elige ganar vida, no el destroy sin objetivo
+
+
+def test_anger_grants_haste_from_graveyard():
+    import cardsdb, cards
+    from engine import Game, Player
+    anger = cardsdb.build_card_from_data({
+        "name": "Anger", "type_line": "Creature — Incarnation", "mana_cost": "{3}{R}",
+        "power": "2", "toughness": "2", "color_identity": ["R"], "keywords": ["Haste"],
+        "oracle_text": "Haste\nAs long as Anger is in your graveyard and you control a "
+                       "Mountain, creatures you control have haste."})
+    assert anger.gy_grant == {"keyword": "haste", "need_subtype": "Mountain"}
+    me = Player("me", [cards.land("Mountain", ["R"], basic=True) for _ in range(10)],
+                cards.creature("C", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Island", ["U"], basic=True) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    guy = g.move_to_battlefield(cards.creature("Goblin", "1R", 2, 2), me)  # sick, sin prisa
+    assert not guy.can_attack()
+    me.graveyard.append(anger)
+    g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), me)   # controla Mountain
+    assert guy.has("haste") and guy.can_attack()             # ahora tiene prisa
+    # sin Mountain no aplica
+    me.battlefield = [pm for pm in me.battlefield if pm.card.name != "Mountain"]
+    assert not guy.has("haste")
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

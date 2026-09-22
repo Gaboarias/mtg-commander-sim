@@ -532,6 +532,22 @@ def _wipe_then_tokens_effect(oracle: str):
     return eff
 
 
+def _parse_gy_grant(oracle: str):
+    """Habilidad ESTÁTICA desde el cementerio (Anger/Brawn/Wonder): 'as long as
+    ~ is in your graveyard[ and you control a <Subtipo>], creatures you control
+    have <keyword>'. Devuelve {keyword, need_subtype} o None."""
+    t = re.sub(r"\s+", " ", (oracle or "")).strip()
+    m = re.search(r"as long as [^,]*?is in your graveyard"
+                  r"(?: and you control (?:a|an) (\w+))?,\s*"
+                  r"creatures you control have (\w+)", t, re.I)
+    if not m:
+        return None
+    kw = m.group(2).lower()
+    if kw not in KEYWORDS:
+        return None
+    return {"keyword": kw, "need_subtype": (m.group(1) or None)}
+
+
 def _parse_foretell(oracle: str):
     """Fase B: 'Foretell {coste}' -> Cost para lanzarla ya predicha, o None."""
     t = re.sub(r"\s+", " ", (oracle or "")).strip()
@@ -1288,6 +1304,9 @@ def build_card_from_data(data: dict) -> Card:
     _gyt = _parse_gy_triggers(data.get("oracle_text", ""))
     if _gyt:
         card.gy_triggers = _gyt
+    _gyg = _parse_gy_grant(data.get("oracle_text", ""))
+    if _gyg:
+        card.gy_grant = _gyg
 
     # Produccion de mana: usar `produced_mana` de Scryfall (el mana REAL que
     # produce la carta), no la identidad de color — las tierras no basicas son

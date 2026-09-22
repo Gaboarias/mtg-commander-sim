@@ -144,6 +144,10 @@ class Card:
     #   {"cost"(Cost), "label", "effect"(g,ctrl,card), "exile_self"(bool)}
     gy_triggers: dict = field(default_factory=dict)  # disparos MIENTRAS está en cementerio/exilio:
     #   {evento: callback(game, player, card, **kw)}
+    gy_grant: dict = field(default_factory=dict)     # habilidad ESTÁTICA desde el cementerio
+    #   (Anger/Brawn/Wonder): {"keyword": str, "need_subtype": str|None}. Mientras esta
+    #   carta está en tu cementerio (y controlás un need_subtype si aplica), tus criaturas
+    #   tienen `keyword`.
 
     def identity(self) -> set:
         """Identidad de color: explicita si existe, si no se deduce del coste."""
@@ -234,7 +238,10 @@ class Permanent:
         return self.card.is_creature()
 
     def has(self, kw: str) -> bool:
-        return kw in self.keywords
+        if kw in self.card.keywords:
+            return True
+        # keywords otorgadas por efectos estáticos (p. ej. Anger desde el cementerio)
+        return self.game is not None and self.game.grants_keyword(self, kw)
 
     def can_attack(self) -> bool:
         if not self.is_creature() or self.tapped:
@@ -589,6 +596,29 @@ class Game:
         for pl in self.players:
             out.extend(pl.battlefield)
         return out
+
+    def grants_keyword(self, perm: "Permanent", kw: str) -> bool:
+        """¿Alguna habilidad estática le OTORGA `kw` a `perm`? Hoy cubre las
+        estáticas desde el cementerio (Anger/Brawn/Wonder): 'mientras esta carta
+        esté en tu cementerio (y controles un <subtipo>), tus criaturas tienen
+        <keyword>'."""
+        if not perm.is_creature():
+            return False
+        ctrl = perm.controller
+        for card in ctrl.graveyard:
+            g = getattr(card, "gy_grant", None)
+            if not g or g.get("keyword") != kw:
+                continue
+            sub = g.get("need_subtype")
+            if sub:
+                sl = sub.lower()
+                have = any(sl in {s.lower() for s in pm.card.subtypes}
+                           or pm.card.name.lower() == sl   # tierras básicas: subtipo = nombre
+                           for pm in ctrl.battlefield)
+                if not have:
+                    continue
+            return True
+        return False
 
     # -- objetivos (P2.2) ------------------------------------------------- #
     def can_target(self, caster: "Player", perm: "Permanent") -> bool:
@@ -1204,6 +1234,9 @@ class Game:
             if attacker not in incoming:
                 continue
             if blocker.tapped or not blocker.is_creature() or blocker.attacking:
+                continue
+            # evasión: un atacante con volar solo puede bloquearse con volar o alcance
+            if attacker.has("flying") and not (blocker.has("flying") or blocker.has("reach")):
                 continue
             attacker.blocked_by.append(blocker)
             blocker.blocking.append(attacker)
