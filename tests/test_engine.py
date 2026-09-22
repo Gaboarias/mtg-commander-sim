@@ -1636,6 +1636,35 @@ def test_match_analysis_win_type_and_key_plays():
     assert res["best_moves"] and res["best_moves"][0]["delta"] >= 8
 
 
+def test_stuck_cards_reports_mana_need():
+    # el perdedor tiene una bomba cara atascada en la mano -> el análisis avisa
+    # qué le faltó para jugarla (maná).
+    import importlib
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api"))
+    ma = importlib.import_module("_matchanalysis")
+    import cards
+    from engine import Game, Player
+    win = Player("W", [cards.land("Forest", ["G"], basic=True) for _ in range(40)],
+                 cards.creature("Cw", "2G", 3, 3, legendary=True))
+    lose = Player("L", [cards.land("Island", ["U"], basic=True) for _ in range(40)],
+                  cards.creature("Cl", "2U", 3, 3, legendary=True))
+    g = Game([win, lose], seed=1)
+    lose.battlefield = []
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Island", ["U"], basic=True), lose)
+    lose.hand = [cards.creature("Leviatán", "5UU", 8, 8)]     # cmc 7, solo 2 fuentes
+    trace = [{"turn": 1, "active": 0, "label": "x", "players": [
+        {"name": "W", "life": 40, "cmdr_damage": {}, "poison": 0, "battlefield": []},
+        {"name": "L", "life": 0, "cmdr_damage": {}, "poison": 0, "battlefield": []}]}]
+    res = ma.analyze(trace, "W", [win, lose])
+    st = res["stuck"]
+    assert st and st[0]["player"] == "L"
+    assert any("maná" in c["need"] and c["card"] == "Leviatán" for c in st[0]["cards"])
+    import json
+    json.dumps(res)
+
+
 def test_supporter_redeem_and_status():
     import importlib
     import urllib.request
@@ -2117,6 +2146,27 @@ def test_embalm_creates_token_and_exiles_card():
     assert priest in hu.exile                                   # la carta se exilió
     import json
     json.dumps(ig.legal())
+
+
+def test_attack_multiple_players_at_once():
+    # el humano reparte atacantes entre varios rivales en un mismo combate
+    import interactive, cards, decks
+    defs = [("Tu",) + decks.build("marvel"), ("A",) + decks.build("strixhaven"),
+            ("B",) + decks.build("lorehold")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    c1 = ig.g.move_to_battlefield(cards.creature("Bear1", "1G", 2, 2), hu)
+    c2 = ig.g.move_to_battlefield(cards.creature("Bear2", "1G", 2, 2), hu)
+    c1.summoning_sick = False
+    c2.summoning_sick = False
+    ig.g.resolve_stack()
+    foes = ig.g.opponents(hu)
+    idx = [ig.players.index(f) for f in foes]
+    l0 = [f.life for f in foes]
+    ig.attack(assign=[{"uid": c1.uid, "target": idx[0]},
+                      {"uid": c2.uid, "target": idx[1]}])
+    assert foes[0].life < l0[0] and foes[1].life < l0[1]   # ambos recibieron daño
 
 
 # -- partida completa corre sin excepciones -------------------------------- #

@@ -320,6 +320,19 @@ th { color: var(--muted); font-weight: 600; font-size: .8rem; text-transform: up
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .8rem; line-height: 1.55; white-space: pre-wrap; color: #c8cdd8;
 }
+.ability-toast {
+  position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+  z-index: 60; display: inline-flex; align-items: center; gap: 8px;
+  max-width: min(92vw, 460px); padding: 10px 16px; border-radius: 999px;
+  background: #12161f; border: 1px solid var(--accent);
+  box-shadow: 0 8px 28px rgba(0,0,0,.45); color: #eef1f6; font-size: .9rem;
+  animation: toast-in .22s ease-out;
+}
+.ability-toast svg { color: var(--accent); flex: 0 0 auto; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
 .win { color: var(--accent); font-weight: 700; }
 .err { color: var(--r); }
 .muted { color: var(--muted); }

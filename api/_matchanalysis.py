@@ -25,6 +25,73 @@ def _by_name(players):
     return {p["name"]: p for p in players}
 
 
+_COLOR_ES = {"W": "blanco", "U": "azul", "B": "negro", "R": "rojo", "G": "verde"}
+
+
+def _cost_str(card):
+    c = getattr(card, "cost", None)
+    if not c:
+        return "—"
+    s = (str(c.generic) if c.generic or not c.pips else "") + "".join(c.pips)
+    return "{" + s + "}" if s else "{0}"
+
+
+def _stuck_cards(players, losers):
+    """Cartas que quedaron en la mano al final (nunca se jugaron) y una pista de
+    QUÉ les faltó para poder jugarse: maná (cantidad/color), o una pieza que la
+    habilita (criatura para equipar/sacrificar, permanente para el aura). Es
+    aproximado: se lee del estado final, no adivina sinergias complejas."""
+    out = []
+    for p in players:
+        if p.name not in losers:
+            continue
+        # fuentes de maná y colores disponibles al final (aprox por tierras)
+        sources = [pm for pm in getattr(p, "battlefield", [])
+                   if getattr(pm.card, "produces", None)]
+        n_sources = len(sources)
+        colors_avail = set()
+        for pm in sources:
+            try:
+                colors_avail |= pm.card.identity()
+            except Exception:
+                colors_avail |= set(getattr(pm.card, "color_id", set()))
+        cards_out, seen = [], set()
+        for c in getattr(p, "hand", []):
+            try:
+                if c.is_land():
+                    continue
+            except Exception:
+                continue
+            if c.name in seen:
+                continue
+            cost = getattr(c, "cost", None)
+            cmc = cost.cmc if cost else 0
+            need_colors = ({s for s in cost.pips if s in _COLOR_ES} - colors_avail) if cost else set()
+            subs = {s.lower() for s in getattr(c, "subtypes", set())}
+            addc = getattr(c, "additional_cost", {}) or {}
+            need = None
+            if cmc and n_sources < cmc:
+                need = (f"te faltó maná: cuesta {cmc} y llegaste a {n_sources} "
+                        f"fuente{'s' if n_sources != 1 else ''} de maná — sumá tierras o rampa")
+            elif need_colors:
+                cols = ", ".join(_COLOR_ES[s] for s in sorted(need_colors))
+                need = f"te faltó maná de color: necesitás {cols} y no tenías fuente"
+            elif "equipment" in subs:
+                need = "necesitás una criatura en juego para equiparla"
+            elif "aura" in subs:
+                need = "necesitás un permanente al cual anexarla"
+            elif addc.get("sacrifice"):
+                need = "necesitás otra criatura/permanente para sacrificar como coste"
+            elif cmc >= 6:
+                need = "coste alto: necesita rampa o llegar a turnos más largos"
+            if need:
+                seen.add(c.name)
+                cards_out.append({"card": c.name, "cost": _cost_str(c), "need": need})
+        if cards_out:
+            out.append({"player": p.name, "cards": cards_out[:6]})
+    return out
+
+
 def analyze(trace, winner, players, ability_events=None):
     names = [p.name for p in players]
     steps = trace or []
@@ -194,6 +261,9 @@ def analyze(trace, winner, players, ability_events=None):
         win_line += ", quedando último en pie"
     summary = win_line + "."
 
+    stuck = _stuck_cards(players, set(losers))
+
     return {"win_type": win_type, "summary": summary,
             "key_plays": key, "best_moves": best,
-            "mistakes": mistakes, "chain": chain, "abilities": abilities}
+            "mistakes": mistakes, "chain": chain, "abilities": abilities,
+            "stuck": stuck}

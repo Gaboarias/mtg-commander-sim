@@ -54,7 +54,9 @@ type GameState = {
   turn: number; active: number; human_index: number; phase: string; attacked: boolean;
   winner: string | null; players: PlayerState[]; legal: Legal; combat: Combat | null;
   choice: Choice | null; mulligan: Mulligan | null; log: string[];
+  ability_feed?: AbilityEvent[];
 };
+type AbilityEvent = { turn: number; controller: string | null; card: string; kind: string };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function loadScript(src: string) {
@@ -79,7 +81,7 @@ def act(kind, arg_json):
     g = _IG['g']; a = json.loads(arg_json or '{}')
     if kind == 'land': g.play_land(a['i'])
     elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'), a.get('target_uids'), a.get('mode'))
-    elif kind == 'attack': g.attack(a.get('uids', []), a.get('target'))
+    elif kind == 'attack': g.attack(a.get('uids', []), a.get('target'), a.get('assign'))
     elif kind == 'end': g.end_turn()
     elif kind == 'activate': g.activate(a.get('uid'), a.get('index', 0))
     elif kind == 'ability': g.activate_ability(a.get('uid'), a.get('index', 0), a.get('target_uids'))
@@ -109,6 +111,10 @@ export default function Play() {
   const [state, setState] = useState<GameState | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());  // atacantes elegidos
   const [atkTarget, setAtkTarget] = useState<number | null>(null); // rival a atacar
+  const [atkAssign, setAtkAssign] = useState<Record<number, number>>({}); // atacante -> rival
+  const [abilityToast, setAbilityToast] = useState<AbilityEvent | null>(null);
+  const abilitySeen = useRef<number>(0);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [art, setArt] = useState<Record<string, string>>({});
   const [info, setInfo] = useState<Record<string, CardInfo>>({});
   const [inspect, setInspect] = useState<Inspect | null>(null);
@@ -141,6 +147,19 @@ export default function Play() {
       return first ? [first.id] : [];
     });
   }
+
+  // aviso en pantalla cuando se activa/dispara una habilidad
+  useEffect(() => {
+    const feed = state?.ability_feed || [];
+    if (feed.length > abilitySeen.current) {
+      const ev = feed[feed.length - 1];
+      abilitySeen.current = feed.length;
+      setAbilityToast(ev);
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setAbilityToast(null), 3600);
+    }
+    if (feed.length < abilitySeen.current) abilitySeen.current = feed.length; // nueva partida
+  }, [state]);
 
   useEffect(() => {
     fetch("/api/catalog").then((r) => r.json()).then((d) => {
@@ -372,6 +391,15 @@ export default function Play() {
 
   return (
     <div className="wrap">
+      {abilityToast && (
+        <div className="ability-toast" role="status">
+          <Icon name="sparkles" size={16} />
+          <span>
+            <b>{abilityToast.card}</b>: {abilityToast.kind}
+            {abilityToast.controller ? <span className="muted"> — {abilityToast.controller}</span> : null}
+          </span>
+        </div>
+      )}
       <header>
         <h1><Icon name="gamepad" size={26} /> Jugar contra el sistema</h1>
         <p>Elegí tu deck y hasta 3 rivales. Todo corre en tu navegador y vos manejás tu turno; el resto lo juega el sistema.</p>
@@ -690,22 +718,38 @@ export default function Play() {
                   </div>
                 )}
 
+                {(legal?.attack_targets?.length || 0) > 1 && picked.size > 0 && (
+                  <div className="act-block" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+                    <span className="act-label">A quién ataca cada criatura (podés repartir entre varios rivales):</span>
+                    {[...picked].map((uid) => {
+                      const atk = legal!.attackers.find((a) => a.uid === uid);
+                      const def = atkTarget ?? legal!.attack_targets[0].index;
+                      return (
+                        <label key={"asg" + uid} className="muted" style={{ fontSize: ".82rem", display: "flex", alignItems: "center", gap: 6 }}>
+                          <Icon name="swords" size={12} />
+                          <b style={{ color: "#eef1f6" }}>{atk?.name ?? "?"}</b> →{" "}
+                          <select value={atkAssign[uid] ?? def}
+                            onChange={(e) => setAtkAssign((m) => ({ ...m, [uid]: Number(e.target.value) }))}>
+                            {legal!.attack_targets.map((t) => (
+                              <option key={t.index} value={t.index}>{t.name} ({t.life}♥)</option>
+                            ))}
+                          </select>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
                 <div className="act-block">
-                  {(legal?.attack_targets?.length || 0) > 1 && (
-                    <label className="muted" style={{ fontSize: ".82rem" }}>
-                      Atacar a:{" "}
-                      <select value={atkTarget ?? legal!.attack_targets[0].index}
-                        onChange={(e) => setAtkTarget(Number(e.target.value))}>
-                        {legal!.attack_targets.map((t) => (
-                          <option key={t.index} value={t.index}>{t.name} ({t.life}♥)</option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                  <button className="go" onClick={() => doAct("attack", {
-                    uids: [...picked],
-                    target: atkTarget ?? legal?.attack_targets?.[0]?.index,
-                  })}
+                  <button className="go" onClick={() => {
+                    const multi = (legal?.attack_targets?.length || 0) > 1;
+                    const def = atkTarget ?? legal?.attack_targets?.[0]?.index;
+                    if (multi) {
+                      doAct("attack", { assign: [...picked].map((uid) => ({ uid, target: atkAssign[uid] ?? def })) });
+                    } else {
+                      doAct("attack", { uids: [...picked], target: def });
+                    }
+                    setAtkAssign({});
+                  }}
                     disabled={!legal?.can_attack || picked.size === 0}
                     style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                     <Icon name="swords" size={15} /> Atacar {picked.size > 0 ? `(${picked.size})` : ""}
@@ -715,7 +759,8 @@ export default function Play() {
                 </div>
                 <p className="muted" style={{ fontSize: ".8rem" }}>
                   Tocá una carta para ver sus habilidades. Elegí criaturas tocándolas
-                  en tu tablero para atacar y, si hay más de un rival, a quién atacar.
+                  en tu tablero para atacar y, si hay más de un rival, podés repartir
+                  tus atacantes entre varios rivales a la vez.
                   Cuando un rival te ataque, vos elegís los bloqueos y podés responder
                   con instantáneos.
                 </p>

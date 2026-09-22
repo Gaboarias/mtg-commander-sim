@@ -21,6 +21,7 @@ type MatchAnalysis = {
   key_plays: KeyPlay[]; best_moves: KeyPlay[];
   mistakes: { player: string; note: string }[]; chain: KeyPlay[];
   abilities?: AbilityGroup[];
+  stuck?: { player: string; cards: { card: string; cost: string; need: string }[] }[];
 };
 type Replay = { players: string[]; winner: string; turns: number; steps: Step[]; log?: string[]; analysis?: MatchAnalysis; images: Record<string, string> };
 type Combo = { id: string; cards: string[]; produces: string[] };
@@ -328,6 +329,21 @@ export default function Watch() {
               <ul className="abil">
                 {replay.analysis.mistakes.map((m, i) => <li key={i}><b>{m.player}</b>: {m.note}</li>)}
               </ul>
+            </>
+          )}
+          {(replay.analysis.stuck?.length || 0) > 0 && (
+            <>
+              <h3 style={{ fontSize: ".95rem", color: "#e0a35a" }}>Cartas que costó jugar (y qué necesitan)</h3>
+              {replay.analysis.stuck!.map((s, i) => (
+                <div key={i} style={{ marginBottom: 8 }}>
+                  <b>{s.player}</b>
+                  <ul className="abil">
+                    {s.cards.map((c, j) => (
+                      <li key={j}><b>{c.card}</b> <span className="muted">{c.cost}</span> — {c.need}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
             </>
           )}
           {replay.analysis.chain.length > 0 && (

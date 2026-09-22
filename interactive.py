@@ -536,27 +536,37 @@ class InteractiveGame:
             self.g.log(f"{c.name} se exilia tras lanzarse desde el cementerio")
         self.g.sba()
 
-    def attack(self, uids, target_index=None):
-        """Declara atacantes contra el rival elegido (por índice de jugador).
-        Si no se indica, ataca al primer rival vivo."""
+    def attack(self, uids=None, target_index=None, assign=None):
+        """Declara atacantes. Con `assign` (lista de {uid, target}) cada atacante
+        puede ir contra un rival distinto (varios jugadores a la vez). Si no,
+        todos los `uids` atacan al rival `target_index` (o al primero vivo)."""
         if not self._my_turn() or self.attacked:
             return self.state()
         p = self.human()
         foes = self.g.opponents(p)
         if not foes:
             return self.state()
-        target = foes[0]
-        if target_index is not None:
-            for f in foes:
-                if self.players.index(f) == int(target_index):
-                    target = f
-                    break
+
+        def _foe(idx):
+            if idx is not None:
+                for f in foes:
+                    if self.players.index(f) == int(idx):
+                        return f
+            return foes[0]
+
         self.g._begin_combat(p)
         chosen = []
-        for uid in (uids or []):
-            pm = self._find_perm(uid)
-            if pm is not None and pm.can_attack():
-                chosen.append((pm, target))
+        if assign:                       # asignación por atacante (multi-jugador)
+            for a in assign:
+                pm = self._find_perm(a.get("uid"))
+                if pm is not None and pm.can_attack():
+                    chosen.append((pm, _foe(a.get("target"))))
+        else:
+            target = _foe(target_index)
+            for uid in (uids or []):
+                pm = self._find_perm(uid)
+                if pm is not None and pm.can_attack():
+                    chosen.append((pm, target))
         self.g._resolve_combat(p, chosen)
         self.g.sba()
         self.attacked = True
@@ -791,6 +801,8 @@ class InteractiveGame:
                           "lands": sum(1 for c in self.human().hand if c.is_land())}
                          if self.phase == "mulligan" else None),
             "log": self.g.log_lines[-14:],
+            # feed de habilidades activadas/disparadas (para avisar en pantalla)
+            "ability_feed": self.g.ability_events[-10:],
         }
 
     def _choice_state(self):
