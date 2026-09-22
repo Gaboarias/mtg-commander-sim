@@ -408,6 +408,7 @@ class InteractiveGame:
         if 0 <= i < len(p.hand) and p.hand[i].is_land():
             self._snapshot()
             self.g.play_land(p, p.hand[i])
+            self.g.resolve_stack()      # resolver landfall (incl. disparos desde cementerio)
             self.g.sba()
         return self.state()
 
@@ -427,6 +428,9 @@ class InteractiveGame:
             return self.state()
         if zone == "graveyard":   # jugar/lanzar desde el CEMENTERIO (flashback, etc.)
             self._play_from_graveyard(p, i, target_uids, mode)
+            return self.state()
+        if zone == "exile":       # jugar desde el EXILIO persistente (foretell, etc.)
+            self._play_from_exile(p, i, target_uids, mode)
             return self.state()
         if zone == "command":
             cand = [c for c in p.command if c.cost is None or
@@ -536,6 +540,88 @@ class InteractiveGame:
             self.g.log(f"{c.name} se exilia tras lanzarse desde el cementerio")
         self.g.sba()
 
+    def _play_from_exile(self, p, i, target_uids, mode):
+        """Fase B: lanzar una carta desde el exilio persistente (foretell / impulse
+        no acotado). Paga su coste alternativo (._play_cost) y la castea normal."""
+        if i is None or not (0 <= i < len(p.exile_play)):
+            return
+        c = p.exile_play[i]
+        cost = getattr(c, "_play_cost", None) or c.cost
+        if cost is not None and not p.can_pay(cost):
+            return
+        if c.is_land():
+            if p.lands_played >= 1:
+                return
+            p.exile_play.remove(c)
+            self.g.play_land(p, c)
+            self.g.sba()
+            return
+        orig = c.cost
+        try:
+            c.cost = cost
+            modes = getattr(c, "modes", ())
+            chosen = spec = None
+            if modes and mode is not None and 0 <= mode < len(modes):
+                chosen = [mode]
+                spec = modes[mode].get("target_spec")
+            ok = self.g.cast(p, c, targets=self._chosen_targets(c, target_uids, spec=spec),
+                             chosen_modes=chosen)
+        finally:
+            c.cost = orig
+        if ok is not False and c in p.exile_play:
+            p.exile_play.remove(c)
+        self.g.sba()
+
+    def foretell(self, i):
+        """Predice (foretell) una carta de la mano: paga {2}, la exilia y queda
+        jugable después por su coste de foretell (aprox: sin cara oculta real)."""
+        if not self._my_turn():
+            return self.state()
+        self._snapshot()
+        p = self.human()
+        if i is None or not (0 <= i < len(p.hand)):
+            return self.state()
+        c = p.hand[i]
+        fc = getattr(c, "foretell", None)
+        if fc is None or not p.can_pay(Cost(2, ())):
+            return self.state()
+        p.pay(Cost(2, ()))
+        p.hand.remove(c)
+        c._play_cost = fc
+        p.exile_play.append(c)
+        self.g.log(f"{p.name} predice una carta (foretell)")
+        self.g.sba()
+        return self.state()
+
+    def activate_gy(self, i, index=0, target_uids=None):
+        """Fase C: activa una habilidad de una carta EN EL CEMENTERIO."""
+        if not self._my_turn():
+            return self.state()
+        self._snapshot()
+        p = self.human()
+        if i is None or not (0 <= i < len(p.graveyard)):
+            return self.state()
+        c = p.graveyard[i]
+        abs_ = getattr(c, "gy_abilities", ()) or ()
+        if not (0 <= index < len(abs_)):
+            return self.state()
+        ab = abs_[index]
+        cost = ab.get("cost")
+        if cost is not None and not p.can_pay(cost):
+            return self.state()
+        if cost is not None:
+            p.pay(cost)
+        if ab.get("exile_self") and c in p.graveyard:
+            p.graveyard.remove(c)
+            p.exile.append(c)
+        self.g.note_ability(c, "habilidad desde el cementerio", controller=p)
+        eff = ab.get("effect")
+        if eff:
+            eff(self.g, p, c)
+        self.g.log(f"{p.name} activa {c.name} desde el cementerio")
+        self.g.sba()
+        return self.state()
+
     def attack(self, uids=None, target_index=None, assign=None):
         """Declara atacantes. Con `assign` (lista de {uid, target}) cada atacante
         puede ir contra un rival distinto (varios jugadores a la vez). Si no,
@@ -627,12 +713,32 @@ class InteractiveGame:
         lands, casts, attackers, activatables = [], [], [], []
         impulse = []
         graveyard = []
+        exile_play, foretell_hand, gy_abilities = [], [], []
         if self._my_turn():
             for i, c in enumerate(p.impulse):   # exiliadas por impulse, jugables hoy
                 playable = (c.is_land() and p.lands_played < 1) or \
                            (not c.is_land() and c.cost is not None and p.can_pay(c.cost))
                 impulse.append({"i": i, "name": c.name, "cost": _cost_str(c),
                                 "is_land": c.is_land(), "playable": playable})
+            for i, c in enumerate(p.exile_play):   # exilio persistente (foretell, etc.)
+                pc = getattr(c, "_play_cost", None) or c.cost
+                playable = (c.is_land() and p.lands_played < 1) or \
+                           (not c.is_land() and (pc is None or p.can_pay(pc)))
+                exile_play.append({"i": i, "name": c.name,
+                                   "cost": _cost_str_cost(pc) if pc else "0",
+                                   "is_land": c.is_land(), "playable": playable})
+            for i, c in enumerate(p.hand):        # cartas que se pueden predecir (foretell)
+                fc = getattr(c, "foretell", None)
+                if fc is not None:
+                    foretell_hand.append({"i": i, "name": c.name,
+                                          "playable": p.can_pay(Cost(2, ()))})
+            for i, c in enumerate(p.graveyard):   # habilidades activadas desde el cementerio
+                for j, ab in enumerate(getattr(c, "gy_abilities", ()) or ()):
+                    cost = ab.get("cost")
+                    gy_abilities.append({"i": i, "index": j, "name": c.name,
+                                         "label": ab.get("label", "Habilidad"),
+                                         "cost": _cost_str_cost(cost) if cost else "0",
+                                         "playable": cost is None or p.can_pay(cost)})
             for i, c in enumerate(p.graveyard):   # jugables desde el cementerio
                 gp = getattr(c, "gy_play", None) or {}
                 if not gp:
@@ -707,6 +813,9 @@ class InteractiveGame:
                 "activatables": activatables, "abilities": abilities,
                 "impulse": impulse,
                 "graveyard": graveyard,
+                "exile_play": exile_play,
+                "foretell_hand": foretell_hand,
+                "gy_abilities": gy_abilities,
                 "attack_targets": atk_targets,
                 "can_attack": self._my_turn() and not self.attacked,
                 "can_undo": self.can_undo(),

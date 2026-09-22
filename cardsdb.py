@@ -504,6 +504,62 @@ def _parse_gy_play(oracle: str, types: set):
     return {}
 
 
+def _parse_foretell(oracle: str):
+    """Fase B: 'Foretell {coste}' -> Cost para lanzarla ya predicha, o None."""
+    t = re.sub(r"\s+", " ", (oracle or "")).strip()
+    m = re.search(r"foretell\s*[—:-]?\s*((?:\{[^}]+\})+)", t, re.I)
+    if not m:
+        return None
+    return parse_cost(mana_cost_to_str(m.group(1)))
+
+
+def _parse_gy_abilities(oracle: str):
+    """Fase C: habilidades ACTIVADAS desde el cementerio. Detecta líneas
+    '{coste}[, Exile ~ from your graveyard]: efecto' cuyo texto menciona el
+    cementerio. Devuelve tupla de {cost, label, effect(g,ctrl,card), exile_self}.
+    (La recursión '{coste}: return ~ ...' la cubre gy_play, así que se salta.)"""
+    out = []
+    for raw in (oracle or "").split("\n"):
+        line = raw.strip()
+        low = line.lower()
+        if "from your graveyard" not in low:
+            continue
+        if re.search(r"return .*to (the battlefield|your hand)", low):
+            continue                                   # eso es recursión (gy_play)
+        m = re.match(r"(.+?):\s*(.+)", line)
+        if not m:
+            continue
+        costtxt, body = m.group(1), m.group(2)
+        exile_self = bool(re.search(r"exile[^:]*from your graveyard", costtxt, re.I))
+        syms = re.findall(r"\{([^}]+)\}", costtxt)
+        mana = "".join("{%s}" % s for s in syms if s.upper() != "T")
+        cost = parse_cost(mana_cost_to_str(mana)) if mana else parse_cost("0")
+        eff, _spec, _count = _fragment_effect(body)
+        if eff is None:
+            eff = (lambda g, ctrl, tg=None, _l=_short_label(body):
+                   g.log(f"{ctrl.name}: {_l}"))
+        out.append({"cost": cost, "label": _short_label(body), "exile_self": exile_self,
+                    "effect": (lambda g, ctrl, card, _e=eff: _e(g, ctrl, []))})
+    return tuple(out[:3])
+
+
+def _parse_gy_triggers(oracle: str):
+    """Fase D: disparos MIENTRAS la carta está en el cementerio. Cubre el patrón
+    landfall-recursión (Bloodghast): 'si ~ está en tu cementerio, ... devolvela al
+    campo cuando entra una tierra'. Devuelve {evento: callback(g, player, card)}."""
+    t = re.sub(r"\s+", " ", (oracle or "")).strip().lower()
+    out = {}
+    if "in your graveyard" in t and "return" in t and \
+       ("landfall" in t or re.search(r"land[^.]*enters", t)):
+        def _ret(game, player, card, **_kw):
+            if card in player.graveyard:
+                player.graveyard.remove(card)
+                game.move_to_battlefield(card, player)
+                game.log(f"{card.name} vuelve del cementerio al campo (landfall)")
+        out["landfall"] = _ret
+    return out
+
+
 _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
 
 
@@ -1193,6 +1249,17 @@ def build_card_from_data(data: dict) -> Card:
     gyp = _parse_gy_play(data.get("oracle_text", ""), card.types)
     if gyp:
         card.gy_play = gyp
+    # Fase B/C/D: jugar desde el exilio (foretell), habilidades y disparos desde
+    # el cementerio.
+    _fc = _parse_foretell(data.get("oracle_text", ""))
+    if _fc is not None:
+        card.foretell = _fc
+    _gya = _parse_gy_abilities(data.get("oracle_text", ""))
+    if _gya:
+        card.gy_abilities = _gya
+    _gyt = _parse_gy_triggers(data.get("oracle_text", ""))
+    if _gyt:
+        card.gy_triggers = _gyt
 
     # Produccion de mana: usar `produced_mana` de Scryfall (el mana REAL que
     # produce la carta), no la identidad de color — las tierras no basicas son

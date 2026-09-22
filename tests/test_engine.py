@@ -2148,6 +2148,68 @@ def test_embalm_creates_token_and_exiles_card():
     json.dumps(ig.legal())
 
 
+def test_foretell_then_cast_from_exile():
+    # Fase B: predecir una carta (foretell) y luego lanzarla desde el exilio.
+    import cardsdb, cards
+    ig, hu = _gy_ready_human()
+    spell = cardsdb.build_card_from_data({
+        "name": "Behold", "type_line": "Sorcery", "mana_cost": "{4}{U}",
+        "color_identity": ["U"], "oracle_text": "Draw two cards.\nForetell {1}{U}"})
+    assert spell.foretell is not None
+    hu.hand.append(spell)
+    for _ in range(4):
+        ig.g.move_to_battlefield(cards.land("Island", ["U"], basic=True), hu)
+    i = next(x["i"] for x in ig.legal()["foretell_hand"] if x["name"] == "Behold")
+    ig.foretell(i)                              # paga {2}, va al exilio jugable
+    assert spell in hu.exile_play and spell not in hu.hand
+    j = next(x["i"] for x in ig.legal()["exile_play"] if x["name"] == "Behold")
+    h0 = len(hu.hand)
+    ig.cast(i=j, zone="exile")                  # lo lanza por su coste de foretell
+    assert len(hu.hand) == h0 + 2 and spell not in hu.exile_play
+
+
+def test_gy_ability_activates_and_exiles():
+    # Fase C: habilidad activada desde el cementerio (con exilio de la propia carta).
+    import cardsdb, cards
+    ig, hu = _gy_ready_human()
+    c = cardsdb.build_card_from_data({
+        "name": "Cripta", "type_line": "Creature", "mana_cost": "{1}{B}",
+        "power": "1", "toughness": "1", "color_identity": ["B"],
+        "oracle_text": "{2}{B}, Exile Cripta from your graveyard: Draw two cards."})
+    assert c.gy_abilities
+    hu.graveyard.append(c)
+    for _ in range(3):
+        ig.g.move_to_battlefield(cards.land("Swamp", ["B"], basic=True), hu)
+    ga = next(x for x in ig.legal()["gy_abilities"] if x["name"] == "Cripta")
+    h0 = len(hu.hand)
+    ig.activate_gy(ga["i"], ga["index"])
+    assert len(hu.hand) == h0 + 2                 # corrió el efecto (robar)
+    assert c in hu.exile and c not in hu.graveyard  # se exilió a sí misma
+
+
+def test_gy_trigger_returns_on_landfall():
+    # Fase D: disparo mientras está en el cementerio (Bloodghast vuelve con landfall).
+    import cardsdb, cards
+    from engine import Game, Player
+    bg = cardsdb.build_card_from_data({
+        "name": "Bloodghast", "type_line": "Creature", "mana_cost": "{B}{B}",
+        "power": "2", "toughness": "1", "color_identity": ["B"],
+        "oracle_text": "Bloodghast can't block.\nLandfall — Whenever a land you control "
+                       "enters, if Bloodghast is in your graveyard, return Bloodghast from "
+                       "your graveyard to the battlefield."})
+    assert "landfall" in bg.gy_triggers
+    me = Player("me", [cards.land("Swamp", ["B"], basic=True) for _ in range(10)],
+                cards.creature("Cmd", "2B", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Island", ["U"], basic=True) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    me.graveyard.append(bg)
+    g.play_land(me, cards.land("Swamp", ["B"], basic=True))
+    g.resolve_stack()
+    assert any(pm.name == "Bloodghast" for pm in me.battlefield)
+    assert bg not in me.graveyard
+
+
 def test_attack_multiple_players_at_once():
     # el humano reparte atacantes entre varios rivales en un mismo combate
     import interactive, cards, decks

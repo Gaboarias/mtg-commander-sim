@@ -32,6 +32,9 @@ type Legal = {
   abilities?: PermAbility[];
   impulse?: { i: number; name: string; cost: string; is_land: boolean; playable: boolean }[];
   graveyard?: { i: number; name: string; cost: string; mode: string; playable: boolean }[];
+  exile_play?: { i: number; name: string; cost: string; is_land: boolean; playable: boolean }[];
+  foretell_hand?: { i: number; name: string; playable: boolean }[];
+  gy_abilities?: { i: number; index: number; name: string; label: string; cost: string; playable: boolean }[];
   attack_targets: { index: number; name: string; life: number }[];
   can_attack: boolean; can_end: boolean; can_undo?: boolean;
 };
@@ -82,6 +85,8 @@ def act(kind, arg_json):
     if kind == 'land': g.play_land(a['i'])
     elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'), a.get('target_uids'), a.get('mode'))
     elif kind == 'attack': g.attack(a.get('uids', []), a.get('target'), a.get('assign'))
+    elif kind == 'foretell': g.foretell(a.get('i'))
+    elif kind == 'activate_gy': g.activate_gy(a.get('i'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'end': g.end_turn()
     elif kind == 'activate': g.activate(a.get('uid'), a.get('index', 0))
     elif kind == 'ability': g.activate_ability(a.get('uid'), a.get('index', 0), a.get('target_uids'))
@@ -698,6 +703,55 @@ export default function Play() {
                         <b>{gy.name}</b> <span className="muted">{gy.cost}</span>
                         <em className="pw-txt">{gy.mode}</em>
                         {!gy.playable ? <em className="pw-txt">sin maná</em> : null}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {legal && (legal.exile_play?.length || 0) > 0 && (
+                  <div className="act-block">
+                    <span className="act-label">Exilio (jugable):</span>
+                    {legal.exile_play!.map((ex) => (
+                      <button key={"exp" + ex.i} className="ghost pw-ab"
+                        disabled={!ex.playable}
+                        onClick={() => doAct("cast", { i: ex.i, zone: "exile" })}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        <Icon name={ex.is_land ? "land" : "cards"} size={12} />
+                        <b>{ex.name}</b> <span className="muted">{ex.cost}</span>
+                        {!ex.playable ? <em className="pw-txt">sin maná</em> : null}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {legal && (legal.gy_abilities?.length || 0) > 0 && (
+                  <div className="act-block">
+                    <span className="act-label">Habilidades del cementerio:</span>
+                    {legal.gy_abilities!.map((ga) => (
+                      <button key={"gya" + ga.i + "-" + ga.index} className="ghost pw-ab"
+                        disabled={!ga.playable}
+                        onClick={() => doAct("activate_gy", { i: ga.i, index: ga.index })}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        <Icon name="grave" size={12} />
+                        <b>{ga.name}</b> <span className="muted">{ga.cost}</span>
+                        <em className="pw-txt">{ga.label}</em>
+                        {!ga.playable ? <em className="pw-txt">sin maná</em> : null}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {legal && (legal.foretell_hand?.length || 0) > 0 && (
+                  <div className="act-block">
+                    <span className="act-label">Predecir (foretell, {"{2}"}):</span>
+                    {legal.foretell_hand!.map((f) => (
+                      <button key={"ft" + f.i} className="ghost pw-ab"
+                        disabled={!f.playable}
+                        onClick={() => doAct("foretell", { i: f.i })}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        <Icon name="cards" size={12} />
+                        <b>{f.name}</b>
+                        {!f.playable ? <em className="pw-txt">sin maná</em> : null}
                       </button>
                     ))}
                   </div>

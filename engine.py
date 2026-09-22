@@ -139,6 +139,11 @@ class Card:
     gy_play: dict = field(default_factory=dict)    # jugar desde el CEMENTERIO:
     #   {"mode": flashback|escape|unearth|embalm|disturb|recur, "cost": Cost,
     #    "after": exile|exile_eot|token|hand|battlefield, "exile_n": int}
+    foretell: Optional[Cost] = None                # coste para lanzarla ya predicha (exilio)
+    gy_abilities: tuple = ()                        # habilidades activadas DESDE el cementerio:
+    #   {"cost"(Cost), "label", "effect"(g,ctrl,card), "exile_self"(bool)}
+    gy_triggers: dict = field(default_factory=dict)  # disparos MIENTRAS está en cementerio/exilio:
+    #   {evento: callback(game, player, card, **kw)}
 
     def identity(self) -> set:
         """Identidad de color: explicita si existe, si no se deduce del coste."""
@@ -264,6 +269,8 @@ class Player:
         self.graveyard: list = []
         self.exile: list = []
         self.impulse: list = []              # exiliadas por "impulse", jugables este turno
+        self.exile_play: list = []           # jugables desde el exilio de forma persistente
+        #   (predichas por foretell, etc.); cada carta lleva ._play_cost (Cost)
         self.command: list = [commander]
         self.battlefield: list = []          # lista de Permanent
         self.cmdr_tax = 0                    # +2 por lanzamiento desde la zona de mando
@@ -636,6 +643,21 @@ class Game:
                 ))
                 self.note_ability(perm.card, self.EVENT_KIND.get(event, event),
                                   controller=pl)
+            # Fase D: disparos MIENTRAS la carta está en el cementerio/exilio.
+            for zone in (pl.graveyard, pl.exile):
+                for card in list(zone):
+                    cb = getattr(card, "gy_triggers", {}).get(event)
+                    if cb is None:
+                        continue
+                    # el dueño va posicional (_p); evitamos duplicar 'player'/'perm' del kw
+                    inner = {k: v for k, v in kw.items() if k not in ("perm", "player")}
+                    self.stack.append(StackObject(
+                        controller=pl,
+                        resolve=(lambda g, _cb=cb, _p=pl, _c=card, _kw=inner: _cb(g, _p, _c, **_kw)),
+                        source=card,
+                        label=f"gy_trigger:{event}:{card.name}",
+                    ))
+                    self.note_ability(card, "desde el cementerio", controller=pl)
 
     def resolve_stack(self):
         """Vacia la pila en orden LIFO."""
