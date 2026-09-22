@@ -2583,6 +2583,44 @@ def test_wither_deals_minus_counters_to_creature():
     assert tgt.power == 1 and tgt.toughness == 1
 
 
+def test_x_spell_scales_with_available_mana():
+    # un hechizo con {X} elige X = maná sobrante y su efecto escala.
+    import cardsdb, cards
+    from engine import Game, Player
+    fb = cardsdb.build_card_from_data({
+        "name": "Fireball", "type_line": "Sorcery", "mana_cost": "{X}{R}",
+        "color_identity": ["R"], "oracle_text": "Fireball deals X damage to any target."})
+    assert fb.x_spell and fb.on_cast_resolve is not None
+    me = Player("me", [cards.creature("F", "1R", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(5):
+        g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), me)
+    l0 = op.life
+    g.cast(me, fb, targets=[op])          # 5 fuentes, base {R}=1 -> X=4
+    assert op.life == l0 - 4
+
+
+def test_hybrid_cost_payable_with_any_color():
+    # {W/U} se cuenta como genérico -> pagable con cualquier maná (no bloquea).
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Hyb", "type_line": "Creature", "mana_cost": "{2}{W/U}",
+        "power": "2", "toughness": "2", "color_identity": ["W", "U"]})
+    assert c.cost.cmc == 3 and c.cost.pips == ()
+    me = Player("me", [cards.creature("F", "1G", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2G", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(3)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(3):
+        g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me)
+    assert g.cast(me, c) is not False     # pagable con 3 bosques pese a ser W/U
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

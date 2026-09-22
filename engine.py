@@ -153,6 +153,7 @@ class Card:
     #   {"cost"(Cost), "label", "effect"(g,ctrl,card), "exile_self"(bool)}
     gy_triggers: dict = field(default_factory=dict)  # disparos MIENTRAS está en cementerio/exilio:
     #   {evento: callback(game, player, card, **kw)}
+    x_spell: bool = False                            # el coste tiene {X} (se elige al lanzar)
     gy_grant: dict = field(default_factory=dict)     # habilidad ESTÁTICA desde el cementerio
     #   (Anger/Brawn/Wonder): {"keyword": str, "need_subtype": str|None}. Mientras esta
     #   carta está en tu cementerio (y controlás un need_subtype si aplica), tus criaturas
@@ -472,6 +473,7 @@ class Game:
         self.control_returns: list = []
         # turnos extra pendientes (para el mismo jugador)
         self.extra_turns: list = []
+        self.spell_x = 0            # X elegido del último hechizo con {X} lanzado
         for p in players:
             p.setup(self.rng)
         if mulligan:
@@ -921,6 +923,15 @@ class Game:
         pay_cost = cost
         if cost is not None and (extra or red):
             pay_cost = Cost(generic=max(0, cost.generic + extra - red), pips=cost.pips)
+        # hechizos con {X}: se elige X = maná sobrante tras pagar el coste base
+        self.spell_x = 0
+        if getattr(card, "x_spell", False) and cost is not None:
+            base = pay_cost if pay_cost is not None else cost
+            x = max(0, player.available_mana() - base.cmc)
+            if x:
+                self.spell_x = x
+                pay_cost = Cost(generic=base.generic + x, pips=base.pips)
+                self.log(f"{player.name} elige X = {x} para {card.name}")
         if not player.can_pay(pay_cost):
             return False
         # coste adicional al lanzar (pagar vida / descartar / sacrificar)

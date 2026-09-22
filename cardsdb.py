@@ -66,11 +66,9 @@ def mana_cost_to_str(mana_cost: str) -> str:
         if s.isdigit():
             generic += int(s)
         elif s == "X":
-            continue
-        elif "/" in s:               # hibrido / phyrexiano: primer color valido
-            first = next((p for p in s.split("/") if p in _COLOR_MAP), None)
-            if first:
-                pips += first
+            continue                 # X se maneja aparte (card.x_spell)
+        elif "/" in s:               # híbrido / phyrexiano: pagable con cualquier
+            generic += 1             # maná (aprox: cuenta como 1 genérico)
         elif s in _COLOR_MAP and s != "C":
             pips += s
         # {C} incoloro no aporta pip de color
@@ -274,27 +272,34 @@ def _fragment_effect(seg: str):
     # quema a criatura elegida: "deals N damage to (up to M) target creature"
     mb = re.search(r"deals? (\w+) damage to (?:up to (\w+) )?target creature(?! or player)",
                    seg, re.I)
-    if mb and (n := _count_word(mb.group(1))):
+    if mb and (mb.group(1).lower() == "x" or _count_word(mb.group(1))):
+        n = _count_word(mb.group(1))
+        is_x = mb.group(1).lower() == "x"
         cnt = _count_word(mb.group(2)) if mb.group(2) else 1
 
-        def burn(game, ctrl, targets, _n=n):
+        def burn(game, ctrl, targets, _n=n, _x=is_x):
+            amt = getattr(game, "spell_x", 0) if _x else _n
             for tg in (targets or []):
-                game.deal_damage(None, tg, _n)
+                game.deal_damage(None, tg, amt)
         return burn, "opp_creature", max(1, cnt or 1)
     # quema a un JUGADOR elegido: "deals N damage to target player / any target /
     # creature or player / player or planeswalker" -> el humano elige a qué rival.
     mp = re.search(r"deals? (\w+) damage to (?:any target|target player|target opponent|"
                    r"target creature or player|target planeswalker or player|"
                    r"target player or planeswalker)", seg, re.I)
-    if mp and (n := _count_word(mp.group(1))):
-        def burnp(game, ctrl, targets, _n=n):
+    if mp and (mp.group(1).lower() == "x" or _count_word(mp.group(1))):
+        n = _count_word(mp.group(1))
+        is_x = mp.group(1).lower() == "x"
+
+        def burnp(game, ctrl, targets, _n=n, _x=is_x):
+            amt = getattr(game, "spell_x", 0) if _x else _n
             tgts = [t for t in (targets or []) if hasattr(t, "life")]  # jugadores
             if not tgts:
                 opps = game.opponents(ctrl)
                 tgts = [min(opps, key=lambda o: o.life)] if opps else []
             for tg in tgts:
-                game.deal_damage(None, tg, _n)
-                game.log(f"{ctrl.name}: {_n} de daño a {tg.name}")
+                game.deal_damage(None, tg, amt)
+                game.log(f"{ctrl.name}: {amt} de daño a {tg.name}")
         return burnp, "opp_player", 1
     geff = _generic_amount_effect(seg)
     if geff is None:
@@ -1113,13 +1118,17 @@ def _generic_amount_effect(oracle: str):
     # player): se la mandamos al rival más débil (auto) y queda VISIBLE en la vida.
     m = re.search(r"deals? (\w+) damage to (?:any target|target player|"
                   r"target opponent|target creature or player|target planeswalker or player)", t)
-    if m and (n := _count_word(m.group(1))):
-        def eff(game, ctrl, *_a, _n=n):
+    if m and (m.group(1).lower() == "x" or _count_word(m.group(1))):
+        n = _count_word(m.group(1))
+        is_x = m.group(1).lower() == "x"
+
+        def eff(game, ctrl, *_a, _n=n, _x=is_x):
+            amt = getattr(game, "spell_x", 0) if _x else _n
             opps = game.opponents(ctrl)
-            if opps:
+            if opps and amt:
                 tgt = min(opps, key=lambda o: o.life)
-                game.deal_damage(None, tgt, _n)
-                game.log(f"{ctrl.name}: {_n} de daño a {tgt.name}")
+                game.deal_damage(None, tgt, amt)
+                game.log(f"{ctrl.name}: {amt} de daño a {tgt.name}")
         return eff
 
     m = re.search(r"(?:you )?gain (\w+) life", t)
@@ -1290,6 +1299,7 @@ def build_card_from_data(data: dict) -> Card:
         supertypes=supertypes,
         subtypes=subtypes,
         color_id=color_id,
+        x_spell=("{X}" in (data.get("mana_cost", "") or "").upper()),
     )
 
     # tags: de creatura + derivados (aprox) del texto de la carta, para que la
