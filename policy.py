@@ -408,24 +408,35 @@ class Policy:
         def can_block(b, atk):
             return not (atk.has("flying") and not (b.has("flying") or b.has("reach")))
 
+        def kills(b, atk):    # ¿b mata a atk? deathtouch: con 1 alcanza
+            return b.power >= atk.toughness or (b.has("deathtouch") and b.power > 0)
+
+        def survives(b, atk):  # ¿b sobrevive al atacante? deathtouch: nunca
+            return b.toughness > atk.power and not atk.has("deathtouch")
+
         result = []
         used = set()
         threats = sorted(incoming, key=lambda a: -a.power)
         lethal = life_incoming >= me.life
         for atk in threats:
             avail = [b for b in blockers if b.uid not in used and can_block(b, atk)]
-            if not avail:
+            need = 2 if atk.has("menace") else 1     # amenaza: hacen falta 2+
+            if len(avail) < need:
                 continue
             # 1) bloqueo GRATIS: mata al atacante y sobrevive (no pierdo pieza)
-            safe = next((b for b in avail
-                         if b.power >= atk.toughness and b.toughness > atk.power), None)
-            if safe is not None:
+            safe = next((b for b in avail if kills(b, atk) and survives(b, atk)), None)
+            if safe is not None and need == 1:
                 result.append((atk, safe))
                 used.add(safe.uid)
                 continue
-            # 2) solo bajo amenaza letal: chump/trade para no morir
+            # 2) solo bajo amenaza letal: chump/trade (respetando menace = 2+).
+            #    con arrolladora, chump-blockear no evita el daño derramado, así que
+            #    solo bloqueo si puedo MATARLO (trade), no para chumpear.
             if lethal:
-                b = max(avail, key=lambda x: x.toughness)
-                result.append((atk, b))
-                used.add(b.uid)
+                picks = sorted(avail, key=lambda x: x.toughness, reverse=True)[:need]
+                if atk.has("trample") and not any(kills(b, atk) for b in picks):
+                    continue
+                for b in picks:
+                    result.append((atk, b))
+                    used.add(b.uid)
         return result

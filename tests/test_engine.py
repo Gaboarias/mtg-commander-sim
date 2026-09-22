@@ -2510,6 +2510,79 @@ def test_indestructible_survives_lethal_damage():
     assert wall not in me.battlefield
 
 
+def _duel():
+    import cards
+    from engine import Game, Player
+    me = Player("me", [cards.land("Plains", ["W"], basic=True) for _ in range(6)],
+                cards.creature("Cm", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Island", ["U"], basic=True) for _ in range(6)],
+                cards.creature("Om", "2U", 1, 1, legendary=True))
+    return Game([me, op], seed=1), me, op
+
+
+def test_lifelink_gains_life_from_damage_to_player():
+    import cards
+    g, me, op = _duel()
+    linker = g.move_to_battlefield(cards.creature("Vamp", "1W", 3, 3, kw=("lifelink",)), me)
+    l0 = me.life
+    g.deal_damage(linker, op, 3, combat=True)          # daño a un JUGADOR
+    assert me.life == l0 + 3 and op.life == 40 - 3      # lifelink gana vida
+
+
+def test_deathtouch_assigns_one_and_tramples_rest():
+    import cards
+    g, me, op = _duel()
+    atk = g.move_to_battlefield(cards.creature("DT", "1B", 4, 4, kw=("deathtouch", "trample")), me)
+    atk.summoning_sick = False
+    blk = g.move_to_battlefield(cards.creature("Wall", "1G", 0, 5), op)
+    g._begin_combat(me)
+    g._declare_attackers(me, [(atk, op)])
+    g._apply_block_pairs([atk], [(atk, blk)])
+    life0 = op.life
+    g._finish_combat([atk])
+    assert blk not in op.battlefield                    # 1 de daño mortal lo mata
+    assert op.life == life0 - 3                          # 3 restantes derraman (trample)
+
+
+def test_minus_counters_reduce_and_annihilate():
+    import cards
+    g, me, op = _duel()
+    c = g.move_to_battlefield(cards.creature("Bear", "1G", 3, 3), me)
+    g.add_counters(c, "-1/-1", 1)
+    assert c.power == 2 and c.toughness == 2
+    g.add_counters(c, "+1/+1", 1)
+    g.sba()                                             # se aniquilan de a pares
+    assert c.counters.get("+1/+1", 0) == 0 and c.counters.get("-1/-1", 0) == 0
+    assert c.power == 3 and c.toughness == 3
+    g.add_counters(c, "-1/-1", 3)
+    g.sba()
+    assert c not in me.battlefield                      # resistencia 0 -> muere
+
+
+def test_first_strike_blocker_dies_before_returning_damage():
+    import cards
+    g, me, op = _duel()
+    fs = g.move_to_battlefield(cards.creature("Knight", "1W", 2, 2, kw=("first_strike",)), me)
+    fs.summoning_sick = False
+    blk = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), op)
+    g._begin_combat(me)
+    g._declare_attackers(me, [(fs, op)])
+    g._apply_block_pairs([fs], [(fs, blk)])
+    g._finish_combat([fs])
+    assert blk not in op.battlefield                    # muere en el primer golpe
+    assert fs in me.battlefield and fs.damage == 0      # no recibió daño de vuelta
+
+
+def test_wither_deals_minus_counters_to_creature():
+    import cards
+    g, me, op = _duel()
+    w = g.move_to_battlefield(cards.creature("Wither", "1B", 2, 2, kw=("wither",)), me)
+    tgt = g.move_to_battlefield(cards.creature("Bear", "1G", 3, 3), op)
+    g.deal_damage(w, tgt, 2, combat=True)
+    assert tgt.counters.get("-1/-1") == 2 and tgt.damage == 0
+    assert tgt.power == 1 and tgt.toughness == 1
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

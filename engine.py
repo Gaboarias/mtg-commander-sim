@@ -232,11 +232,13 @@ class Permanent:
     @property
     def power(self) -> int:
         return (self.card.power + self.counters.get("+1/+1", 0)
+                - self.counters.get("-1/-1", 0)
                 + self._static_delta()[0] + self.temp_pt[0])
 
     @property
     def toughness(self) -> int:
         return (self.card.toughness + self.counters.get("+1/+1", 0)
+                - self.counters.get("-1/-1", 0)
                 + self._static_delta()[1] + self.temp_pt[1])
 
     @property
@@ -809,20 +811,21 @@ class Game:
     def deal_damage(self, source, target, amount: int, combat: bool = False):
         if amount <= 0:
             return
+        src_perm = isinstance(source, Permanent)
         if isinstance(target, Player):
-            infect = isinstance(source, Permanent) and (source.has("infect")
-                                                        or source.has("toxic"))
-            if infect:
-                target.poison += amount            # infect/toxic: veneno, no vida
+            if src_perm and source.has("infect"):
+                target.poison += amount            # infect: veneno en vez de vida
+            elif src_perm and source.has("toxic"):
+                target.life -= amount              # toxic: daño normal + veneno (aprox)
+                target.poison += 1
             else:
                 target.life -= amount
             # dano de comandante
-            if combat and isinstance(source, Permanent) and \
-                    source.card is source.controller.commander_card:
+            if combat and src_perm and source.card is source.controller.commander_card:
                 key = source.name
                 target.cmdr_damage[key] = target.cmdr_damage.get(key, 0) + amount
             # disparo "cuando ~ hace daño de combate a un jugador"
-            if combat and isinstance(source, Permanent):
+            if combat and src_perm:
                 cb = source.card.triggers.get("combat_damage_to_player")
                 if cb:
                     self.stack.append(StackObject(
@@ -835,13 +838,19 @@ class Game:
             if "planeswalker" in target.card.types:
                 # el dano a un planeswalker le quita lealtad (P2.3)
                 target.counters["loyalty"] = target.counters.get("loyalty", 0) - amount
+            elif src_perm and (source.has("infect") or source.has("wither")):
+                # infect/wither: el daño se pone como contadores -1/-1 (no cura al
+                # enderezar). Con deathtouch, alcanza para matarla.
+                self.add_counters(target, "-1/-1", amount)
+                if source.has("deathtouch") and target.toughness > 0:
+                    self.add_counters(target, "-1/-1", target.toughness)
             else:
-                deathtouch = isinstance(source, Permanent) and source.has("deathtouch")
                 target.damage += amount
-                if deathtouch and amount > 0:
+                if src_perm and source.has("deathtouch") and amount > 0:
                     target.damage = max(target.damage, target.toughness)
-            if isinstance(source, Permanent) and source.has("lifelink"):
-                source.controller.life += amount
+        # lifelink: la fuente gana vida = daño hecho, contra CUALQUIER objetivo
+        if src_perm and source.has("lifelink"):
+            source.controller.life += amount
 
     # -- acciones basadas en estado -------------------------------------- #
     def sba(self):
@@ -861,6 +870,16 @@ class Game:
                     p.lost = True
                     changed = True
                     self.log(f"{p.name} pierde por dano de comandante")
+            # contadores +1/+1 y -1/-1 se aniquilan de a pares
+            for p in self.players:
+                for perm in p.battlefield:
+                    plus = perm.counters.get("+1/+1", 0)
+                    minus = perm.counters.get("-1/-1", 0)
+                    n = min(plus, minus)
+                    if n:
+                        perm.counters["+1/+1"] = plus - n
+                        perm.counters["-1/-1"] = minus - n
+                        changed = True
             # criaturas muertas: resistencia <= 0 muere SIEMPRE (no es destrucción);
             # el daño letal la destruye SALVO que sea indestructible.
             for p in self.players:
@@ -1323,28 +1342,38 @@ class Game:
             # dano normal: todos menos los que SOLO tienen first_strike
             return not (perm.has("first_strike") and not perm.has("double_strike"))
 
+        def alive(pm):
+            return pm in pm.controller.battlefield
+
         # atacantes
         for a in attackers:
-            if a.attacking is None or not deals_now(a):
+            if a.attacking is None or not deals_now(a) or not alive(a):
                 continue
-            if not a.blocked_by:
-                self.deal_damage(a, a.attacking, a.power, combat=True)
-            else:
-                remaining = a.power
-                for b in list(a.blocked_by):
-                    if remaining <= 0:
-                        break
-                    lethal = max(1, b.toughness - b.damage)
-                    assign = min(remaining, lethal)
-                    self.deal_damage(a, b, assign, combat=True)
-                    remaining -= assign
-                if remaining > 0 and a.has("trample"):
-                    self.deal_damage(a, a.attacking, remaining, combat=True)
+            blockers = [b for b in a.blocked_by if alive(b)]
+            if not blockers:
+                # sin bloquear pega directo; si fue bloqueado pero el bloqueador
+                # murió (p. ej. en el primer golpe), no pasa daño salvo arrolladora
+                if not a.blocked_by or a.has("trample"):
+                    self.deal_damage(a, a.attacking, a.power, combat=True)
+                continue
+            dt = a.has("deathtouch")
+            remaining = a.power
+            for b in blockers:
+                if remaining <= 0:
+                    break
+                lethal = 1 if dt else max(1, b.toughness - b.damage)   # deathtouch: 1 basta
+                assign = min(remaining, lethal)
+                self.deal_damage(a, b, assign, combat=True)
+                remaining -= assign
+            if remaining > 0 and a.has("trample"):
+                self.deal_damage(a, a.attacking, remaining, combat=True)
 
-        # bloqueadores devuelven dano al atacante
+        # bloqueadores devuelven dano al atacante (si siguen vivos)
         for a in attackers:
+            if not alive(a):
+                continue
             for b in list(a.blocked_by):
-                if deals_now(b):
+                if deals_now(b) and alive(b):
                     self.deal_damage(b, a, b.power, combat=True)
 
     # -- turno ------------------------------------------------------------ #
