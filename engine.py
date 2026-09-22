@@ -249,6 +249,7 @@ class Player:
         self.hand: list = []
         self.graveyard: list = []
         self.exile: list = []
+        self.impulse: list = []              # exiliadas por "impulse", jugables este turno
         self.command: list = [commander]
         self.battlefield: list = []          # lista de Permanent
         self.cmdr_tax = 0                    # +2 por lanzamiento desde la zona de mando
@@ -1078,6 +1079,10 @@ class Game:
             p.hand.remove(card)
             p.graveyard.append(card)
             self.emit("to_graveyard", player=p, card=card)
+        # las cartas exiliadas por "impulse" ya no son jugables: quedan en el exilio
+        if p.impulse:
+            p.exile.extend(p.impulse)
+            p.impulse.clear()
         self.sba()
 
     def run_turn(self):

@@ -608,6 +608,131 @@ def test_reveal_land_human_choice_pauses_and_resolves():
     assert len(me.graveyard) - bg == 3
 
 
+def test_tutor_search_library_human_and_bot():
+    # "Search your library for a creature card ... into your hand": el humano elige
+    # (pending_choice kind search); baraja después.
+    import cardsdb, interactive, decks
+    c = cardsdb.build_card_from_data({
+        "name": "Tutor", "type_line": "Sorcery", "mana_cost": "{1}{B}",
+        "color_identity": ["B"],
+        "oracle_text": "Search your library for a creature card, reveal it, "
+                       "put it into your hand, then shuffle."})
+    assert c.on_cast_resolve is not None
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    n0, h0 = len(hu.library), len(hu.hand)
+    c.on_cast_resolve(ig.g, hu, [])
+    assert ig.g.pending_choice and ig.g.pending_choice["kind"] == "search"
+    opts = ig.g.pending_choice["options"]
+    assert opts and all(o["ok"] for o in opts)
+    st = ig.resolve_choice(0)
+    assert len(hu.hand) == h0 + 1 and len(hu.library) == n0 - 1
+    import json
+    json.dumps(st)
+
+
+def test_tutor_does_not_double_with_land_ramp():
+    # Una búsqueda de tierra sigue usando ramp (no cablea el tutor genérico).
+    import cardsdb
+    c = cardsdb.build_card_from_data({
+        "name": "Rampant Growth", "type_line": "Sorcery", "mana_cost": "{1}{G}",
+        "color_identity": ["G"],
+        "oracle_text": "Search your library for a basic land card, put it onto the "
+                       "battlefield tapped, then shuffle."})
+    assert "ramp" in c.tags
+
+
+def test_look_take_any_card_human():
+    # "Look at the top three cards ... put one into your hand, rest on the bottom".
+    import cardsdb, interactive, decks
+    c = cardsdb.build_card_from_data({
+        "name": "Dig", "type_line": "Instant", "mana_cost": "{U}",
+        "color_identity": ["U"],
+        "oracle_text": "Look at the top three cards of your library. Put one of them "
+                       "into your hand and the rest on the bottom of your library."})
+    assert c.on_cast_resolve is not None
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    n0, h0 = len(hu.library), len(hu.hand)
+    c.on_cast_resolve(ig.g, hu, [])
+    assert ig.g.pending_choice and ig.g.pending_choice["kind"] == "look_take"
+    assert len(ig.g.pending_choice["options"]) == 3
+    ig.resolve_choice(0)
+    assert len(hu.hand) == h0 + 1 and len(hu.library) == n0 - 1   # 1 a mano, 2 al fondo
+
+
+def test_explore_land_to_hand_and_nonland_counter():
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Scout", "type_line": "Creature", "mana_cost": "{1}{G}",
+        "power": "1", "toughness": "1", "color_identity": ["G"],
+        "oracle_text": "When Scout enters, it explores."})
+    assert c.on_etb is not None
+    def fresh_op():
+        return Player("op", [cards.land("I", ["U"]) for _ in range(40)],
+                      cards.creature("O", "2U", 1, 1, legendary=True))
+    # tope = tierra -> a la mano, sin contador (fijamos la biblioteca tras el reparto)
+    me = Player("yo", [cards.creature("Filler", "1G", 1, 1) for _ in range(20)],
+                cards.creature("Cmd", "2G", 3, 3, legendary=True))
+    g = Game([me, fresh_op()], seed=1)
+    me.library = [cards.land("Forest", ["G"], basic=True)]   # tope conocido = tierra
+    h0 = len(me.hand)
+    perm = g.move_to_battlefield(c, me)
+    assert len(me.hand) == h0 + 1 and perm.counters.get("+1/+1", 0) == 0
+    # tope = no-tierra -> +1/+1
+    me2 = Player("yo", [cards.creature("Filler", "1G", 1, 1) for _ in range(20)],
+                 cards.creature("Cmd2", "2G", 3, 3, legendary=True))
+    g2 = Game([me2, fresh_op()], seed=1)
+    me2.library = [cards.creature("Big", "5G", 5, 5)]        # tope conocido = no-tierra
+    perm2 = g2.move_to_battlefield(c, me2)
+    assert perm2.counters.get("+1/+1", 0) == 1
+
+
+def test_fateseal_operates_on_opponent_library():
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Peek", "type_line": "Instant", "mana_cost": "{U}",
+        "color_identity": ["U"],
+        "oracle_text": "Look at the top two cards of target opponent's library, "
+                       "then put them back in any order."})
+    assert c.on_cast_resolve is not None
+    me = Player("yo", [cards.creature("X", "1U", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature(f"C{i}", "1B", 1, 1) for i in range(10)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    my_lib0, op_lib0 = len(me.library), len(op.library)
+    c.on_cast_resolve(g, me, [])          # bot fateseal sobre op
+    assert len(me.library) == my_lib0     # mi biblioteca intacta
+    assert len(op.library) == op_lib0     # la del rival: solo reordenada
+
+
+def test_impulse_playable_from_exile_interactively():
+    import cardsdb, cards, interactive, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    spell = cards.creature("Bolt Elemental", "R", 2, 1)
+    hu.library.append(spell)              # tope de la biblioteca
+    for _ in range(2):
+        ig.g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), hu)
+    eff = cardsdb._generic_amount_effect("Exile the top card of your library. "
+                                         "You may play that card this turn.")
+    eff(ig.g, hu)
+    assert spell in hu.impulse
+    assert any(x["name"] == "Bolt Elemental" for x in ig.legal()["impulse"])
+    bf0 = len(hu.battlefield)
+    ig.cast(i=0, zone="impulse")
+    assert spell not in hu.impulse and len(hu.battlefield) == bf0 + 1
+
+
 def test_activated_ability_pays_mana():
     # Habilidad activada "{2}{R}: deals 2 damage to each opponent": debe parsearse
     # y, al activarla, pagar el maná y aplicar el efecto.
@@ -650,9 +775,13 @@ def test_attack_trigger_impulse():
                 cards.creature("C2", "2B", 1, 1, legendary=True))
     g = Game([me, op], seed=1)
     perm = g.move_to_battlefield(c, me)
-    hand0 = len(me.hand)
-    c.triggers["attacks"](g, perm)     # simular el disparo de ataque
-    assert len(me.hand) == hand0 + 1   # exiliada al tope -> jugable (a la mano)
+    imp0 = len(me.impulse)
+    c.triggers["attacks"](g, perm)       # simular el disparo de ataque
+    assert len(me.impulse) == imp0 + 1   # exiliada al tope -> jugable este turno
+    # al terminar el turno, lo no jugado pasa al exilio
+    ex0 = len(me.exile)
+    g.end_turn(me)
+    assert not me.impulse and len(me.exile) == ex0 + 1
 
 
 def test_imported_planeswalker_loyalty_and_abilities():

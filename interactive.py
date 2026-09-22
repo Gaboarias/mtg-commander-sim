@@ -395,6 +395,14 @@ class InteractiveGame:
             return self.state()
         p = self.human()
         card = from_command = None
+        if zone == "impulse":   # jugar una carta exiliada por "impulse" este turno
+            if i is not None and 0 <= i < len(p.impulse):
+                c = p.impulse[i]
+                ok = self.g.play_land(p, c) if c.is_land() else self.g.cast(p, c)
+                if ok is not False and c in p.impulse:
+                    p.impulse.remove(c)
+                self.g.sba()
+            return self.state()
         if zone == "command":
             cand = [c for c in p.command if c.cost is None or
                     p.can_pay(Cost(c.cost.generic + p.cmdr_tax, c.cost.pips))]
@@ -471,7 +479,13 @@ class InteractiveGame:
     def legal(self):
         p = self.human()
         lands, casts, attackers, activatables = [], [], [], []
+        impulse = []
         if self._my_turn():
+            for i, c in enumerate(p.impulse):   # exiliadas por impulse, jugables hoy
+                playable = (c.is_land() and p.lands_played < 1) or \
+                           (not c.is_land() and c.cost is not None and p.can_pay(c.cost))
+                impulse.append({"i": i, "name": c.name, "cost": _cost_str(c),
+                                "is_land": c.is_land(), "playable": playable})
             for i, c in enumerate(p.hand):
                 if c.is_land():
                     if p.lands_played < 1:
@@ -532,6 +546,7 @@ class InteractiveGame:
                                     "name": f.name, "life": f.life})
         return {"lands": lands, "casts": casts, "attackers": attackers,
                 "activatables": activatables, "abilities": abilities,
+                "impulse": impulse,
                 "attack_targets": atk_targets,
                 "can_attack": self._my_turn() and not self.attacked,
                 "can_end": self._my_turn()}

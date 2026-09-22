@@ -30,6 +30,7 @@ type Legal = {
   attackers: { uid: number; name: string; power: number; toughness: number }[];
   activatables: Activatable[];
   abilities?: PermAbility[];
+  impulse?: { i: number; name: string; cost: string; is_land: boolean; playable: boolean }[];
   attack_targets: { index: number; name: string; life: number }[];
   can_attack: boolean; can_end: boolean;
 };
@@ -46,7 +47,7 @@ type Combat = {
   responses: { i: number; name: string; cost: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number }[];
 };
 type Mulligan = { mulls: number; to_bottom: number; lands: number };
-type ChoiceOpt = { i: number; name: string; is_land?: boolean };
+type ChoiceOpt = { i: number; name: string; is_land?: boolean; ok?: boolean };
 type Choice = { kind: string; prompt: string; options: ChoiceOpt[]; allow_none: boolean; card?: string };
 type GameState = {
   turn: number; active: number; human_index: number; phase: string; attacked: boolean;
@@ -638,6 +639,22 @@ export default function Play() {
                   </div>
                 )}
 
+                {legal && (legal.impulse?.length || 0) > 0 && (
+                  <div className="act-block">
+                    <span className="act-label">Exilio (jugable este turno):</span>
+                    {legal.impulse!.map((im) => (
+                      <button key={"imp" + im.i} className="ghost pw-ab"
+                        disabled={!im.playable}
+                        onClick={() => doAct("cast", { i: im.i, zone: "impulse" })}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        <Icon name={im.is_land ? "land" : "cards"} size={12} />
+                        <b>{im.name}</b> <span className="muted">{im.cost}</span>
+                        {!im.playable ? <em className="pw-txt">sin maná / tierra ya jugada</em> : null}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 {legal && (legal.abilities?.length || 0) > 0 && (
                   <div className="act-block">
                     <span className="act-label">Habilidades (pagar maná):</span>
@@ -751,7 +768,12 @@ export default function Play() {
       {state?.phase === "choose" && state.choice && (() => {
         const ch = state.choice;
         const isCardPick = ch.options.some((o) => o.is_land !== undefined);
-        const title = ch.kind === "scry" ? "Scry" : ch.kind === "surveil" ? "Surveil" : "Elegí una carta";
+        const titles: Record<string, string> = {
+          scry: "Scry", surveil: "Surveil", fateseal: "Fateseal (biblioteca rival)",
+          explore: "Explorar", search: "Buscar en la biblioteca",
+          look_take: "Elegí una carta", reveal_land: "Elegí una carta",
+        };
+        const title = titles[ch.kind] || "Elegí una carta";
         return (
           <div className="inspect-back">
             <div className="inspect" onClick={(e) => e.stopPropagation()}>
@@ -762,19 +784,19 @@ export default function Play() {
                   <button
                     key={o.i}
                     className="ghost"
-                    disabled={ch.kind === "reveal_land" && !o.is_land}
+                    disabled={o.ok === false}
                     onClick={() => doAct("choose", { index: o.i })}
                     style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                     <Icon name={isCardPick ? (o.is_land ? "land" : "cards") : "chevron-right"} size={13} />
                     {o.name}
-                    {ch.kind === "reveal_land" && !o.is_land ? <span className="muted"> · al cementerio</span> : null}
+                    {o.ok === false ? <span className="muted"> · no elegible</span> : null}
                   </button>
                 ))}
               </div>
               {ch.allow_none && (
                 <div className="act-block" style={{ marginTop: 10 }}>
                   <button className="ghost" onClick={() => doAct("choose", { index: null })}>
-                    No quedarme con ninguna
+                    No llevarme ninguna
                   </button>
                 </div>
               )}

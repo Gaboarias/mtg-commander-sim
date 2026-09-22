@@ -349,33 +349,43 @@ def _planeswalker_abilities(oracle: str):
     return tuple(abilities), tuple(texts)
 
 
-def _scry_surveil_effect(n, to_graveyard, draw_n=0, draw_first=False):
-    """Scry/Surveil N (+ robar opcional). El humano decide carta por carta
-    (arriba / fondo o cementerio) vía pending_choice; los bots usan heurística.
+def _scry_surveil_effect(n, to_graveyard, draw_n=0, draw_first=False, fateseal=False):
+    """Scry/Surveil N (+ robar opcional). Con fateseal=True mira la biblioteca de
+    un RIVAL en vez de la propia. El humano decide carta por carta vía
+    pending_choice; los bots usan heurística.
     Top de la biblioteca = final de la lista (library.pop())."""
-    verb = "Surveil" if to_graveyard else "Scry"
+    verb = "Fateseal" if fateseal else ("Surveil" if to_graveyard else "Scry")
 
     def eff(game, ctrl, *_a, _n=min(n, 12), _gy=to_graveyard,
-            _dn=draw_n, _df=draw_first):
+            _dn=draw_n, _df=draw_first, _fs=fateseal):
+        # fateseal: opera sobre el rival de menos vida; el robar es siempre del ctrl
+        who = ctrl
+        if _fs:
+            opps = game.opponents(ctrl)
+            if not opps:
+                return
+            who = min(opps, key=lambda o: o.life)
         if _df and _dn:
             ctrl.draw(_dn, game)
         looked = []
         for _ in range(_n):
-            if ctrl.library:
-                looked.append(ctrl.library.pop())   # looked[0] = tope
+            if who.library:
+                looked.append(who.library.pop())   # looked[0] = tope
         if not looked:
             if (not _df) and _dn:
                 ctrl.draw(_dn, game)
             return
         kept = []          # quedan arriba, kept[0] = la más arriba
         st = {"i": 0}
+        kind = "fateseal" if _fs else ("surveil" if _gy else "scry")
 
         def finish():
             for c in reversed(kept):   # kept[0] vuelve a quedar en el tope
-                ctrl.library.append(c)
+                who.library.append(c)
             dest = "cementerio" if _gy else "fondo"
             moved = len(looked) - len(kept)
-            game.log(f"{ctrl.name} hace {verb} {len(looked)}: "
+            whose = f"la biblioteca de {who.name}" if _fs else "su biblioteca"
+            game.log(f"{ctrl.name} hace {verb} {len(looked)} sobre {whose}: "
                      f"{len(kept)} arriba, {moved} al {dest}")
             if (not _df) and _dn:
                 ctrl.draw(_dn, game)
@@ -385,9 +395,9 @@ def _scry_surveil_effect(n, to_graveyard, draw_n=0, draw_first=False):
             if choice == 0:                       # dejar arriba
                 kept.append(c)
             elif _gy:                             # surveil -> cementerio
-                ctrl.graveyard.append(c)
-            else:                                 # scry -> fondo
-                ctrl.library.insert(0, c)
+                who.graveyard.append(c)
+            else:                                 # scry/fateseal -> fondo
+                who.library.insert(0, c)
             st["i"] += 1
             if st["i"] < len(looked):
                 _prompt()
@@ -397,10 +407,11 @@ def _scry_surveil_effect(n, to_graveyard, draw_n=0, draw_first=False):
         def _prompt():
             c = looked[st["i"]]
             dest = "Al cementerio" if _gy else "Al fondo"
+            head = (f"{verb} {len(looked)} (biblioteca de {who.name})" if _fs
+                    else f"{verb} {len(looked)}")
             game.pending_choice = {
-                "kind": "surveil" if _gy else "scry",
-                "prompt": f"{verb} {len(looked)} — carta {st['i'] + 1} de "
-                          f"{len(looked)}: {c.name}",
+                "kind": kind,
+                "prompt": f"{head} — carta {st['i'] + 1} de {len(looked)}: {c.name}",
                 "card": c.name,
                 "options": [{"i": 0, "name": "Dejar arriba"}, {"i": 1, "name": dest}],
                 "allow_none": False,
@@ -409,7 +420,14 @@ def _scry_surveil_effect(n, to_graveyard, draw_n=0, draw_first=False):
 
         if ctrl is getattr(game, "interactive_human", None):
             _prompt()
-        else:  # bot: baja tierras si está inundado; el resto lo deja arriba
+        elif _fs:  # bot fateseal: manda al fondo los hechizos del rival (le niega amenazas)
+            for c in looked:
+                if c.is_land():
+                    kept.append(c)               # que draw una tierra
+                else:
+                    who.library.insert(0, c)     # amenaza al fondo
+            finish()
+        else:  # bot propio: baja tierras si está inundado; el resto lo deja arriba
             lands = sum(1 for pm in ctrl.battlefield if pm.card.is_land())
             for c in looked:
                 if c.is_land() and lands >= 5:
@@ -417,6 +435,159 @@ def _scry_surveil_effect(n, to_graveyard, draw_n=0, draw_first=False):
                 else:
                     kept.append(c)
             finish()
+    return eff
+
+
+def _card_type_pred(word):
+    """Predicado según un tipo de carta ('land','creature','instant',...)
+    o cualquiera si no se reconoce."""
+    w = (word or "").strip().lower()
+    table = {
+        "land": lambda c: c.is_land(),
+        "basic land": lambda c: c.is_land(),
+        "creature": lambda c: "creature" in c.types,
+        "instant": lambda c: "instant" in c.types,
+        "sorcery": lambda c: "sorcery" in c.types,
+        "artifact": lambda c: "artifact" in c.types,
+        "enchantment": lambda c: "enchantment" in c.types,
+        "planeswalker": lambda c: "planeswalker" in c.types,
+    }
+    for key, pred in table.items():
+        if key in w:
+            return pred, key
+    return (lambda c: True), "carta"
+
+
+def _look_take_effect(n, keep_pred, rest_dest="bottom", allow_none=True,
+                      kind="look_take", prompt=None):
+    """Mira las top N; el humano se lleva UNA (que cumpla keep_pred) a la mano y el
+    resto va al fondo/cementerio. Reusa pending_choice. rest_dest: 'bottom'|'graveyard'.
+    Generaliza el viejo 'reveal_land' a cualquier tipo de carta."""
+    def eff(game, ctrl, *_a, _n=min(n, 10)):
+        revealed = []
+        for _ in range(_n):
+            if ctrl.library:
+                revealed.append(ctrl.library.pop())
+        if not revealed:
+            return
+
+        def _apply(idx, _rev=revealed):
+            keep = None
+            if idx is not None and 0 <= idx < len(_rev) and keep_pred(_rev[idx]):
+                keep = _rev[idx]
+            for c in _rev:
+                if c is keep:
+                    ctrl.hand.append(c)
+                elif rest_dest == "graveyard":
+                    ctrl.graveyard.append(c)
+                else:
+                    ctrl.library.insert(0, c)
+            shown = ", ".join(c.name for c in _rev)
+            tail = "cementerio" if rest_dest == "graveyard" else "fondo"
+            game.log(f"{ctrl.name} revela {shown} — toma "
+                     f"{keep.name if keep else 'ninguna'}, el resto al {tail}")
+
+        if ctrl is getattr(game, "interactive_human", None):
+            game.pending_choice = {
+                "kind": kind,
+                "prompt": prompt or "Elegí una carta para tu mano",
+                "options": [{"i": i, "name": c.name, "is_land": c.is_land(),
+                             "ok": bool(keep_pred(c))} for i, c in enumerate(revealed)],
+                "allow_none": allow_none,
+                "_apply": _apply,
+            }
+        else:  # bot: mejor candidato (tierra si busca tierra, si no mayor CMC)
+            cand = [i for i, c in enumerate(revealed) if keep_pred(c)]
+            pick = None
+            if cand:
+                pick = max(cand, key=lambda i: (revealed[i].cost.cmc
+                                                if revealed[i].cost else 0))
+            _apply(pick)
+    return eff
+
+
+def _search_library_effect(keep_pred, to_battlefield=False, allow_none=True,
+                           label="una carta"):
+    """Tutor: buscar en la biblioteca una carta que cumpla keep_pred y ponerla en
+    la mano (o al campo). El humano elige; el bot toma el mejor candidato. Baraja
+    después."""
+    def eff(game, ctrl, *_a):
+        cands = [c for c in ctrl.library if keep_pred(c)]
+        if not cands:
+            game.log(f"{ctrl.name} busca en su biblioteca pero no encuentra {label}")
+            game.rng.shuffle(ctrl.library)
+            return
+
+        def _apply(idx, _cands=cands):
+            if idx is not None and 0 <= idx < len(_cands):
+                pick = _cands[idx]
+                if pick in ctrl.library:
+                    ctrl.library.remove(pick)
+                    if to_battlefield:
+                        game.move_to_battlefield(pick, ctrl)
+                    else:
+                        ctrl.hand.append(pick)
+                    where = "al campo" if to_battlefield else "a la mano"
+                    game.log(f"{ctrl.name} busca y toma {pick.name} {where}")
+            else:
+                game.log(f"{ctrl.name} no se lleva nada de la búsqueda")
+            game.rng.shuffle(ctrl.library)
+
+        if ctrl is getattr(game, "interactive_human", None):
+            game.pending_choice = {
+                "kind": "search",
+                "prompt": f"Buscá {label} en tu biblioteca",
+                "options": [{"i": i, "name": c.name, "is_land": c.is_land(), "ok": True}
+                            for i, c in enumerate(cands[:60])],
+                "allow_none": allow_none,
+                "_apply": _apply,
+            }
+        else:  # bot: mejor no-tierra por CMC; si solo hay tierras, la primera
+            pick = max(range(len(cands)),
+                       key=lambda i: (0 if cands[i].is_land() else 1,
+                                      cands[i].cost.cmc if cands[i].cost else 0))
+            _apply(pick)
+    return eff
+
+
+def _explore_effect():
+    """Explore: revela el tope; tierra -> mano; si no, +1/+1 al que explora y el
+    humano decide dejarla arriba o mandarla al cementerio (bot: cava si es cara)."""
+    def eff(game, ctrl, perm=None, *_a):
+        if isinstance(perm, list):   # llamado como hechizo: perm llega como targets
+            perm = next((x for x in perm if hasattr(x, "counters")), None)
+        if not ctrl.library:
+            return
+        top = ctrl.library[-1]                 # ojear el tope
+        if top.is_land():
+            ctrl.library.pop()
+            ctrl.hand.append(top)
+            game.log(f"{ctrl.name} explora: {top.name} (tierra) a la mano")
+            return
+        if perm is not None:
+            game.add_counters(perm, "+1/+1", 1)
+
+        def _apply(idx):
+            if idx == 1:
+                if ctrl.library and ctrl.library[-1] is top:
+                    ctrl.library.pop()
+                ctrl.graveyard.append(top)
+                game.log(f"{ctrl.name} explora: +1/+1 y {top.name} al cementerio")
+            else:
+                game.log(f"{ctrl.name} explora: +1/+1 y deja {top.name} arriba")
+
+        if ctrl is getattr(game, "interactive_human", None):
+            game.pending_choice = {
+                "kind": "explore",
+                "prompt": f"Explorás: {top.name} (no es tierra). +1/+1 al explorador. "
+                          f"¿La dejás arriba o la mandás al cementerio?",
+                "card": top.name,
+                "options": [{"i": 0, "name": "Dejar arriba"}, {"i": 1, "name": "Al cementerio"}],
+                "allow_none": False,
+                "_apply": _apply,
+            }
+        else:  # bot: cava (al cementerio) si la carta es cara
+            _apply(1 if (top.cost and top.cost.cmc >= 4) else 0)
     return eff
 
 
@@ -464,6 +635,16 @@ def _generic_amount_effect(oracle: str):
             ctrl.life += _n
         return eff
 
+    # explore: revelar el tope (tierra -> mano; si no, +1/+1 y decidir arriba/cementerio)
+    if re.search(r"\bexplores?\b", t):
+        return _explore_effect()
+
+    # fateseal: mirar el tope de la biblioteca de un RIVAL
+    mf = re.search(r"look at the top (\w+) cards? of (?:target )?"
+                   r"(?:opponent|player|defending player)'?s? library", t)
+    if mf and (fn := _count_word(mf.group(1))):
+        return _scry_surveil_effect(fn, False, fateseal=True)
+
     # scry / surveil (con "then draw" opcional): el humano decide carta por carta.
     ms = re.search(r"\b(scry|surveil)\s+(\w+)", t)
     if ms and (sn := _count_word(ms.group(2))):
@@ -475,13 +656,27 @@ def _generic_amount_effect(oracle: str):
             dfirst = md.start() < ms.start()   # "draw ..., then scry" -> robar primero
         return _scry_surveil_effect(sn, to_gy, draw_n=dn, draw_first=dfirst)
 
+    # tutor: "search your library for a(n) [tipo] card ... into your hand / battlefield".
+    # Excluye la búsqueda de tierras (ya cubierta por el tag ramp -> _g_ramp).
+    mt = re.search(r"search your library for (a|an|one|two|up to \w+)?\s*"
+                   r"([\w\- ]*?)\s*cards?", t)
+    if mt and "land" not in (mt.group(2) or ""):
+        pred, label_key = _card_type_pred(mt.group(2))
+        to_bf = bool(re.search(r"onto the battlefield|into play", t))
+        may = bool(re.search(r"you may search|search your library for up to", t))
+        lbl = {"carta": "una carta"}.get(label_key, f"una carta de tipo {label_key}")
+        return _search_library_effect(pred, to_battlefield=to_bf,
+                                      allow_none=may, label=lbl)
+
     m = re.search(r"\bmill(?:s)? (\w+)", t)
     if m and (n := _count_word(m.group(1))):
         def eff(game, ctrl, *_a, _n=n):
             cards.mill(game, ctrl, _n)
         return eff
 
-    # impulse: "exile the top (N) card(s) of your library ... you may play"
+    # impulse: "exile the top (N) card(s) of your library ... you may play". Va a la
+    # zona de exilio-jugable (ctrl.impulse): jugable ESTE turno; lo que no se juega
+    # queda en el exilio al terminar el turno (engine.end_turn).
     m = re.search(r"exile the top (\w+ )?cards? of your library.{0,80}?(?:you )?may play", t)
     if m:
         n = _count_word((m.group(1) or "one").strip()) or 1
@@ -491,10 +686,11 @@ def _generic_amount_effect(oracle: str):
             for _ in range(_n):
                 if ctrl.library:
                     c = ctrl.library.pop()
-                    ctrl.hand.append(c)
+                    ctrl.impulse.append(c)
                     moved.append(c.name)
             if moved:
-                game.log(f"{ctrl.name} exilia del tope {', '.join(moved)} y puede jugarla(s)")
+                game.log(f"{ctrl.name} exilia del tope {', '.join(moved)} "
+                         f"y puede jugarla(s) este turno")
         return eff
 
     # reanimar desde el cementerio al campo (elección automática, visible en el log)
@@ -533,41 +729,30 @@ def _generic_amount_effect(oracle: str):
             game.log(f"{ctrl.name} recupera {pick.name} del cementerio a la mano")
         return eff
 
-    # revelar las primeras N: quedarse una tierra en la mano, el resto al cementerio.
-    # El HUMANO elige a mano (decisión pendiente); los bots eligen automático.
+    # revelar las primeras N: quedarse una TIERRA en la mano, el resto al cementerio.
     m = re.search(r"(?:reveal|look at) the top (\w+) cards?.{0,140}?land card.{0,50}?hand", t)
     if m and (n := _count_word(m.group(1))):
-        def eff(game, ctrl, *_a, _n=min(n, 8)):
-            revealed = []
-            for _ in range(_n):
-                if ctrl.library:
-                    revealed.append(ctrl.library.pop())
-            if not revealed:
-                return
+        return _look_take_effect(
+            n, lambda c: c.is_land(), rest_dest="graveyard", allow_none=True,
+            kind="reveal_land",
+            prompt="Elegí una tierra para tu mano (el resto va al cementerio)")
 
-            def _apply(idx, _rev=revealed):
-                keep = None
-                if idx is not None and 0 <= idx < len(_rev) and _rev[idx].is_land():
-                    keep = _rev[idx]
-                for c in _rev:
-                    (ctrl.hand if c is keep else ctrl.graveyard).append(c)
-                shown = ", ".join(c.name for c in _rev)
-                game.log(f"{ctrl.name} revela {shown} — se queda con "
-                         f"{keep.name if keep else 'ninguna tierra'}, el resto al cementerio")
-
-            if ctrl is getattr(game, "interactive_human", None):
-                game.pending_choice = {
-                    "kind": "reveal_land",
-                    "prompt": "Elegí una tierra para tu mano (el resto va al cementerio)",
-                    "options": [{"i": i, "name": c.name, "is_land": c.is_land()}
-                                for i, c in enumerate(revealed)],
-                    "allow_none": True,
-                    "_apply": _apply,
-                }
-            else:  # bot: mejor tierra automática
-                land = next((i for i, c in enumerate(revealed) if c.is_land()), None)
-                _apply(land)
-        return eff
+    # mirar/revelar las top N y llevarse UNA a la mano (cualquier tipo, o el que pida
+    # el texto); el resto al fondo o al cementerio. Cubre "look at top N ... put one
+    # into your hand" y el caso singular "reveal top card; if it's a [tipo] ... hand".
+    mlt = re.search(r"(?:look at|reveal) the top (?:(\w+) )?cards?", t)
+    if mlt and "into your hand" in t:
+        ln = _count_word(mlt.group(1)) if mlt.group(1) else 1
+        if ln:
+            mtype = re.search(r"put (?:one|a|an|the|that)?\s*([\w\- ]*?)\s*"
+                              r"cards?[^.]*into your hand", t)
+            pred, _lk = _card_type_pred(mtype.group(1) if mtype else "")
+            tail = t.split("into your hand", 1)[-1]
+            rest = "graveyard" if "graveyard" in tail else "bottom"
+            may = " may " in t
+            return _look_take_effect(ln, pred, rest_dest=rest, allow_none=may,
+                                     kind="look_take",
+                                     prompt="Elegí una carta para tu mano")
 
     # "you may draw a card" (opcional, singular): la tomamos y lo registramos.
     if re.search(r"(?:you may )?draw a card", t):
@@ -673,7 +858,10 @@ def build_card_from_data(data: dict) -> Card:
         if geff is not None:
             if {"instant", "sorcery"} & types:
                 card.on_cast_resolve = geff
-            elif {"creature", "artifact", "enchantment"} & types:
+            elif ({"creature", "artifact", "enchantment"} & types
+                  and re.search(r"\benters?\b", (data.get("oracle_text", "") or "").lower())):
+                # solo como ETB si el texto tiene un disparo de entrada; si el efecto
+                # pertenece a otro disparo (p. ej. "whenever ~ attacks"), no lo duplicamos
                 card.on_etb = geff
 
     # habilidades activadas con coste de maná (creaturas/permanentes/tierras):
