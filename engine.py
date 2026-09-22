@@ -26,6 +26,8 @@ KEYWORDS = {
     "flying", "reach", "trample", "deathtouch", "lifelink", "vigilance",
     "haste", "first_strike", "double_strike", "menace", "indestructible",
     "hexproof", "defender", "flash",
+    "shroud", "protection", "prowess", "infect", "toxic", "wither",
+    "unblockable",
 }
 
 
@@ -177,6 +179,7 @@ class Permanent:
         self.blocked_by: list = []
         self.is_token = is_token
         self.uid = _next_uid()
+        self.temp_pt = [0, 0]            # +P/+T "hasta el fin del turno" (prowess, pumps)
         self.game = None                 # backref, lo pone move_to_battlefield
         self.activated_this_turn = False  # planeswalker: una activacion por turno
 
@@ -201,11 +204,13 @@ class Permanent:
 
     @property
     def power(self) -> int:
-        return self.card.power + self.counters.get("+1/+1", 0) + self._static_delta()[0]
+        return (self.card.power + self.counters.get("+1/+1", 0)
+                + self._static_delta()[0] + self.temp_pt[0])
 
     @property
     def toughness(self) -> int:
-        return self.card.toughness + self.counters.get("+1/+1", 0) + self._static_delta()[1]
+        return (self.card.toughness + self.counters.get("+1/+1", 0)
+                + self._static_delta()[1] + self.temp_pt[1])
 
     @property
     def keywords(self) -> set:
@@ -575,9 +580,11 @@ class Game:
         habilidades que controla un OPONENTE. ward: aqui se modela como
         'intargeteable por rivales' salvo que el atacante pague (simplificado:
         no lo puede pagar la IA, asi que protege)."""
+        if perm.has("shroud"):            # ni su propio controlador lo apunta
+            return False
         if perm.controller is caster:
             return True
-        if perm.has("hexproof"):
+        if perm.has("hexproof") or perm.has("protection"):
             return False
         if "ward" in perm.card.subtypes:  # ward simplificado
             return False
@@ -705,12 +712,27 @@ class Game:
         if amount <= 0:
             return
         if isinstance(target, Player):
-            target.life -= amount
+            infect = isinstance(source, Permanent) and (source.has("infect")
+                                                        or source.has("toxic"))
+            if infect:
+                target.poison += amount            # infect/toxic: veneno, no vida
+            else:
+                target.life -= amount
             # dano de comandante
             if combat and isinstance(source, Permanent) and \
                     source.card is source.controller.commander_card:
                 key = source.name
                 target.cmdr_damage[key] = target.cmdr_damage.get(key, 0) + amount
+            # disparo "cuando ~ hace daño de combate a un jugador"
+            if combat and isinstance(source, Permanent):
+                cb = source.card.triggers.get("combat_damage_to_player")
+                if cb:
+                    self.stack.append(StackObject(
+                        source.controller,
+                        (lambda g, _cb=cb, _p=source: _cb(g, _p)),
+                        source=source, label=f"cdmg:{source.name}"))
+                    self.note_ability(source.card, "daño de combate a un jugador",
+                                      controller=source.controller)
         elif isinstance(target, Permanent):
             if "planeswalker" in target.card.types:
                 # el dano a un planeswalker le quita lealtad (P2.3)
@@ -798,6 +820,12 @@ class Game:
             if card is player.commander_card and st["commander_turn"] is None:
                 st["commander_turn"] = self.turn
         self.emit("cast", player=player, card=card)
+        # prowess: al lanzar un hechizo no-criatura, +1/+1 a las criaturas con prowess
+        if {"instant", "sorcery"} & card.types:
+            for perm in player.battlefield:
+                if perm.has("prowess"):
+                    perm.temp_pt[0] += 1
+                    perm.temp_pt[1] += 1
 
         def _resolve(g):
             if card.is_land():  # las tierras no se lanzan, pero por seguridad
@@ -992,6 +1020,10 @@ class Game:
                 for b in a.blocked_by:
                     b.blocking.remove(a)
                 a.blocked_by = []
+            if a.has("unblockable") and a.blocked_by:   # "no puede ser bloqueada"
+                for b in a.blocked_by:
+                    b.blocking.remove(a)
+                a.blocked_by = []
         self._combat_damage(declared, first_strike=True)
         self.sba()
         self._combat_damage(declared, first_strike=False)
@@ -1075,6 +1107,10 @@ class Game:
         self.resolve_stack()
         for perm in p.battlefield:
             perm.damage = 0
+        # limpieza "hasta el fin del turno": buffs temporales de TODOS los permanentes
+        for pl in self.players:
+            for perm in pl.battlefield:
+                perm.temp_pt = [0, 0]
         while len(p.hand) > 7:
             if p.policy and hasattr(p.policy, "choose_discard"):
                 card = p.policy.choose_discard(self, p)

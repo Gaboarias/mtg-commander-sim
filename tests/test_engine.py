@@ -733,6 +733,118 @@ def test_impulse_playable_from_exile_interactively():
     assert spell not in hu.impulse and len(hu.battlefield) == bf0 + 1
 
 
+def test_protection_and_shroud_block_targeting():
+    import cards
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("F", "1U", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1B", 1, 1) for _ in range(10)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    pp = g.move_to_battlefield(cards.creature("Paladin", "1W", 2, 2, kw=("protection",)), op)
+    ss = g.move_to_battlefield(cards.creature("Ghost", "1U", 2, 2, kw=("shroud",)), me)
+    assert not g.can_target(me, pp)      # protection: rival no puede apuntarla
+    assert not g.can_target(me, ss)      # shroud: ni su propio dueño
+
+
+def test_prowess_pumps_on_noncreature_cast():
+    import cardsdb, cards
+    from engine import Game, Player
+    me = Player("yo", [cards.land("Island", ["U"]) for _ in range(10)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1B", 1, 1) for _ in range(10)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    mage = g.move_to_battlefield(cards.creature("Prodigy", "1U", 1, 2, kw=("prowess",)), me)
+    bolt = cardsdb.build_card_from_data({
+        "name": "Zap", "type_line": "Instant", "mana_cost": "{U}",
+        "color_identity": ["U"], "oracle_text": "Draw a card."})
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Island", ["U"]), me)
+    p0 = mage.power
+    g.cast(me, bolt)
+    assert mage.power == p0 + 1          # +1/+1 hasta fin de turno
+    g.end_turn(me)
+    assert mage.power == p0              # se limpia al fin del turno
+
+
+def test_infect_deals_poison_not_life():
+    import cards
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("F", "1G", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2G", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1B", 1, 1) for _ in range(10)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    inf = g.move_to_battlefield(cards.creature("Corruptor", "2G", 3, 3, kw=("infect",)), me)
+    life0 = op.life
+    g.deal_damage(inf, op, 3, combat=True)
+    assert op.life == life0 and op.poison == 3   # veneno, no vida
+
+
+def test_unblockable_ignores_blockers():
+    import cards
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("F", "1U", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1B", 1, 1) for _ in range(10)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    sneak = g.move_to_battlefield(cards.creature("Rogue", "1U", 3, 3, kw=("unblockable",)), me)
+    sneak.summoning_sick = False
+    g.move_to_battlefield(cards.creature("Wall", "1B", 0, 4), op)
+    life0 = op.life
+    g._resolve_combat(me, [(sneak, op)])
+    assert op.life == life0 - 3          # el bloqueo se ignora, pega al jugador
+
+
+def test_creature_dies_trigger_drains():
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Artist", "type_line": "Creature", "mana_cost": "{1}{B}",
+        "power": "0", "toughness": "1", "color_identity": ["B"],
+        "oracle_text": "Whenever a creature dies, each opponent loses 1 life."})
+    assert "death" in c.triggers
+    me = Player("yo", [cards.creature("F", "1B", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2B", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.move_to_battlefield(c, me)
+    victim = g.move_to_battlefield(cards.creature("Chump", "1B", 1, 1), me)
+    life0 = op.life
+    g.to_graveyard(victim, "sacrificio")
+    g.resolve_stack()
+    assert op.life == life0 - 1
+
+
+def test_magecraft_triggers_on_instant_cast():
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Adept", "type_line": "Creature", "mana_cost": "{1}{R}",
+        "power": "2", "toughness": "2", "color_identity": ["R"],
+        "oracle_text": "Whenever you cast an instant or sorcery spell, "
+                       "Adept deals 1 damage to each opponent."})
+    assert "cast" in c.triggers
+    me = Player("yo", [cards.land("Mountain", ["R"]) for _ in range(10)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.move_to_battlefield(c, me)
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Mountain", ["R"]), me)
+    bolt = cardsdb.build_card_from_data({
+        "name": "Zap", "type_line": "Instant", "mana_cost": "{R}",
+        "color_identity": ["R"], "oracle_text": "Draw a card."})
+    life0 = op.life
+    g.cast(me, bolt)
+    g.resolve_stack()
+    assert op.life == life0 - 1
+
+
 def test_blink_reexecutes_etb():
     # Parpadeo: exiliar y devolver una criatura re-dispara su ETB.
     import cardsdb, cards

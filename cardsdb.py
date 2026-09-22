@@ -341,6 +341,41 @@ def _attack_trigger_effect(oracle: str):
     return trig
 
 
+def _event_trigger_effect(oracle: str):
+    """Detecta disparos comunes y devuelve {evento: callback(g, perm, **kw)}.
+    Cubre 'cuando una criatura muere', 'daño de combate a un jugador' y
+    'cuando lanzás un instant/sorcery' (magecraft). Reusa _generic_amount_effect
+    sobre el texto del efecto (ficha, drenaje, robar, ganar vida, etc.)."""
+    t = re.sub(r"\s+", " ", (oracle or "")).strip()
+    out = {}
+    specs = [
+        (r"whenever (?:a|another) (?:nontoken )?creature (?:you control )?dies,?\s*"
+         r"(.{0,160})", "death"),
+        (r"whenever [\w' ,]{0,40}? deals combat damage to a player,?\s*(.{0,160})",
+         "combat_damage_to_player"),
+        (r"whenever you cast (?:an instant or sorcery|a noncreature|your first "
+         r"[\w ]*?) spell,?\s*(.{0,160})", "cast"),
+    ]
+    for pat, ev in specs:
+        if ev in out:
+            continue
+        m = re.search(pat, t, re.I)
+        if not m:
+            continue
+        eff = _generic_amount_effect(m.group(1))
+        if eff is None:
+            continue
+        if ev == "cast":
+            def cb(game, perm, card=None, _e=eff, **_kw):
+                if card is not None and ({"instant", "sorcery"} & card.types):
+                    _e(game, perm.controller)
+        else:
+            def cb(game, perm, _e=eff, *_a, **_kw):
+                _e(game, perm.controller)
+        out[ev] = cb
+    return out
+
+
 def _count_word(w):
     """Palabra o dígito -> int, o None."""
     w = (w or "").strip().lower()
@@ -684,6 +719,20 @@ def _generic_amount_effect(oracle: str):
             game.log(f"{ctrl.name}: {_n} de daño a cada oponente")
         return eff
 
+    # drenaje: "each opponent loses N life" (+ opcional "you gain that much/N life")
+    m = re.search(r"each opponent loses (\w+) life", t)
+    if m and (n := _count_word(m.group(1))):
+        gain = bool(re.search(r"you gain (that much|\w+) life", t))
+        def eff(game, ctrl, *_a, _n=n, _gain=gain):
+            opps = game.opponents(ctrl)
+            for o in opps:
+                o.life -= _n
+            if _gain:
+                ctrl.life += _n * max(1, len(opps))
+            game.log(f"{ctrl.name}: cada rival pierde {_n} de vida"
+                     + (" y él gana vida" if _gain else ""))
+        return eff
+
     # quema a un objetivo tipo jugador (any target / target player / creature or
     # player): se la mandamos al rival más débil (auto) y queda VISIBLE en la vida.
     m = re.search(r"deals? (\w+) damage to (?:any target|target player|"
@@ -956,6 +1005,18 @@ def build_card_from_data(data: dict) -> Card:
     if atk_eff is not None and "attacks" not in card.triggers:
         card.triggers = dict(card.triggers)
         card.triggers["attacks"] = atk_eff
+
+    # disparos por evento: muerte de criatura, daño de combate a jugador, magecraft.
+    evs = _event_trigger_effect(data.get("oracle_text", ""))
+    if evs:
+        card.triggers = dict(card.triggers)
+        for ev, cb in evs.items():
+            card.triggers.setdefault(ev, cb)
+
+    # "no puede ser bloqueada" (incondicional) -> keyword unblockable
+    _ot = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "").lower())
+    if re.search(r"can't be blocked(?:\.|,| this turn|$)", _ot):
+        card.keywords = set(card.keywords) | {"unblockable"}
 
     return cards.attach_generic_effects(card)
 
