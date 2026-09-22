@@ -31,6 +31,15 @@ KEYWORDS = {
 }
 
 
+class ReactionPause(Exception):
+    """Se lanza cuando un rival pone un hechizo en la pila y el humano puede
+    responder: la partida interactiva la captura, muestra la ventana de reacción
+    y reanuda el turno del bot tras la respuesta (o el paso)."""
+    def __init__(self, spell):
+        super().__init__("reaction")
+        self.spell = spell
+
+
 class Zone(Enum):
     LIBRARY = "library"
     HAND = "hand"
@@ -947,6 +956,11 @@ class Game:
                                       targets=targets, label=f"spell:{card.name}"))
         if self._in_priority:
             return True   # lanzado en respuesta: el bucle externo lo resolvera
+        # ventana de reacción del humano: si un rival lanza algo que el humano
+        # podría responder, pausamos (la capa interactiva reanuda tras responder).
+        rc = getattr(self, "reaction_check", None)
+        if rc is not None and rc(player, card):
+            raise ReactionPause(self.stack[-1])
         self._run_priority_and_resolve()
         return True
 

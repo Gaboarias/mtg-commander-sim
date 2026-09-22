@@ -392,10 +392,16 @@ def test_interactive_defense_window():
             [{"key": "marvel"}, {"key": "strixhaven"}, {"key": "old-guard"}],
             human_index=0, seed=seed)
         ig.keep([])                                    # pasar el mulligan
-        for _ in range(40):
+        for _ in range(60):
             st = ig.state()
             if st["phase"] == "over":
                 break
+            if st["phase"] == "react":       # ventana de reacción: paso
+                ig.react()
+                continue
+            if st["phase"] == "choose":      # decisión pendiente (descarte, etc.)
+                ig.resolve_choice(0)
+                continue
             if st["phase"] == "defense":
                 c = st["combat"]
                 assert c and c["attackers"] and "from" in c
@@ -2405,6 +2411,60 @@ def test_planeswalker_loyalty_from_face_and_survives():
         "name": "Nolo", "type_line": "Legendary Planeswalker — X", "mana_cost": "{2}{U}",
         "color_identity": ["U"], "oracle_text": "+1: Nada."})
     assert pw2.loyalty == 3
+
+
+def test_human_discards_by_choice():
+    # con más de 7 cartas, al terminar el turno el HUMANO elige qué descartar.
+    import interactive, cards, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    hu.hand = [cards.creature(f"C{i}", "1G", 1, 1) for i in range(9)]   # 9 en mano
+    st = ig.end_turn()
+    assert st["phase"] == "choose" and st["choice"]["kind"] == "discard"
+    gy0 = len(hu.graveyard)
+    ig.resolve_choice(0)                       # descarta la primera
+    ig.resolve_choice(0)                       # y otra -> baja a 7 y termina el turno
+    assert len(hu.graveyard) - gy0 >= 2        # descartó (lo eligió el humano)
+
+
+def test_reaction_window_to_opponent_spell():
+    # cuando un rival lanza un hechizo que vale la pena y el humano tiene un
+    # instantáneo, la partida pausa en "react"; al pasar, el hechizo resuelve.
+    import interactive, cards, decks, cardsdb, engine
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    op = ig.g.opponents(hu)[0]
+    instant = cardsdb.build_card_from_data({
+        "name": "Zap", "type_line": "Instant", "mana_cost": "{R}", "color_identity": ["R"],
+        "oracle_text": "Zap deals 3 damage to any target."})
+    hu.hand.append(instant)
+    ig.g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), hu)
+    for _ in range(3):
+        ig.g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), op)  # maná del rival
+    beast = cards.creature("Ogro", "2R", 3, 3)
+    ig._react_armed = True                           # ventana activa (fase main del bot)
+    assert ig._offer_reaction(op, beast) is True     # hay con qué responder
+    try:
+        ig.g.cast(op, beast)
+        paused = False
+    except engine.ReactionPause as rp:
+        paused = True
+        ig._react_ctx = {"p": op, "step": "main2", "spell": rp.spell}
+        ig.mode = "react"
+        ig.phase = "react"
+    assert paused                                    # el motor pausó
+    rs = ig._react_state()
+    assert rs["spell"] == "Ogro" and any(r["name"] == "Zap" for r in rs["responses"])
+    # pasar = resolver el hechizo en la pila -> la criatura entra
+    ig.g._run_priority_and_resolve()
+    assert any(pm.name == "Ogro" for pm in op.battlefield)
+    # sin instantáneo NO se abre la ventana
+    hu.hand = [c for c in hu.hand if c.name != "Zap"]
+    assert ig._offer_reaction(op, beast) is False
 
 
 # -- partida completa corre sin excepciones -------------------------------- #

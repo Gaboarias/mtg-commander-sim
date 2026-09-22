@@ -13,7 +13,7 @@ from __future__ import annotations
 import copy
 import run
 import carddesc
-from engine import Game, Cost
+from engine import Game, Cost, ReactionPause
 
 
 def from_registered(specs, human_index=0, seed=0, level="intermedio"):
@@ -77,14 +77,18 @@ class InteractiveGame:
         self.phase = "mulligan"     # mulligan | main | defense | over
         self.attacked = False
         self.winner = None
-        self.mode = None            # None | "defense"
+        self.mode = None            # None | "defense" | "react"
         self._attacker = None       # jugador que ataca (durante defensa)
         self._declared = []         # atacantes declarados (Permanent)
         self.mulls = 0              # mulligans que llevás (para el londrino)
         self._undo = []             # pila de snapshots para deshacer jugadas del turno
+        self._react_armed = False   # ventana de reacción activa (durante main del bot)
+        self._react_ctx = None      # {p, step, spell} para reanudar tras responder
         # el motor pausa una resolución cuando el HUMANO debe elegir (revelar, etc.)
         self.g.interactive_human = self.human()
         self.g.pending_choice = None
+        # y pausa el turno del bot cuando el humano puede responder a un hechizo
+        self.g.reaction_check = self._offer_reaction
         self._ai_mulligans()        # los rivales hacen mulligan solos
         # el humano decide en la fase "mulligan" (ver mulligan()/keep())
 
@@ -201,21 +205,105 @@ class InteractiveGame:
                 return True          # el bot me ataca en su turno extra
         return False
 
-    # -- turno rival, con pausa en mi defensa ---------------------------- #
+    # -- turno rival, con pausa en mi defensa / reacción ----------------- #
     def _ai_turn(self, p):
         self.g.begin_turn(p)
         self.g.sba()
         if p.lost:
             return False
-        if p.policy:
-            p.policy.main_phase(self.g, p, second=False)
-            self.g.resolve_stack()
+        return self._ai_steps(p, "main1")
+
+    def _ai_steps(self, p, step):
+        """Corre el turno del bot desde `step` (main1 / combat / main2),
+        capturando la pausa de reacción del humano. Devuelve True si hay que
+        frenar (defensa o reacción); reanudable con el mismo `step`."""
+        try:
+            if step == "main1":
+                if p.policy:
+                    self._react_armed = True
+                    try:
+                        p.policy.main_phase(self.g, p, second=False)
+                    finally:
+                        self._react_armed = False
+                    self.g.resolve_stack()
+                self.g.sba()
+                step = "combat"
+            if step == "combat":
+                if not p.lost and self.g.opponents(p):
+                    if self._ai_combat(p):
+                        return True          # pausa de defensa
+                step = "main2"
+            if step == "main2":
+                if not p.lost and p.policy:
+                    self._react_armed = True
+                    try:
+                        p.policy.main_phase(self.g, p, second=True)
+                    finally:
+                        self._react_armed = False
+                    self.g.resolve_stack()
+                self.g.sba()
+                self.g.end_turn(p)
+                self.g.sba()
+            return False
+        except ReactionPause as rp:
+            self._react_ctx = {"p": p, "step": step, "spell": rp.spell}
+            self.mode = "react"
+            self.phase = "react"
+            return True
+
+    def _offer_reaction(self, caster, card):
+        """¿El humano puede/quiere responder a `card` que lanza `caster`? Solo
+        durante la fase principal de un bot, sobre hechizos que valen la pena, y
+        si el humano tiene un instantáneo pagable con qué responder."""
+        if not self._react_armed:
+            return False
+        hu = self.human()
+        if caster is hu or hu.lost or hu not in self.g.opponents(caster):
+            return False
+        worth = bool(card.types & {"creature", "planeswalker"}) or \
+            bool(getattr(card, "tags", set()) & {"removal", "wipe", "engine", "counter"})
+        if not worth:
+            return False
+        return any((("instant" in c.types) or ("flash" in c.keywords))
+                   and c.cost is not None and hu.can_pay(c.cost) for c in hu.hand)
+
+    def react(self, action=None, i=None, uid=None, index=0, target_uids=None):
+        """El humano responde a un hechizo del rival (o pasa) y se reanuda el
+        turno del bot. action: 'cast' (instantáneo de la mano) | 'ability' |
+        'gy_ability' | None (pasar)."""
+        if self.mode != "react" or not self._react_ctx:
+            return self.state()
+        ctx = self._react_ctx
+        self._react_ctx = None
+        self.mode = None
+        self.phase = "waiting"
+        hu = self.human()
+        if action == "cast" and i is not None and 0 <= i < len(hu.hand):
+            c = hu.hand[i]
+            if (("instant" in c.types) or ("flash" in c.keywords)) and hu.can_pay(c.cost):
+                spec = getattr(c, "target_spec", None)
+                if spec == "stack_spell":
+                    tgt = [ctx["spell"]]                 # contrahechizo: apunta a la pila
+                else:
+                    tgt = self._chosen_targets(c, target_uids, spec=spec) if spec else None
+                self.g.cast(hu, c, targets=tgt)
+        elif action == "ability" and uid is not None:
+            pm = self._find_perm(uid)
+            if pm is not None:
+                self.g.activate_ability(pm, index, targets=None)
+        elif action == "gy_ability" and i is not None and 0 <= i < len(hu.graveyard):
+            self.g.activate_gy_ability(hu, hu.graveyard[i], index)
+        # vaciar la pila (respuesta + hechizo original) con prioridad de todos
+        self.g._run_priority_and_resolve()
         self.g.sba()
-        if not p.lost and self.g.opponents(p):
-            if self._ai_combat(p):
-                return True
-        self._ai_after_combat(p)
-        return False
+        if len(self.g.alive()) <= 1:
+            self._finish()
+            return self.state()
+        # reanudar el turno del bot desde donde quedó
+        if self._ai_steps(ctx["p"], ctx["step"]):
+            return self.state()          # volvió a pausar (otra reacción o defensa)
+        self._advance_to_human()
+        return self.state()
 
     def _ai_combat(self, p):
         self.g._begin_combat(p)
@@ -238,15 +326,6 @@ class InteractiveGame:
         self.g._finish_combat(declared)
         self.g.sba()
         return False
-
-    def _ai_after_combat(self, p):
-        self.g.sba()
-        if not p.lost and p.policy:
-            p.policy.main_phase(self.g, p, second=True)
-            self.g.resolve_stack()
-        self.g.sba()
-        self.g.end_turn(p)
-        self.g.sba()
 
     # -- acciones de defensa (respuesta a un ataque) --------------------- #
     def _defense_incoming(self):
@@ -316,7 +395,9 @@ class InteractiveGame:
         if len(self.g.alive()) <= 1:
             self._finish()
             return self.state()
-        self._ai_after_combat(p)
+        # completar el turno del atacante (main 2 + fin), reanudable por reacción
+        if self._ai_steps(p, "main2"):
+            return self.state()
         self._advance_to_human()
         return self.state()
 
@@ -608,11 +689,40 @@ class InteractiveGame:
         if not self._my_turn():
             return self.state()
         p = self.human()
+        # descarte por mano (más de 7): lo elige EL HUMANO, no su IA
+        if len(p.hand) > 7 and self.g.pending_choice is None:
+            self._prompt_discard(p)
+            return self.state()
+        self._finish_end_turn(p)
+        return self.state()
+
+    def _prompt_discard(self, p):
+        """Pide al humano qué carta descartar (una a una) hasta quedar en 7."""
+        def _apply(idx):
+            if idx is not None and 0 <= idx < len(p.hand):
+                c = p.hand.pop(idx)
+                p.graveyard.append(c)
+                self.g.emit("to_graveyard", player=p, card=c)
+                self.g.log(f"{p.name} descarta {c.name}")
+            if len(p.hand) > 7:
+                self._prompt_discard(p)      # seguir descartando
+            else:
+                self._finish_end_turn(p)
+        extra = len(p.hand) - 7
+        self.g.pending_choice = {
+            "kind": "discard",
+            "prompt": f"Tenés {len(p.hand)} cartas: descartá hasta quedar en 7 "
+                      f"(faltan {extra}).",
+            "options": [{"i": j, "name": c.name, "is_land": c.is_land()}
+                        for j, c in enumerate(p.hand)],
+            "allow_none": False, "_apply": _apply,
+        }
+
+    def _finish_end_turn(self, p):
         self._undo = []                 # no se puede deshacer entre turnos
         self.g.end_turn(p)
         self.g.sba()
         self._advance_to_human()
-        return self.state()
 
     # -- deshacer jugada (fase principal del humano) --------------------- #
     def _snapshot(self):
@@ -823,6 +933,47 @@ class InteractiveGame:
             "incoming_damage": sum(a["power"] for a in attackers),
         }
 
+    def _react_state(self):
+        """Datos de la ventana de reacción: qué hechizo lanzó el rival y con qué
+        puede responder el humano (instantáneos, habilidades, del cementerio)."""
+        me = self.human()
+        ctx = self._react_ctx or {}
+        spell = ctx.get("spell")
+        src = getattr(spell, "source", None)
+        responses = [{
+            "i": i, "name": c.name, "cost": _cost_str(c),
+            "target_spec": getattr(c, "target_spec", None),
+            "target_count": getattr(c, "target_count", 1),
+            "targets": self._targets_for(c),
+        } for i, c in enumerate(me.hand)
+            if (("instant" in c.types) or ("flash" in c.keywords))
+            and c.cost is not None and me.can_pay(c.cost)]
+        # item 4: habilidades a velocidad de instante (permanentes y cementerio)
+        abilities = []
+        for pm in me.battlefield:
+            for j, ab in enumerate(getattr(pm.card, "activated_abilities", ()) or ()):
+                if ab.get("tap") and pm.tapped:
+                    continue
+                if not me.can_pay(ab.get("cost")):
+                    continue
+                abilities.append({"uid": pm.uid, "name": pm.name, "index": j,
+                                  "label": ab.get("label", "Habilidad"),
+                                  "cost": _cost_str_cost(ab.get("cost"))})
+        gy_abilities = []
+        for i, c in enumerate(me.graveyard):
+            for j, ab in enumerate(getattr(c, "gy_abilities", ()) or ()):
+                if ab.get("cost") is None or me.can_pay(ab.get("cost")):
+                    gy_abilities.append({"i": i, "index": j, "name": c.name,
+                                         "label": ab.get("label", "Habilidad"),
+                                         "cost": _cost_str_cost(ab.get("cost"))})
+        return {
+            "spell": getattr(src, "name", "?"),
+            "from": spell.controller.name if spell is not None else "",
+            "responses": responses,
+            "abilities": abilities,
+            "gy_abilities": gy_abilities,
+        }
+
     def state(self):
         players = []
         for i, pl in enumerate(self.players):
@@ -849,6 +1000,7 @@ class InteractiveGame:
             "players": players,
             "legal": self.legal(),
             "combat": self._defense_state() if self.mode == "defense" else None,
+            "react": self._react_state() if self.mode == "react" else None,
             "choice": self._choice_state(),
             "mulligan": ({"mulls": self.mulls, "to_bottom": max(0, self.mulls - 1),
                           "lands": sum(1 for c in self.human().hand if c.is_land())}

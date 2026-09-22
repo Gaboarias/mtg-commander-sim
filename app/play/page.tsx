@@ -53,9 +53,16 @@ type Combat = {
 type Mulligan = { mulls: number; to_bottom: number; lands: number };
 type ChoiceOpt = { i: number; name: string; is_land?: boolean; ok?: boolean };
 type Choice = { kind: string; prompt: string; options: ChoiceOpt[]; allow_none: boolean; card?: string };
+type ReactState = {
+  spell: string; from: string;
+  responses: { i: number; name: string; cost: string; target_spec?: string | null }[];
+  abilities: { uid: number; name: string; index: number; label: string; cost: string }[];
+  gy_abilities: { i: number; index: number; name: string; label: string; cost: string }[];
+};
 type GameState = {
   turn: number; active: number; human_index: number; phase: string; attacked: boolean;
   winner: string | null; players: PlayerState[]; legal: Legal; combat: Combat | null;
+  react?: ReactState | null;
   choice: Choice | null; mulligan: Mulligan | null; log: string[];
   ability_feed?: AbilityEvent[];
 };
@@ -92,6 +99,7 @@ def act(kind, arg_json):
     elif kind == 'ability': g.activate_ability(a.get('uid'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'respond': g.respond(a.get('i'), a.get('target_uids'), a.get('mode'))
     elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
+    elif kind == 'react': g.react(a.get('action'), a.get('i'), a.get('uid'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'undo': g.undo()
     elif kind == 'choose': g.resolve_choice(a.get('index'))
     elif kind == 'mulligan': g.mulligan()
@@ -583,6 +591,56 @@ export default function Play() {
             </motion.div>
           )}
 
+          {state.react && (
+            <div className="card def-panel">
+              <h2 style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <Icon name="bolt" size={18} /> {state.react.from} lanza <b>{state.react.spell}</b> — ¿respondés?
+              </h2>
+              {state.react.responses.length > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Responder (instantáneo):</span>
+                  {state.react.responses.map((r) => (
+                    <button key={"rr" + r.i} className="ghost" onClick={() => doAct("react", { action: "cast", i: r.i })}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Icon name="bolt" size={13} /> {r.name}{r.target_spec ? <Icon name="target" size={12} /> : null} <span className="muted">{r.cost}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {state.react.abilities.length > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Habilidades:</span>
+                  {state.react.abilities.map((a) => (
+                    <button key={"ra" + a.uid + "-" + a.index} className="ghost pw-ab"
+                      onClick={() => doAct("react", { action: "ability", uid: a.uid, index: a.index })}>
+                      <b>{a.name}</b> <span className="muted">{a.cost}</span> <em className="pw-txt">{a.label}</em>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {state.react.gy_abilities.length > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Del cementerio:</span>
+                  {state.react.gy_abilities.map((a) => (
+                    <button key={"rg" + a.i + "-" + a.index} className="ghost pw-ab"
+                      onClick={() => doAct("react", { action: "gy_ability", i: a.i, index: a.index })}>
+                      <Icon name="grave" size={12} /> <b>{a.name}</b> <span className="muted">{a.cost}</span> <em className="pw-txt">{a.label}</em>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="act-block">
+                <button className="go" onClick={() => doAct("react", {})} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <Icon name="skip-forward" size={14} /> Pasar (dejar que resuelva)
+                </button>
+              </div>
+              <p className="muted" style={{ fontSize: ".8rem" }}>
+                Un rival lanzó un hechizo y podés responder antes de que resuelva
+                (contrahechizo, remoción a velocidad de instante, o pasar).
+              </p>
+            </div>
+          )}
+
           {state.mulligan && (() => {
             const m = state.mulligan;
             const hand = state.players[meIdx]?.hand_cards || [];
@@ -932,6 +990,7 @@ export default function Play() {
           explore: "Explorar", search: "Buscar en la biblioteca",
           look_take: "Elegí una carta", reveal_land: "Elegí una carta",
           etb_target: "Elegí un objetivo", creature_type: "Elegí un tipo de criatura",
+          discard: "Descartar (mano de más de 7)", may: "¿Querés hacerlo?",
         };
         const title = titles[ch.kind] || "Elegí una carta";
         const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno" : "No llevarme ninguna";
