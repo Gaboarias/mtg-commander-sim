@@ -154,6 +154,7 @@ class Card:
     gy_triggers: dict = field(default_factory=dict)  # disparos MIENTRAS está en cementerio/exilio:
     #   {evento: callback(game, player, card, **kw)}
     x_spell: bool = False                            # el coste tiene {X} (se elige al lanzar)
+    etb_counters: dict = field(default_factory=dict)  # "entra con N contadores": {kind: n}
     gy_grant: dict = field(default_factory=dict)     # habilidad ESTÁTICA desde el cementerio
     #   (Anger/Brawn/Wonder): {"keyword": str, "need_subtype": str|None}. Mientras esta
     #   carta está en tu cementerio (y controlás un need_subtype si aplica), tus criaturas
@@ -749,6 +750,10 @@ class Game:
         # planeswalker: entra con su lealtad inicial
         if "planeswalker" in card.types and card.loyalty:
             perm.counters["loyalty"] = card.loyalty
+        # "entra con N contadores" (efecto de reemplazo: antes de los disparos ETB)
+        for kind, n in (getattr(card, "etb_counters", None) or {}).items():
+            if n:
+                perm.counters[kind] = perm.counters.get(kind, 0) + n
         player.battlefield.append(perm)
         if card.on_etb:
             self.note_ability(card, "entra al campo", controller=player)
@@ -901,17 +906,45 @@ class Game:
                             and perm.counters.get("loyalty", 0) <= 0):
                         self.to_graveyard(perm, "loyalty 0")
                         changed = True
-            # regla de legendarios
+            # regla de legendarios: el controlador elige cuál conserva. El humano
+            # decide (pending_choice); los bots conservan la "mejor" copia.
+            human = getattr(self, "interactive_human", None)
             for p in self.players:
-                seen = {}
+                by_name = {}
                 for perm in list(p.battlefield):
-                    if not perm.card.is_legendary():
+                    if perm.card.is_legendary():
+                        by_name.setdefault(perm.name, []).append(perm)
+                for _name, dupes in by_name.items():
+                    if len(dupes) < 2:
                         continue
-                    if perm.name in seen:
-                        self.to_graveyard(perm, "legend rule")
-                        changed = True
+                    if p is human and self.pending_choice is None:
+                        self._legend_choice(p, dupes)   # se resuelve por elección
                     else:
-                        seen[perm.name] = perm
+                        keep = max(dupes, key=lambda x: (x.power, x.toughness))
+                        for perm in dupes:
+                            if perm is not keep:
+                                self.to_graveyard(perm, "legend rule")
+                                changed = True
+
+    def _legend_choice(self, p: "Player", dupes: list):
+        """El humano elige cuál copia legendaria conserva; el resto va al cementerio."""
+        keep_list = list(dupes)
+
+        def _apply(idx):
+            keep = keep_list[idx] if idx is not None and 0 <= idx < len(keep_list) else keep_list[0]
+            for perm in keep_list:
+                if perm is not keep and perm in p.battlefield:
+                    self.to_graveyard(perm, "legend rule")
+            self.sba()
+
+        self.pending_choice = {
+            "kind": "legend",
+            "prompt": f"Tenés {len(dupes)} copias de {dupes[0].name}: elegí cuál conservás "
+                      f"(las otras van al cementerio).",
+            "options": [{"i": i, "name": f"{d.name} ({d.power}/{d.toughness})"}
+                        for i, d in enumerate(dupes)],
+            "allow_none": False, "_apply": _apply,
+        }
 
     # -- lanzar hechizos -------------------------------------------------- #
     def cast(self, player: "Player", card: Card, from_command: bool = False,

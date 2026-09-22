@@ -2621,6 +2621,42 @@ def test_hybrid_cost_payable_with_any_color():
     assert g.cast(me, c) is not False     # pagable con 3 bosques pese a ser W/U
 
 
+def test_enters_with_counters():
+    import cardsdb, cards
+    g, me, op = _duel()
+    c = cardsdb.build_card_from_data({
+        "name": "Hydra", "type_line": "Creature", "mana_cost": "{2}{G}",
+        "power": "0", "toughness": "0", "color_identity": ["G"],
+        "oracle_text": "Hydra enters the battlefield with three +1/+1 counters on it."})
+    assert c.etb_counters == {"+1/+1": 3}
+    perm = g.move_to_battlefield(c, me)
+    assert perm.counters.get("+1/+1") == 3 and perm.power == 3 and perm.toughness == 3
+
+
+def test_legend_rule_bot_keeps_better():
+    import cards
+    g, me, op = _duel()                       # sin interactive_human -> ruta bot
+    a = g.move_to_battlefield(cards.creature("Rey", "2G", 3, 3, legendary=True), me)
+    a.counters["+1/+1"] = 2                    # 5/5
+    b = g.move_to_battlefield(cards.creature("Rey", "2G", 3, 3, legendary=True), me)  # 3/3
+    g.sba()
+    assert a in me.battlefield and b not in me.battlefield   # conserva la mejor
+
+
+def test_legend_rule_human_chooses():
+    import interactive, cards, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    a = ig.g.move_to_battlefield(cards.creature("Legend", "2G", 3, 3, legendary=True), hu)
+    b = ig.g.move_to_battlefield(cards.creature("Legend", "2G", 4, 4, legendary=True), hu)
+    ig.g.sba()
+    assert ig.g.pending_choice and ig.g.pending_choice["kind"] == "legend"
+    ig.resolve_choice(1)                       # conserva la segunda copia
+    assert b in hu.battlefield and a not in hu.battlefield
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

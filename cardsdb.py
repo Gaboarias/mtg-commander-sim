@@ -509,6 +509,22 @@ def _parse_gy_play(oracle: str, types: set):
     return {}
 
 
+def _parse_etb_counters(oracle: str):
+    """'~ enters (the battlefield) with N +1/+1 counters' (o un contador nombrado
+    como charge). Devuelve {kind: n}."""
+    t = re.sub(r"\s+", " ", (oracle or "")).strip()
+    out = {}
+    m = re.search(r"enters (?:the battlefield )?with (\w+) \+1/\+1 counters?", t, re.I)
+    if m and (n := _count_word(m.group(1))):
+        out["+1/+1"] = n
+    m = re.search(r"enters (?:the battlefield )?with (\w+) ([a-z]+) counters?", t, re.I)
+    if m and (n := _count_word(m.group(1))):
+        kind = m.group(2).lower()
+        if kind not in ("loyalty",):
+            out.setdefault(kind, n)
+    return out
+
+
 def _wipe_then_tokens_effect(oracle: str):
     """Barrida CON rider de fichas: 'Destroy all creatures. Then create a P/T …
     <subtipo> creature token for each nontoken creature you controlled that was
@@ -1325,6 +1341,9 @@ def build_card_from_data(data: dict) -> Card:
     _gyg = _parse_gy_grant(data.get("oracle_text", ""))
     if _gyg:
         card.gy_grant = _gyg
+    _etc = _parse_etb_counters(data.get("oracle_text", ""))
+    if _etc:
+        card.etb_counters = _etc
 
     # Produccion de mana: usar `produced_mana` de Scryfall (el mana REAL que
     # produce la carta), no la identidad de color — las tierras no basicas son
