@@ -440,6 +440,79 @@ def test_imported_removal_is_targeted():
     assert "A" not in names and "B" not in names and "Keep" in names
 
 
+def test_creature_enters_watcher_draws_once_per_turn():
+    import cardsdb, cards
+    from engine import Game, Player
+    v = cardsdb.build_card_from_data({
+        "name": "Vamp", "type_line": "Creature", "mana_cost": "{2}{W}",
+        "power": "2", "toughness": "3", "color_identity": ["W"],
+        "oracle_text": "Whenever one or more creatures you control with mana value 3 "
+                       "or less enter, draw a card. This ability triggers only once "
+                       "each turn."})
+    assert "creature_enters" in v.triggers
+    me = Player("yo", [cards.creature(f"C{i}", "1W", 1, 1) for i in range(20)],
+                cards.creature("Cmd", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.move_to_battlefield(v, me)
+    h0 = len(me.hand)
+    g.move_to_battlefield(cards.creature("Small", "1W", 1, 1), me); g.resolve_stack()
+    assert len(me.hand) == h0 + 1            # criatura CMV≤3 -> roba
+    g.move_to_battlefield(cards.creature("Small2", "1W", 1, 1), me); g.resolve_stack()
+    assert len(me.hand) == h0 + 1            # 2a en el mismo turno: once -> no roba
+    g.turn = 2
+    g.move_to_battlefield(cards.creature("Small3", "1W", 1, 1), me); g.resolve_stack()
+    assert len(me.hand) == h0 + 2            # turno nuevo: vuelve a robar
+    # una criatura del rival no dispara el watcher propio
+    hb = len(me.hand); g.turn = 3
+    g.move_to_battlefield(cards.creature("Foe", "1U", 1, 1), op); g.resolve_stack()
+    assert len(me.hand) == hb
+
+
+def test_creature_enters_watcher_ignores_big_creatures():
+    import cardsdb, cards
+    from engine import Game, Player
+    v = cardsdb.build_card_from_data({
+        "name": "Vamp", "type_line": "Creature", "mana_cost": "{2}{W}",
+        "power": "2", "toughness": "3", "color_identity": ["W"],
+        "oracle_text": "Whenever a creature you control with mana value 3 or less "
+                       "enters, draw a card."})
+    me = Player("yo", [cards.creature("C", "1W", 1, 1) for _ in range(20)],
+                cards.creature("Cmd", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.move_to_battlefield(v, me); g.resolve_stack()   # consume el disparo por su propia entrada
+    h0 = len(me.hand)
+    g.move_to_battlefield(cards.creature("Big", "5W", 6, 6), me); g.resolve_stack()
+    assert len(me.hand) == h0                # CMV 6 > 3 -> no dispara
+
+
+def test_etb_destroy_nonbasic_land_and_ramp():
+    import cardsdb, cards
+    from engine import Game, Player
+    w = cardsdb.build_card_from_data({
+        "name": "White Orchid Phantom", "type_line": "Creature — Spirit Knight",
+        "mana_cost": "{1}{W}", "power": "2", "toughness": "2",
+        "keywords": ["Flying", "First strike"], "color_identity": ["W"],
+        "oracle_text": "Flying, first strike\nWhen this creature enters, destroy up "
+                       "to one target nonbasic land. Its controller may search their "
+                       "library for a basic land card, put it onto the battlefield "
+                       "tapped, then shuffle."})
+    assert w.on_etb is not None
+    me = Player("yo", [cards.creature("C", "1W", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.land("Forest", ["G"], basic=True) for _ in range(10)],
+                cards.creature("O", "2G", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.move_to_battlefield(cards.land("Command Tower", ["W", "U", "B", "R", "G"]), op)
+    g.move_to_battlefield(w, me)
+    assert not any(pm.name == "Command Tower" for pm in op.battlefield)   # destruida
+    assert any(pm.card.is_land() and "basic" in pm.card.supertypes and pm.tapped
+               for pm in op.battlefield)                                 # básica tapeada
+
+
 def test_modal_keeps_unmodeled_mode_so_picker_shows():
     # Un modal donde UN modo no está modelado NO debe descartarse: el selector
     # igual se ofrece y el modo elegido queda registrado.

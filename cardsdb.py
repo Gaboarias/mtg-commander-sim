@@ -419,7 +419,43 @@ def _event_trigger_effect(oracle: str):
             def cb(game, perm, _e=eff, *_a, **_kw):
                 _e(game, perm.controller)
         out[ev] = cb
+
+    # "cuando entra una criatura (que controlás) [con CMV N o menos], <efecto>"
+    me = re.search(r"whenever (?:one or more|a|an|another) (?:nontoken )?creatures?"
+                   r"(?: you control)?(?: with mana value (\d+) or less)?"
+                   r"[^,]*?enters?(?: the battlefield)?[^,]*,\s*(.{0,160})", t, re.I)
+    if me and "creature_enters" not in out:
+        lim = int(me.group(1)) if me.group(1) else None
+        eff = _generic_amount_effect(me.group(2))
+        if eff is None:
+            eff = (lambda g, ctrl, *_a, _l=_short_label(me.group(2)):
+                   g.log(f"{ctrl.name}: {_l}"))
+        yours = "you control" in t.lower()
+        another = bool(re.match(r"\s*whenever another", t, re.I))
+        once = "only once each turn" in t.lower()
+
+        def cb(game, watcher, entered=None, _e=eff, _lim=lim,
+               _yours=yours, _another=another, _once=once):
+            if entered is None:
+                return
+            if _yours and entered.controller is not watcher.controller:
+                return
+            if _another and entered is watcher:
+                return
+            if _lim is not None and _cmc(entered) > _lim:
+                return
+            if _once and getattr(watcher, "_ce_turn", None) == game.turn:
+                return
+            watcher._ce_turn = game.turn
+            _e(game, watcher.controller)
+        out["creature_enters"] = cb
     return out
+
+
+def _cmc(perm):
+    """Coste de maná convertido de un permanente (0 si no tiene coste)."""
+    c = getattr(perm, "card", perm)
+    return c.cost.cmc if getattr(c, "cost", None) else 0
 
 
 def _count_word(w):
@@ -764,6 +800,37 @@ def _generic_amount_effect(oracle: str):
         def eff(game, ctrl, *_a):
             game.extra_turns.append(ctrl)
             game.log(f"{ctrl.name} tomará un turno extra")
+        return eff
+
+    # destruir una tierra NO básica (p. ej. White Orchid Phantom): auto-elige la de
+    # un rival; su dueño puede buscar una básica tapeada (compensación).
+    if re.search(r"destroy (?:up to )?(?:one |a )?target nonbasic land", t):
+        give = "basic land" in t and "search" in t
+        def eff(game, ctrl, *_a, _give=give):
+            victim = None
+            for o in game.opponents(ctrl):
+                for pm in o.battlefield:
+                    if pm.card.is_land() and "basic" not in pm.card.supertypes:
+                        victim = pm
+                        break
+                if victim:
+                    break
+            if victim is None:
+                game.log(f"{ctrl.name}: no hay tierra no básica para destruir")
+                return
+            owner = victim.controller
+            game.destroy(victim, "destrucción de tierra")
+            game.log(f"{ctrl.name} destruye {victim.name} (no básica) de {owner.name}")
+            if _give:
+                basics = [c for c in owner.library
+                          if c.is_land() and "basic" in c.supertypes]
+                if basics:
+                    b = basics[0]
+                    owner.library.remove(b)
+                    p = game.move_to_battlefield(b, owner)
+                    p.tapped = True
+                    game.rng.shuffle(owner.library)
+                    game.log(f"{owner.name} busca una tierra básica (tapeada)")
         return eff
 
     # fichas de recurso (Treasure/Clue/Food/Blood): visibles en el tablero.

@@ -671,6 +671,19 @@ class Game:
             self.note_ability(card, "entra al campo", controller=player)
             card.on_etb(self, player, perm)
         self.emit("etb", player=player, perm=perm)
+        # disparadores "cuando entra una criatura (que controlás)": necesitan la
+        # criatura que entró, así que se despachan aparte (emit no la pasa).
+        if card.is_creature():
+            for w in self.all_permanents():
+                cb = w.card.triggers.get("creature_enters")
+                if cb is None:
+                    continue
+                self.stack.append(StackObject(
+                    controller=w.controller,
+                    resolve=(lambda g, _cb=cb, _w=w, _e=perm: _cb(g, _w, entered=_e)),
+                    source=w, label=f"creature_enters:{w.name}"))
+                self.note_ability(w.card, "cuando entra una criatura",
+                                  controller=w.controller)
         if card.is_land():
             self.emit("landfall", player=player)
         return perm
