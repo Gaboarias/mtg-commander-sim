@@ -353,7 +353,7 @@ export default function Watch() {
                   <button key={i} className="play-line" onClick={() => { setPlaying(false); setIdx(a.step); }}
                     title={a.controller ? `Controlada por ${a.controller}` : undefined}>
                     <b>{a.card}</b>
-                    <span className="muted"> — {a.kinds.join(" · ")}</span>
+                    <span className="muted">{a.kinds.join(" · ")}</span>
                     {a.count > 1 ? <span className="muted"> ×{a.count}</span> : null}
                     <span className="pl-turn" style={{ marginLeft: 6 }}>
                       T{a.turns.slice(0, 6).join(", T")}{a.turns.length > 6 ? "…" : ""}

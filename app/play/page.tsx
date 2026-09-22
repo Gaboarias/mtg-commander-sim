@@ -435,7 +435,7 @@ export default function Play() {
               <span className="turnbadge">Turno {state.turn}</span>
               <span className="label">
                 {state.phase === "over" ? "Partida terminada"
-                  : myTurn ? "Tu turno — jugá tus cartas" : `Juega ${state.players[state.active]?.name}`}
+                  : myTurn ? "Tu turno · jugá tus cartas" : `Juega ${state.players[state.active]?.name}`}
               </span>
               <button className="ghost" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5 }} onClick={() => { setState(null); setError(null); }}>
                 <Icon name="undo" size={14} /> Nueva partida
@@ -504,7 +504,7 @@ export default function Play() {
                           return n;
                         })}
                         style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 8px" }}>
-                        <option value="">— no bloquea —</option>
+                        <option value="">No bloquea</option>
                         {state.combat!.attackers.map((a) => (
                           <option key={a.uid} value={a.uid}>bloquea a {a.name} ({a.power}/{a.toughness})</option>
                         ))}

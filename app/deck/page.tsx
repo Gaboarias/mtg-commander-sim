@@ -886,7 +886,7 @@ export default function DeckPage() {
                 padding: "8px 10px", maxWidth: 260,
               }}
             >
-              <option value="">— un deck de ejemplo —</option>
+              <option value="">Un deck de ejemplo…</option>
               {samples.map((s) => (
                 <option key={s.slug} value={s.slug}>{s.name}</option>
               ))}
@@ -911,7 +911,7 @@ export default function DeckPage() {
                   padding: "8px 10px", maxWidth: 260,
                 }}
               >
-                <option value="">— elegir de la lista ({precons.length}) —</option>
+                <option value="">Elegir de la lista ({precons.length})…</option>
                 {precons.map((p) => (
                   <option key={p.fileName} value={p.fileName}>{p.name} · {p.releaseDate}</option>
                 ))}
@@ -1049,7 +1049,7 @@ export default function DeckPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <strong>Colores del mazo:</strong> <ColorPips colors={effectiveColors()} />
               <span className="muted" style={{ fontSize: ".8rem" }}>
-                {colorOverride ? "— fijados a mano" : `— detectados por el maná de tus cartas${resolved.commander ? " y tu comandante" : ""}`}
+                {colorOverride ? "fijados a mano" : `detectados por el maná de tus cartas${resolved.commander ? " y tu comandante" : ""}`}
               </span>
             </div>
             <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: "wrap" }}>
@@ -1512,7 +1512,7 @@ export default function DeckPage() {
                 <p className="muted">No tenés decks guardados para comparar.</p>
               ) : suggest.decks.map((d) => (
                 <div key={d.name} className="combo" style={{ borderLeftColor: d.in_color ? (d.fills.length ? "var(--accent)" : "#5a6172") : "#7a3030" }}>
-                  <div><b>{d.name}</b> <span className="muted">— {d.verdict}</span></div>
+                  <div><b>{d.name}</b> <span className="muted">· {d.verdict}</span></div>
                 </div>
               ))}
             </div>
