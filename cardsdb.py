@@ -735,6 +735,25 @@ def _generic_amount_effect(oracle: str):
     quema a cada rival > ganancia de vida > mill propio."""
     t = re.sub(r"\s+", " ", (oracle or "").lower())
 
+    # fin de partida directo
+    if "you win the game" in t:
+        def eff(game, ctrl, *_a):
+            for o in game.opponents(ctrl):
+                o.lost = True
+            game.log(f"{ctrl.name} gana la partida")
+        return eff
+    if "you lose the game" in t:
+        def eff(game, ctrl, *_a):
+            ctrl.lost = True
+            game.log(f"{ctrl.name} pierde la partida")
+        return eff
+    # turno extra
+    if re.search(r"take an extra turn", t):
+        def eff(game, ctrl, *_a):
+            game.extra_turns.append(ctrl)
+            game.log(f"{ctrl.name} tomará un turno extra")
+        return eff
+
     # fichas de recurso (Treasure/Clue/Food/Blood): visibles en el tablero.
     m = re.search(r"create (\w+) (treasure|clue|food|blood|gold) tokens?", t)
     if m:
@@ -1063,6 +1082,26 @@ def build_card_from_data(data: dict) -> Card:
     _ot = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "").lower())
     if re.search(r"can't be blocked(?:\.|,| this turn|$)", _ot):
         card.keywords = set(card.keywords) | {"unblockable"}
+
+    # costes alternativos: coste adicional al lanzar y reducción "cuesta {N} menos"
+    if {"instant", "sorcery", "creature", "artifact", "enchantment", "planeswalker"} & types:
+        add = {}
+        mc = re.search(r"as an additional cost to cast [^,]+, ([^.]+)", _ot)
+        if mc:
+            seg = mc.group(1)
+            ml = re.search(r"pay (\w+) life", seg)
+            if ml and (nl := _count_word(ml.group(1))):
+                add["pay_life"] = nl
+            md = re.search(r"discard (\w+) cards?", seg)
+            if md and (nd := _count_word(md.group(1))):
+                add["discard"] = nd
+            if "sacrifice a creature" in seg or "sacrifice another creature" in seg:
+                add["sacrifice"] = True
+        if add:
+            card.additional_cost = add
+        mr = re.search(r"this spell costs \{(\d+)\} less to cast", _ot)
+        if mr:
+            card.cost_reduction = int(mr.group(1))
 
     return cards.attach_generic_effects(card)
 

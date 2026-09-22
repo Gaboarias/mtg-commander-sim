@@ -133,6 +133,9 @@ class Card:
     activated_abilities: tuple = ()                # habilidades activadas con maná:
     #   {"cost"(Cost), "tap"(bool), "label", "effect"(g,ctrl,perm,targets),
     #    "target_spec", "target_count"}
+    additional_cost: dict = field(default_factory=dict)  # coste extra al lanzar:
+    #   {"pay_life": int, "discard": int, "sacrifice": bool}
+    cost_reduction: int = 0                        # "cuesta {N} menos" (genérico)
 
     def identity(self) -> set:
         """Identidad de color: explicita si existe, si no se deduce del coste."""
@@ -797,13 +800,29 @@ class Game:
     def cast(self, player: "Player", card: Card, from_command: bool = False,
              targets=None, chosen_modes=None):
         cost = card.cost
-        # impuesto de comandante
+        # impuesto de comandante + reducción "cuesta {N} menos"
         extra = player.cmdr_tax if from_command else 0
+        red = getattr(card, "cost_reduction", 0) or 0
         pay_cost = cost
-        if cost is not None and extra:
-            pay_cost = Cost(generic=cost.generic + extra, pips=cost.pips)
+        if cost is not None and (extra or red):
+            pay_cost = Cost(generic=max(0, cost.generic + extra - red), pips=cost.pips)
         if not player.can_pay(pay_cost):
             return False
+        # coste adicional al lanzar (pagar vida / descartar / sacrificar)
+        add = getattr(card, "additional_cost", None) or {}
+        if add:
+            if add.get("pay_life"):
+                player.life -= add["pay_life"]
+            for _ in range(add.get("discard", 0)):
+                if player.hand:
+                    player.graveyard.append(player.hand.pop())
+            if add.get("sacrifice"):
+                creqs = [pm for pm in player.battlefield if pm.is_creature()
+                         and pm.card is not card]
+                if creqs:
+                    victim = min(creqs, key=lambda c: (c.power, c.toughness))
+                    self.to_graveyard(victim, "coste adicional")
+            self.log(f"{player.name} paga el coste adicional de {card.name}")
         player.pay(pay_cost)
 
         # quitar de la zona de origen
@@ -1178,6 +1197,19 @@ class Game:
                 continue
             self.run_turn()
             self.sba()
+            # turnos extra ("take an extra turn"), con tope de seguridad
+            taken = 0
+            while (self.extra_turns and taken < 4
+                   and len(self.alive()) > 1 and self.turn < self.max_turns):
+                who = self.extra_turns.pop(0)
+                if who.lost:
+                    continue
+                self.active_index = self.players.index(who)
+                self.log(f"{who.name} toma un turno extra")
+                self.run_turn()
+                self.sba()
+                taken += 1
+            self.extra_turns.clear()
         alive = self.alive()
         if len(alive) == 1:
             self.log(f"GANA {alive[0].name}")

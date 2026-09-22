@@ -733,6 +733,79 @@ def test_impulse_playable_from_exile_interactively():
     assert spell not in hu.impulse and len(hu.battlefield) == bf0 + 1
 
 
+def test_additional_cost_pay_life_and_sacrifice():
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Dark Ritual Beast", "type_line": "Creature", "mana_cost": "{B}",
+        "power": "4", "toughness": "4", "color_identity": ["B"],
+        "oracle_text": "As an additional cost to cast this spell, pay 3 life and "
+                       "sacrifice a creature."})
+    assert c.additional_cost.get("pay_life") == 3 and c.additional_cost.get("sacrifice")
+    me = Player("yo", [cards.creature("F", "1B", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2B", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    chump = g.move_to_battlefield(cards.creature("Chump", "1B", 1, 1), me)
+    g.move_to_battlefield(cards.land("Swamp", ["B"], basic=True), me)
+    life0 = me.life
+    assert g.cast(me, c) is not False
+    assert me.life == life0 - 3                     # pagó 3 de vida
+    assert chump not in me.battlefield              # sacrificó una criatura
+
+
+def test_cost_reduction_makes_spell_cheaper():
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Cheap Draw", "type_line": "Sorcery", "mana_cost": "{4}{U}",
+        "color_identity": ["U"],
+        "oracle_text": "This spell costs {3} less to cast. Draw two cards."})
+    assert c.cost_reduction == 3
+    me = Player("yo", [cards.creature("F", "1U", 1, 1) for _ in range(20)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(2):                              # solo 2 tierras (costo real {1}{U})
+        g.move_to_battlefield(cards.land("Island", ["U"], basic=True), me)
+    assert g.cast(me, c) is not False               # alcanza gracias a la reducción
+
+
+def test_extra_turn_queues_for_controller():
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Time Skip", "type_line": "Sorcery", "mana_cost": "{4}{U}{U}",
+        "color_identity": ["U"],
+        "oracle_text": "Take an extra turn after this one."})
+    assert c.on_cast_resolve is not None
+    me = Player("yo", [cards.creature("F", "1U", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    c.on_cast_resolve(g, me, [])
+    assert me in g.extra_turns
+
+
+def test_you_win_the_game_effect():
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Coalition Victory", "type_line": "Sorcery", "mana_cost": "{3}{W}{U}",
+        "color_identity": ["W", "U"], "oracle_text": "You win the game."})
+    assert c.on_cast_resolve is not None
+    me = Player("yo", [cards.creature("F", "1U", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    c.on_cast_resolve(g, me, [])
+    assert op.lost and not me.lost
+
+
 def test_treasure_token_is_a_mana_source():
     import cardsdb, cards
     from engine import Game, Player
