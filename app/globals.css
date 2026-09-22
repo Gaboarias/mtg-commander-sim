@@ -320,6 +320,11 @@ th { color: var(--muted); font-weight: 600; font-size: .8rem; text-transform: up
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .8rem; line-height: 1.55; white-space: pre-wrap; color: #c8cdd8;
 }
+.choice-thumb {
+  display: inline-block; width: 30px; height: 42px; flex: 0 0 auto;
+  border-radius: 4px; background-size: cover; background-position: center;
+  border: 1px solid var(--border);
+}
 .ability-toast {
   position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
   z-index: 60; display: inline-flex; align-items: center; gap: 8px;

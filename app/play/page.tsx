@@ -940,6 +940,14 @@ export default function Play() {
             <div className="inspect" onClick={(e) => e.stopPropagation()}>
               <h3><Icon name="book" size={17} /> {title}</h3>
               <p className="muted" style={{ marginTop: 2 }}>{ch.prompt}</p>
+              {ch.card && (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, margin: "8px 0 12px" }}>
+                  {art[ch.card]
+                    ? <div className="inspect-art" style={{ backgroundImage: `url(${art[ch.card]})` }} />
+                    : <div className="inspect-art ph"><span>{ch.card}</span></div>}
+                  <b style={{ fontSize: "1.02rem" }}>{ch.card}</b>
+                </div>
+              )}
               <div className="target-list">
                 {ch.options.map((o) => (
                   <button
@@ -947,8 +955,10 @@ export default function Play() {
                     className="ghost"
                     disabled={o.ok === false}
                     onClick={() => doAct("choose", { index: o.i })}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                    <Icon name={isCardPick ? (o.is_land ? "land" : "cards") : "chevron-right"} size={13} />
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    {isCardPick && art[o.name]
+                      ? <span className="choice-thumb" style={{ backgroundImage: `url(${art[o.name]})` }} />
+                      : <Icon name={isCardPick ? (o.is_land ? "land" : "cards") : "chevron-right"} size={13} />}
                     {o.name}
                     {o.ok === false ? <span className="muted"> · no elegible</span> : null}
                   </button>
