@@ -504,6 +504,34 @@ def _parse_gy_play(oracle: str, types: set):
     return {}
 
 
+def _wipe_then_tokens_effect(oracle: str):
+    """Barrida CON rider de fichas: 'Destroy all creatures. Then create a P/T …
+    <subtipo> creature token for each nontoken creature you controlled that was
+    destroyed this way.' (p. ej. Ceaseless Conflict). Devuelve effect(g,ctrl,targets)
+    o None. El controlador recibe una ficha por cada criatura NO-ficha propia que
+    fue destruida (las indestructibles que sobreviven no cuentan)."""
+    t = re.sub(r"\s+", " ", (oracle or "")).strip()
+    if not re.search(r"destroy all creatures", t, re.I):
+        return None
+    m = re.search(r"create an? (\d+)/(\d+)[^.]*?(\w+) creature tokens? for each "
+                  r"nontoken creature you controlled that (?:was|were) destroyed this way",
+                  t, re.I)
+    if not m:
+        return None
+    p_, tgh, sub = int(m.group(1)), int(m.group(2)), m.group(3).capitalize()
+
+    def eff(game, ctrl, targets=None, _p=p_, _t=tgh, _st=sub):
+        mine = [pm for pm in list(ctrl.battlefield)
+                if pm.is_creature() and not pm.is_token]
+        cards.wrath(game, ctrl, None)
+        destroyed = sum(1 for pm in mine if pm not in ctrl.battlefield)
+        for _ in range(destroyed):
+            cards.make_token(game, ctrl, _st, _p, _t, subtypes=(_st,))
+        if destroyed:
+            game.log(f"{ctrl.name}: crea {destroyed} ficha(s) {_p}/{_t} {_st}")
+    return eff
+
+
 def _parse_foretell(oracle: str):
     """Fase B: 'Foretell {coste}' -> Cost para lanzarla ya predicha, o None."""
     t = re.sub(r"\s+", " ", (oracle or "")).strip()
@@ -1402,6 +1430,15 @@ def build_card_from_data(data: dict) -> Card:
             card.target_spec = spec
             card.target_count = max(1, count)
             card.tags = card.tags | {"targeted"}
+
+    # barrida CON rider de fichas ("destroy all creatures, then create N tokens per
+    # your nontoken creature destroyed this way"): p. ej. Ceaseless Conflict. Se
+    # cablea antes de la capa genérica, que solo pondría el wrath pelado sin fichas.
+    if {"instant", "sorcery"} & types and not card.on_cast_resolve:
+        wt = _wipe_then_tokens_effect(data.get("oracle_text", ""))
+        if wt is not None:
+            card.on_cast_resolve = wt
+            card.tags = card.tags | {"wipe"}
 
     # remoción / bounce DIRIGIDA (instantáneo o conjuro): dejar elegir objetivos.
     # Se cablea ANTES de la capa genérica para que no la reemplace.

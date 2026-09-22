@@ -2231,6 +2231,36 @@ def test_attack_multiple_players_at_once():
     assert foes[0].life < l0[0] and foes[1].life < l0[1]   # ambos recibieron daño
 
 
+def test_ceaseless_conflict_wipes_then_makes_spirits():
+    # Barrida + fichas: una ficha Spirit 3/2 por cada criatura NO-ficha propia
+    # destruida; las fichas previas y las criaturas del rival no cuentan.
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Ceaseless Conflict", "type_line": "Sorcery", "mana_cost": "{3}{W}{W}",
+        "color_identity": ["R", "W"],
+        "oracle_text": "Destroy all creatures. Then create a 3/2 red and white Spirit "
+                       "creature token for each nontoken creature you controlled that "
+                       "was destroyed this way."})
+    assert c.on_cast_resolve is not None and "wipe" in c.tags
+    me = Player("me", [cards.creature("F", "1W", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.move_to_battlefield(cards.creature("Bear1", "1W", 2, 2), me)   # no-ficha propia
+    g.move_to_battlefield(cards.creature("Bear2", "1W", 2, 2), me)   # no-ficha propia
+    cards.make_token(g, me, "Soldier", 1, 1)                          # ficha propia (no cuenta)
+    g.move_to_battlefield(cards.creature("Rival", "1U", 4, 4), op)   # criatura rival
+    g.resolve_stack()
+    c.on_cast_resolve(g, me, [])
+    spirits = [pm for pm in me.battlefield if pm.name == "Spirit"]
+    assert len(spirits) == 2                       # una por cada no-ficha propia destruida
+    assert all(pm.power == 3 and pm.toughness == 2 for pm in spirits)
+    assert not any(pm.name == "Rival" for pm in op.battlefield)   # barrió todo
+    assert not any(pm.name == "Spirit" for pm in op.battlefield)  # el rival no recibe fichas
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
