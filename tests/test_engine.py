@@ -2026,6 +2026,99 @@ def test_generic_effects_from_tags_and_oracle():
     assert vanilla.on_etb is None and vanilla.on_cast_resolve is None
 
 
+# -- jugar desde el CEMENTERIO (Fase A) ------------------------------------ #
+def test_parse_gy_play_variants():
+    import cardsdb
+    fb = cardsdb.build_card_from_data({
+        "name": "Deep Analysis", "type_line": "Sorcery", "mana_cost": "{3}{U}",
+        "color_identity": ["U"],
+        "oracle_text": "Target player draws two cards.\nFlashback—{1}{U}, Pay 3 life."})
+    assert fb.gy_play.get("mode") == "flashback" and fb.gy_play.get("after") == "exile"
+    ue = cardsdb.build_card_from_data({
+        "name": "Sootstoke Kindler", "type_line": "Creature", "mana_cost": "{2}{B}",
+        "power": "2", "toughness": "2", "color_identity": ["B"],
+        "oracle_text": "Unearth {1}{B}"})
+    assert ue.gy_play.get("mode") == "unearth" and ue.gy_play.get("after") == "exile_eot"
+    em = cardsdb.build_card_from_data({
+        "name": "Anointer Priest", "type_line": "Creature", "mana_cost": "{1}{W}",
+        "power": "1", "toughness": "3", "color_identity": ["W"],
+        "oracle_text": "Embalm {3}{W}"})
+    assert em.gy_play.get("mode") == "embalm"
+    es = cardsdb.build_card_from_data({
+        "name": "Uro", "type_line": "Creature", "mana_cost": "{1}{G}{U}",
+        "power": "6", "toughness": "6", "color_identity": ["G", "U"],
+        "oracle_text": "Escape—{G}{G}{U}{U}, Exile four other cards from your graveyard."})
+    assert es.gy_play.get("mode") == "escape" and es.gy_play.get("exile_n") == 4
+    rc = cardsdb.build_card_from_data({
+        "name": "Bloodghast", "type_line": "Creature", "mana_cost": "{B}{B}",
+        "power": "2", "toughness": "1", "color_identity": ["B"],
+        "oracle_text": "{2}{B}: Return this card from your graveyard to the battlefield."})
+    assert rc.gy_play.get("mode") == "recur" and rc.gy_play.get("after") == "battlefield"
+
+
+def _gy_ready_human(seed=3):
+    import interactive, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=seed)
+    ig.keep([])
+    return ig, ig.human()
+
+
+def test_flashback_casts_from_graveyard_then_exiled():
+    import cardsdb, cards
+    ig, hu = _gy_ready_human()
+    spell = cardsdb.build_card_from_data({
+        "name": "GY Draw", "type_line": "Sorcery", "mana_cost": "{5}{U}",
+        "color_identity": ["U"], "oracle_text": "Draw two cards.\nFlashback {1}{U}"})
+    assert spell.gy_play.get("mode") == "flashback"
+    hu.graveyard.append(spell)
+    for _ in range(2):
+        ig.g.move_to_battlefield(cards.land("Island", ["U"], basic=True), hu)
+    idx = next(x["i"] for x in ig.legal()["graveyard"] if x["name"] == "GY Draw")
+    h0 = len(hu.hand)
+    ig.cast(i=idx, zone="graveyard")
+    assert len(hu.hand) == h0 + 2                 # el flashback resolvió su efecto
+    assert spell in hu.exile and spell not in hu.graveyard   # se exilió tras lanzarse
+
+
+def test_unearth_enters_and_exiles_at_end_of_turn():
+    import cardsdb, cards
+    ig, hu = _gy_ready_human()
+    beast = cardsdb.build_card_from_data({
+        "name": "Unearther", "type_line": "Creature", "mana_cost": "{4}{B}",
+        "power": "3", "toughness": "3", "color_identity": ["B"],
+        "oracle_text": "Unearth {1}{B}"})
+    hu.graveyard.append(beast)
+    for _ in range(2):
+        ig.g.move_to_battlefield(cards.land("Swamp", ["B"], basic=True), hu)
+    idx = next(x["i"] for x in ig.legal()["graveyard"] if x["name"] == "Unearther")
+    ig.cast(i=idx, zone="graveyard")
+    perm = next((pm for pm in hu.battlefield if pm.name == "Unearther"), None)
+    assert perm is not None and perm.summoning_sick is False   # entró con prisa
+    ig.end_turn()
+    assert beast in hu.exile                                   # se exilió al terminar
+    assert not any(pm.name == "Unearther" for pm in hu.battlefield)
+
+
+def test_embalm_creates_token_and_exiles_card():
+    import cardsdb, cards
+    ig, hu = _gy_ready_human()
+    priest = cardsdb.build_card_from_data({
+        "name": "Embalmer", "type_line": "Creature", "mana_cost": "{1}{W}",
+        "power": "1", "toughness": "3", "color_identity": ["W"],
+        "oracle_text": "Embalm {3}{W}"})
+    hu.graveyard.append(priest)
+    for _ in range(4):
+        ig.g.move_to_battlefield(cards.land("Plains", ["W"], basic=True), hu)
+    idx = next(x["i"] for x in ig.legal()["graveyard"] if x["name"] == "Embalmer")
+    ig.cast(i=idx, zone="graveyard")
+    tok = next((pm for pm in hu.battlefield if pm.name == "Embalmer"), None)
+    assert tok is not None and tok.is_token                     # ficha copia
+    assert priest in hu.exile                                   # la carta se exilió
+    import json
+    json.dumps(ig.legal())
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

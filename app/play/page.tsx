@@ -31,6 +31,7 @@ type Legal = {
   activatables: Activatable[];
   abilities?: PermAbility[];
   impulse?: { i: number; name: string; cost: string; is_land: boolean; playable: boolean }[];
+  graveyard?: { i: number; name: string; cost: string; mode: string; playable: boolean }[];
   attack_targets: { index: number; name: string; life: number }[];
   can_attack: boolean; can_end: boolean; can_undo?: boolean;
 };
@@ -652,6 +653,23 @@ export default function Play() {
                         <Icon name={im.is_land ? "land" : "cards"} size={12} />
                         <b>{im.name}</b> <span className="muted">{im.cost}</span>
                         {!im.playable ? <em className="pw-txt">sin maná / tierra ya jugada</em> : null}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {legal && (legal.graveyard?.length || 0) > 0 && (
+                  <div className="act-block">
+                    <span className="act-label">Cementerio (jugable):</span>
+                    {legal.graveyard!.map((gy) => (
+                      <button key={"gy" + gy.i} className="ghost pw-ab"
+                        disabled={!gy.playable}
+                        onClick={() => doAct("cast", { i: gy.i, zone: "graveyard" })}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        <Icon name="cards" size={12} />
+                        <b>{gy.name}</b> <span className="muted">{gy.cost}</span>
+                        <em className="pw-txt">{gy.mode}</em>
+                        {!gy.playable ? <em className="pw-txt">sin maná</em> : null}
                       </button>
                     ))}
                   </div>

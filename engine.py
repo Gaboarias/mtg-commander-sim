@@ -136,6 +136,9 @@ class Card:
     additional_cost: dict = field(default_factory=dict)  # coste extra al lanzar:
     #   {"pay_life": int, "discard": int, "sacrifice": bool}
     cost_reduction: int = 0                        # "cuesta {N} menos" (genérico)
+    gy_play: dict = field(default_factory=dict)    # jugar desde el CEMENTERIO:
+    #   {"mode": flashback|escape|unearth|embalm|disturb|recur, "cost": Cost,
+    #    "after": exile|exile_eot|token|hand|battlefield, "exile_n": int}
 
     def identity(self) -> set:
         """Identidad de color: explicita si existe, si no se deduce del coste."""
@@ -1169,6 +1172,17 @@ class Game:
         if p.impulse:
             p.exile.extend(p.impulse)
             p.impulse.clear()
+        # unearth: las criaturas devueltas se exilian al final del turno
+        pend = getattr(self, "unearth_eot", None)
+        if pend:
+            for owner, card in list(pend):
+                for perm in list(owner.battlefield):
+                    if perm.card is card:
+                        owner.battlefield.remove(perm)
+                        owner.exile.append(card)
+                        self.log(f"{card.name} se exilia (unearth)")
+                        break
+            pend.clear()
         # control temporal (Threaten): devolver los permanentes a su dueño original
         if self.control_returns:
             for perm in list(self.control_returns):

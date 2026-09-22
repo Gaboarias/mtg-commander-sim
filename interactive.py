@@ -425,6 +425,9 @@ class InteractiveGame:
                     p.impulse.remove(c)
                 self.g.sba()
             return self.state()
+        if zone == "graveyard":   # jugar/lanzar desde el CEMENTERIO (flashback, etc.)
+            self._play_from_graveyard(p, i, target_uids, mode)
+            return self.state()
         if zone == "command":
             cand = [c for c in p.command if c.cost is None or
                     p.can_pay(Cost(c.cost.generic + p.cmdr_tax, c.cost.pips))]
@@ -447,6 +450,91 @@ class InteractiveGame:
                         chosen_modes=chosen)
             self.g.sba()
         return self.state()
+
+    def _play_from_graveyard(self, p, i, target_uids, mode):
+        """Fase A: jugar una carta desde el cementerio según su `gy_play`
+        (flashback / escape / unearth / embalm / disturb / recursión)."""
+        import cards
+        if i is None or not (0 <= i < len(p.graveyard)):
+            return
+        c = p.graveyard[i]
+        gp = getattr(c, "gy_play", None) or {}
+        cost = gp.get("cost")
+        if not gp or (cost is not None and not p.can_pay(cost)):
+            return
+        m = gp.get("mode")
+        after = gp.get("after")
+        # escape: exiliar N OTRAS cartas del cementerio como coste extra
+        if m == "escape":
+            others = [x for x in p.graveyard if x is not c]
+            need = gp.get("exile_n", 0) or 0
+            if len(others) < need:
+                return
+            for x in others[:need]:
+                p.graveyard.remove(x)
+                p.exile.append(x)
+            if need:
+                self.g.log(f"{p.name} exilia {need} carta(s) del cementerio (escape)")
+        # embalm/eternalize: exiliar la carta y crear una ficha copia
+        if m == "embalm":
+            if cost is not None:
+                p.pay(cost)
+            p.graveyard.remove(c)
+            p.exile.append(c)
+            cards.make_token(self.g, p, c.name, c.power, c.toughness,
+                             kw=tuple(getattr(c, "keywords", ()) or ()),
+                             subtypes=tuple(getattr(c, "subtypes", ()) or ()))
+            self.g.log(f"{p.name} crea una ficha de {c.name} (embalm/eternalize)")
+            self.g.sba()
+            return
+        # criatura/permanente al campo (unearth, recursión al campo, disturb-permanente)
+        is_spell = bool({"instant", "sorcery"} & c.types) and not c.is_creature()
+        if not is_spell and after != "hand":
+            if cost is not None:
+                p.pay(cost)
+            p.graveyard.remove(c)
+            perm = self.g.move_to_battlefield(c, p)
+            if m == "unearth":
+                perm.summoning_sick = False
+                # se exilia al final del turno (limpieza tipo impulse)
+                lst = getattr(self.g, "unearth_eot", None)
+                if lst is None:
+                    lst = self.g.unearth_eot = []
+                lst.append((p, c))
+            self.g.log(f"{p.name} devuelve {c.name} del cementerio al campo ({m})")
+            self.g.sba()
+            return
+        # recursión a la mano
+        if after == "hand":
+            if cost is not None:
+                p.pay(cost)
+            p.graveyard.remove(c)
+            p.hand.append(c)
+            self.g.log(f"{p.name} devuelve {c.name} del cementerio a la mano")
+            return
+        # hechizo (flashback / escape-hechizo / disturb-hechizo): lanzar por el
+        # coste alternativo y luego exiliar. Se reusa g.cast sobreescribiendo el
+        # coste temporalmente (aproximación: sin re-elegir objetivos avanzados).
+        p.graveyard.remove(c)
+        orig_cost = c.cost
+        try:
+            if cost is not None:
+                c.cost = cost
+            modes = getattr(c, "modes", ())
+            chosen = spec = None
+            if modes and mode is not None and 0 <= mode < len(modes):
+                chosen = [mode]
+                spec = modes[mode].get("target_spec")
+            self.g.cast(p, c, targets=self._chosen_targets(c, target_uids, spec=spec),
+                        chosen_modes=chosen)
+        finally:
+            c.cost = orig_cost
+        # tras resolver, el hechizo fue al cementerio: exiliarlo (flashback/escape)
+        if c in p.graveyard:
+            p.graveyard.remove(c)
+            p.exile.append(c)
+            self.g.log(f"{c.name} se exilia tras lanzarse desde el cementerio")
+        self.g.sba()
 
     def attack(self, uids, target_index=None):
         """Declara atacantes contra el rival elegido (por índice de jugador).
@@ -528,12 +616,25 @@ class InteractiveGame:
         p = self.human()
         lands, casts, attackers, activatables = [], [], [], []
         impulse = []
+        graveyard = []
         if self._my_turn():
             for i, c in enumerate(p.impulse):   # exiliadas por impulse, jugables hoy
                 playable = (c.is_land() and p.lands_played < 1) or \
                            (not c.is_land() and c.cost is not None and p.can_pay(c.cost))
                 impulse.append({"i": i, "name": c.name, "cost": _cost_str(c),
                                 "is_land": c.is_land(), "playable": playable})
+            for i, c in enumerate(p.graveyard):   # jugables desde el cementerio
+                gp = getattr(c, "gy_play", None) or {}
+                if not gp:
+                    continue
+                cost = gp.get("cost")
+                playable = cost is None or p.can_pay(cost)
+                if gp.get("mode") == "escape":
+                    need = gp.get("exile_n", 0) or 0
+                    playable = playable and (len(p.graveyard) - 1) >= need
+                graveyard.append({"i": i, "name": c.name,
+                                  "cost": _cost_str_cost(cost) if cost else "0",
+                                  "mode": gp.get("mode"), "playable": playable})
             for i, c in enumerate(p.hand):
                 if c.is_land():
                     if p.lands_played < 1:
@@ -595,6 +696,7 @@ class InteractiveGame:
         return {"lands": lands, "casts": casts, "attackers": attackers,
                 "activatables": activatables, "abilities": abilities,
                 "impulse": impulse,
+                "graveyard": graveyard,
                 "attack_targets": atk_targets,
                 "can_attack": self._my_turn() and not self.attacked,
                 "can_undo": self.can_undo(),

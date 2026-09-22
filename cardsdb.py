@@ -466,6 +466,44 @@ def _cmc(perm):
     return c.cost.cmc if getattr(c, "cost", None) else 0
 
 
+def _parse_gy_play(oracle: str, types: set):
+    """Detecta cómo se puede jugar la carta DESDE EL CEMENTERIO. Devuelve un dict
+    {mode, cost(Cost), after, exile_n} o {}. Cubre flashback / escape / unearth /
+    embalm/eternalize / disturb / recursión ('{coste}: return ~ ... battlefield/hand')."""
+    t = re.sub(r"\s+", " ", (oracle or "")).strip()
+
+    def _cost(seq):
+        return parse_cost(mana_cost_to_str(seq)) if seq else parse_cost("0")
+
+    def _seq(kw):
+        m = re.search(kw + r"\s*[—:-]?\s*((?:\{[^}]+\})+)", t, re.I)
+        return m.group(1) if m else None
+
+    # escape: "Escape—{cost}, Exile N other cards from your graveyard."
+    me = re.search(r"escape\s*[—:-]?\s*((?:\{[^}]+\})+),?\s*exile (\w+)", t, re.I)
+    if me:
+        return {"mode": "escape", "cost": _cost(me.group(1)),
+                "exile_n": _count_word(me.group(2)) or 0, "after": "exile"}
+    for kw, mode, after in (
+        ("unearth", "unearth", "exile_eot"),
+        ("embalm", "embalm", "token"),
+        ("eternalize", "embalm", "token"),
+        ("disturb", "disturb", "exile"),
+        ("flashback", "flashback", "exile"),
+        ("jump-start", "flashback", "exile"),
+    ):
+        seq = _seq(kw)
+        if seq:
+            return {"mode": mode, "cost": _cost(seq), "after": after}
+    # recursión activada: "{coste}: return ~ from your graveyard to the battlefield/your hand"
+    mr = re.search(r"((?:\{[^}]+\})+)\s*:\s*return [^.]*?from your graveyard to "
+                   r"(the battlefield|your hand)", t, re.I)
+    if mr:
+        dest = "battlefield" if "battlefield" in mr.group(2).lower() else "hand"
+        return {"mode": "recur", "cost": _cost(mr.group(1)), "after": dest}
+    return {}
+
+
 _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
 
 
@@ -1149,6 +1187,12 @@ def build_card_from_data(data: dict) -> Card:
     # tags: de creatura + derivados (aprox) del texto de la carta, para que la
     # capa de efectos genericos funcione tambien con cartas de Scryfall
     card.tags = _derive_tags(data.get("oracle_text", ""), card.types)
+
+    # jugar/lanzar desde el CEMENTERIO (flashback / escape / unearth / embalm /
+    # disturb / recursión). Descriptor en card.gy_play; interactive lo ofrece.
+    gyp = _parse_gy_play(data.get("oracle_text", ""), card.types)
+    if gyp:
+        card.gy_play = gyp
 
     # Produccion de mana: usar `produced_mana` de Scryfall (el mana REAL que
     # produce la carta), no la identidad de color — las tierras no basicas son
