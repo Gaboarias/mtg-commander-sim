@@ -307,28 +307,40 @@ def _fragment_effect(seg: str):
 
 def _parse_modes(oracle: str):
     """Detecta un hechizo modal ('Choose one/two — ...') y devuelve
-    (list[{label, effect, target_spec, target_count}], cuántos_elegir) o None."""
+    (list[{label, effect, target_spec, target_count}], cuántos_elegir) o None.
+    Si un modo tiene un efecto no modelado NO se descarta el modal: se le da un
+    efecto de respaldo que lo registra, para que el selector SIEMPRE se ofrezca."""
     if not oracle:
         return None
-    m = re.search(r"choose (one|two|up to \w+)\s*[—\-–]\s*(.+)", oracle, re.I | re.S)
+    m = re.search(r"choose (one or both|one or more|one|two|three|up to \w+)"
+                  r"\s*[—\-–:]\s*(.+)", oracle, re.I | re.S)
     if not m:
         return None
-    pick = 2 if "two" in m.group(1).lower() else 1
+    head = m.group(1).lower()
+    pick = 2 if ("two" in head or "both" in head or "more" in head) else 1
     body = m.group(2)
     parts = None
-    for pat in (r"\s*•\s*", r"\s*;\s*or\s+", r"\s*\n\s*"):  # bullets, "; or", saltos
-        cand = [p.strip(" .\n") for p in re.split(pat, body) if p.strip(" .\n")]
+    for pat in (r"\s*•\s*", r"\s*\n\s*", r"\s*;\s*or\s+"):  # bullets, saltos, "; or"
+        cand = [p.strip(" .\n•") for p in re.split(pat, body) if p.strip(" .\n•")]
         if len(cand) >= 2:
             parts = cand
             break
+    if not parts:                       # último recurso: un solo " or " a nivel de modo
+        cand = [p.strip(" .\n•") for p in re.split(r"\s+or\s+", body) if p.strip(" .\n•")]
+        parts = cand if len(cand) == 2 else None
     if not parts:
         return None
     modes = []
     for seg in parts[:4]:
         eff, spec, count = _fragment_effect(seg)
-        modes.append({"label": _short_label(seg), "effect": eff,
+        label = _short_label(seg)
+        if eff is None:                 # efecto no modelado: respaldo visible
+            eff = (lambda g, ctrl, targets=None, _l=label:
+                   g.log(f"{ctrl.name} elige: {_l}"))
+            spec, count = None, 1
+        modes.append({"label": label, "effect": eff,
                       "target_spec": spec, "target_count": count})
-    if not any(md["effect"] for md in modes):
+    if len(modes) < 2:
         return None
     return modes, pick
 

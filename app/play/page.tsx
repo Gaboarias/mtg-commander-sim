@@ -32,7 +32,7 @@ type Legal = {
   abilities?: PermAbility[];
   impulse?: { i: number; name: string; cost: string; is_land: boolean; playable: boolean }[];
   attack_targets: { index: number; name: string; life: number }[];
-  can_attack: boolean; can_end: boolean;
+  can_attack: boolean; can_end: boolean; can_undo?: boolean;
 };
 type CardInfo = { art?: string; type?: string; oracle?: string };
 type Inspect = {
@@ -84,6 +84,7 @@ def act(kind, arg_json):
     elif kind == 'ability': g.activate_ability(a.get('uid'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'respond': g.respond(a.get('i'), a.get('target_uids'), a.get('mode'))
     elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
+    elif kind == 'undo': g.undo()
     elif kind == 'choose': g.resolve_choice(a.get('index'))
     elif kind == 'mulligan': g.mulligan()
     elif kind == 'keep': g.keep(a.get('bottom', []))
@@ -690,6 +691,7 @@ export default function Play() {
                     style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                     <Icon name="swords" size={15} /> Atacar {picked.size > 0 ? `(${picked.size})` : ""}
                   </button>
+                  <button className="ghost" onClick={() => doAct("undo")} disabled={!legal?.can_undo} title="Deshacer la última jugada de este turno" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="undo" size={14} /> Deshacer</button>
                   <button className="ghost" onClick={() => doAct("end")} disabled={!legal?.can_end} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Terminar turno <Icon name="skip-forward" size={14} /></button>
                 </div>
                 <p className="muted" style={{ fontSize: ".8rem" }}>

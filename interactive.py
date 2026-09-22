@@ -10,6 +10,7 @@ en el navegador. La capa web solo llama a estos métodos y dibuja `state()`.
 """
 from __future__ import annotations
 
+import copy
 import run
 import carddesc
 from engine import Game, Cost
@@ -80,6 +81,7 @@ class InteractiveGame:
         self._attacker = None       # jugador que ataca (durante defensa)
         self._declared = []         # atacantes declarados (Permanent)
         self.mulls = 0              # mulligans que llevás (para el londrino)
+        self._undo = []             # pila de snapshots para deshacer jugadas del turno
         # el motor pausa una resolución cuando el HUMANO debe elegir (revelar, etc.)
         self.g.interactive_human = self.human()
         self.g.pending_choice = None
@@ -404,6 +406,7 @@ class InteractiveGame:
             return self.state()
         p = self.human()
         if 0 <= i < len(p.hand) and p.hand[i].is_land():
+            self._snapshot()
             self.g.play_land(p, p.hand[i])
             self.g.sba()
         return self.state()
@@ -411,6 +414,7 @@ class InteractiveGame:
     def cast(self, i=None, zone="hand", target_uids=None, mode=None):
         if not self._my_turn():
             return self.state()
+        self._snapshot()
         p = self.human()
         card = from_command = None
         if zone == "impulse":   # jugar una carta exiliada por "impulse" este turno
@@ -478,6 +482,7 @@ class InteractiveGame:
             return self.state()
         pm = self._find_perm(uid)
         if pm is not None:
+            self._snapshot()
             self.g.activate_loyalty(pm, int(index))
             self.g.sba()
             if len(self.g.alive()) <= 1:
@@ -488,9 +493,34 @@ class InteractiveGame:
         if not self._my_turn():
             return self.state()
         p = self.human()
+        self._undo = []                 # no se puede deshacer entre turnos
         self.g.end_turn(p)
         self.g.sba()
         self._advance_to_human()
+        return self.state()
+
+    # -- deshacer jugada (fase principal del humano) --------------------- #
+    def _snapshot(self):
+        """Guarda el estado ANTES de una acción mutadora, para poder deshacerla.
+        Solo en la fase principal del humano y sin una decisión pendiente."""
+        if (self.phase == "main" and self._my_turn()
+                and self.g.pending_choice is None):
+            self._undo.append((copy.deepcopy(self.g), self.attacked))
+            if len(self._undo) > 25:
+                self._undo.pop(0)
+
+    def can_undo(self):
+        return bool(self._undo) and self._my_turn()
+
+    def undo(self):
+        """Vuelve al estado previo a la última jugada del turno."""
+        if not self._undo or not self._my_turn():
+            return self.state()
+        g, attacked = self._undo.pop()
+        self.g = g
+        self.players = self.g.players        # el deepcopy creó jugadores nuevos
+        self.g.interactive_human = self.human()
+        self.attacked = attacked
         return self.state()
 
     # -- estado serializable --------------------------------------------- #
@@ -567,6 +597,7 @@ class InteractiveGame:
                 "impulse": impulse,
                 "attack_targets": atk_targets,
                 "can_attack": self._my_turn() and not self.attacked,
+                "can_undo": self.can_undo(),
                 "can_end": self._my_turn()}
 
     def activate_ability(self, uid, index=0, target_uids=None):
@@ -575,6 +606,7 @@ class InteractiveGame:
         pm = self._find_perm(uid)
         if pm is None:
             return self.state()
+        self._snapshot()
         abs_ = getattr(pm.card, "activated_abilities", ()) or ()
         spec = abs_[index].get("target_spec") if 0 <= index < len(abs_) else None
         tgt = self._chosen_targets(pm.card, target_uids, spec=spec) if spec else None

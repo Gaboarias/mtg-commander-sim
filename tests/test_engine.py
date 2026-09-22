@@ -440,6 +440,66 @@ def test_imported_removal_is_targeted():
     assert "A" not in names and "B" not in names and "Keep" in names
 
 
+def test_modal_keeps_unmodeled_mode_so_picker_shows():
+    # Un modal donde UN modo no está modelado NO debe descartarse: el selector
+    # igual se ofrece y el modo elegido queda registrado.
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Charm", "type_line": "Instant", "mana_cost": "{1}{U}",
+        "color_identity": ["U"],
+        "oracle_text": "Choose one —\n• Tap target creature.\n• Draw two cards."})
+    assert len(c.modes) == 2                       # no se descartó por el modo no modelado
+    me = Player("yo", [cards.creature("X", "1U", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("Y", "1B", 1, 1) for _ in range(10)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    c.modes[0]["effect"](g, me, [])                # modo no modelado: registra, no rompe
+    assert any("elige:" in ln for ln in g.log_lines)
+    before = len(me.hand)
+    c.modes[1]["effect"](g, me, [])                # modo modelado: robar 2
+    assert len(me.hand) == before + 2
+
+
+def test_undo_restores_previous_state():
+    import interactive, cardsdb, cards, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    spell = cards.creature("Bear", "1G", 2, 2)
+    hu.hand.append(spell)
+    for _ in range(2):
+        ig.g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), hu)
+    hand0, bf0 = len(hu.hand), len(hu.battlefield)
+    assert ig.legal()["can_undo"] is False
+    ig.cast(i=hu.hand.index(spell), zone="hand")
+    hu = ig.human()
+    assert len(hu.battlefield) == bf0 + 1 and len(hu.hand) == hand0 - 1
+    assert ig.legal()["can_undo"] is True
+    st = ig.undo()
+    hu = ig.human()
+    assert len(hu.battlefield) == bf0 and len(hu.hand) == hand0   # volvió atrás
+    assert st["legal"]["can_undo"] is False
+    import json
+    json.dumps(st)
+
+
+def test_undo_cleared_after_end_turn():
+    import interactive, cards, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    lands = [c for c in hu.hand if c.is_land()]
+    if lands:
+        ig.play_land(hu.hand.index(lands[0]))
+        assert ig.can_undo()
+    ig.end_turn()
+    assert not ig._undo          # la pila se limpia al terminar el turno
+
+
 def test_modal_spell_choose_one():
     # Un hechizo modal "Choose one — ...": debe exponer los modos y resolver el
     # modo elegido (destruir un objetivo, o robar), no aplanarse a uno solo.
