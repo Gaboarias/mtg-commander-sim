@@ -633,6 +633,10 @@ class InteractiveGame:
             "uid": a.uid, "name": a.name, "power": a.power, "toughness": a.toughness,
             "commander": a.card is a.controller.commander_card,
             "from": a.controller.name,
+            # a quién ataca: None = a tu vida; si no, el nombre del planeswalker tuyo
+            # (un Permanent tiene .card; el jugador no).
+            "vs_pw": (getattr(a.attacking, "name", None)
+                      if hasattr(a.attacking, "card") else None),
         } for a in incoming]
         blockers = [{
             "uid": pm.uid, "name": pm.name, "power": pm.power, "toughness": pm.toughness,

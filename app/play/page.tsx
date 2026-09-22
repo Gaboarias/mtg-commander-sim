@@ -39,7 +39,7 @@ type Inspect = {
   name: string; cost?: string; types?: string[]; power?: number | null;
   toughness?: number | null; keywords?: string[]; abilities?: string[];
 };
-type CombatAtk = { uid: number; name: string; power: number; toughness: number; commander: boolean; from: string };
+type CombatAtk = { uid: number; name: string; power: number; toughness: number; commander: boolean; from: string; vs_pw?: string | null };
 type Combat = {
   from: string; incoming_damage: number;
   attackers: CombatAtk[];
@@ -469,12 +469,13 @@ export default function Play() {
                 <motion.span className="alert"
                   animate={reduce ? {} : { scale: [1, 1.15, 1] }}
                   transition={reduce ? undefined : { repeat: Infinity, duration: 1.1 }}><Icon name="swords" size={18} /></motion.span>
-                {state.combat.from} te ataca — {state.combat.incoming_damage} de daño en camino
+                {state.combat.from} te ataca · {state.combat.incoming_damage} de daño en camino
               </h2>
               <div className="def-attackers">
                 {state.combat.attackers.map((a) => (
                   <div key={a.uid} className={`atk-chip ${assign && Object.values(assign).includes(a.uid) ? "blocked" : ""}`}>
                     {a.commander ? <Icon name="crown" size={13} /> : null}{a.commander ? " " : ""}{a.name} <b>{a.power}/{a.toughness}</b>
+                    {a.vs_pw ? <span className="muted" style={{ color: "var(--accent)" }}> → {a.vs_pw} (planeswalker)</span> : null}
                     <span className="muted">{Object.values(assign).includes(a.uid) ? " · bloqueado" : " · sin bloquear"}</span>
                   </div>
                 ))}

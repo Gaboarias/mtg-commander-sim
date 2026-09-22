@@ -1022,6 +1022,13 @@ class Game:
             if not perm.has("vigilance"):
                 perm.tapped = True
             declared.append(perm)
+            # registrar el ataque para que se vea en el relato/resumen (antes no
+            # quedaba nada, y los ataques a un planeswalker parecían daño de la nada)
+            if isinstance(defender, Player):
+                self.log(f"{p.name}: {perm.name} ({perm.power}) ataca a {defender.name}")
+            else:
+                self.log(f"{p.name}: {perm.name} ({perm.power}) ataca al "
+                         f"planeswalker {defender.name} de {defender.controller.name}")
             cb = perm.card.triggers.get("attacks")
             if cb:
                 self.stack.append(StackObject(

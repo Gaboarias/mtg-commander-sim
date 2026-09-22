@@ -306,6 +306,26 @@ def test_interactive_manual_turn():
     json.dumps(st)                                  # serializable para la web
 
 
+def test_attack_on_planeswalker_is_logged():
+    # El ataque a un planeswalker debe quedar REGISTRADO (antes el daño aparecía
+    # de la nada) y restar lealtad.
+    import cards
+    from engine import Game, Player, Card
+    me = Player("yo", [cards.creature("C", "1U", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(10)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    pw = Card(name="Quintorius", types={"planeswalker"}, cost=None, loyalty=5,
+              supertypes={"legendary"})
+    pwperm = g.move_to_battlefield(pw, me)
+    atk = g.move_to_battlefield(cards.creature("Raider", "1B", 3, 3), op)
+    atk.summoning_sick = False
+    g._resolve_combat(op, [(atk, pwperm)])
+    assert pwperm.counters.get("loyalty") == 2                 # 5 - 3
+    assert any("ataca al planeswalker Quintorius" in ln for ln in g.log_lines)
+
+
 def test_interactive_attack_target_choice():
     # F3: con 2 rivales, legal expone attack_targets y attack(target_index)
     # dirige el daño al rival elegido (no siempre al primero).
