@@ -131,14 +131,25 @@ def analyze(trace, winner, players, ability_events=None):
             p = _by_name(s["players"]).get(n) or {}
             lands = sum(1 for pm in (p.get("battlefield") or []) if pm.get("is_land"))
             lands_by_turn[s["turn"]] = lands
-        maxturn = max(lands_by_turn) if lands_by_turn else 0
-        last_lands = lands_by_turn.get(maxturn, 0)
-        if maxturn >= 5 and last_lands <= 2:
-            mistakes.append({"player": n, "note": "trabado de maná (pocas tierras)"})
-        elif last_lands >= 7 and casts <= maxturn // 2:
-            mistakes.append({"player": n, "note": "inundado de tierras (poca acción)"})
-        if casts == 0 and maxturn >= 2:
-            mistakes.append({"player": n, "note": "no llegó a desplegar su plan"})
+        # OJO: s["turn"] es el contador GLOBAL (sube por cada turno de cada jugador).
+        # Para medir actividad hay que usar los turnos PROPIOS, no el máximo global.
+        myturns = len(lands_by_turn)                      # turnos que jugó este rival
+        last_lands = lands_by_turn.get(max(lands_by_turn), 0) if lands_by_turn else 0
+        note = None
+        if myturns >= 5 and last_lands <= 2:
+            note = "trabado de maná (pocas tierras)"
+        elif casts == 0 and myturns >= 3:
+            note = "no llegó a desplegar su plan"
+        elif (last_lands >= 8 and casts <= myturns // 2
+              and (last_lands - casts) >= 4):
+            # inundación REAL: muchas tierras, pocos hechizos y brecha grande entre
+            # tierras jugadas y cosas lanzadas (no solo "tiene 7 tierras en turno 20").
+            note = "inundado de tierras (poca acción)"
+        elif casts <= max(1, myturns // 3) and myturns >= 6:
+            note = "arranque lento (pocas jugadas)"
+        # si no cae en ningún patrón: jugó normal y lo superó el rival (sin nota)
+        if note:
+            mistakes.append({"player": n, "note": note})
 
     # --- habilidades que se activaron (agrupadas por carta) ---
     turn_to_step = {}
