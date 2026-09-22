@@ -871,7 +871,9 @@ class InteractiveGame:
                 "attack_targets": atk_targets,
                 "can_attack": self._my_turn() and not self.attacked,
                 "can_undo": self.can_undo(),
-                "can_end": self._my_turn()}
+                "can_end": self._my_turn(),
+                "mana": p.available_mana(),
+                "mana_sources": len(p.mana_sources())}
 
     def activate_ability(self, uid, index=0, target_uids=None):
         if not self._my_turn():

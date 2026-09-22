@@ -405,7 +405,19 @@ textarea:focus { border-color: var(--accent-2) !important; }
 .cardmini .cm-name { font-size: .64rem; padding: 3px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .cardmini .cm-pt { position: absolute; bottom: 20px; right: 3px; background: rgba(0,0,0,.75); color: #fff; font-size: .68rem; font-weight: 700; padding: 0 4px; border-radius: 3px; }
 .cardmini .cm-pt .dmg { color: #ff9a86; }
-.cardmini .cm-counter { position: absolute; top: 3px; left: 3px; background: var(--accent); color: #1a1508; font-size: .62rem; font-weight: 700; padding: 0 4px; border-radius: 3px; }
+.cardmini .cm-counter { position: absolute; top: 3px; left: 3px; font-size: .62rem; font-weight: 700; padding: 0 4px; border-radius: 3px; }
+.cardmini .cm-counter.plus { background: var(--accent); color: #1a1508; }
+.cardmini .cm-counter.minus { background: #b6412f; color: #fff; top: 3px; left: auto; right: 3px; }
+.cardmini .cm-counter.other { position: static; display: inline-block; background: #2a3346; color: #cdd5e2; margin: 1px; }
+.cardmini .cm-badge { position: absolute; top: 3px; font-size: .56rem; font-weight: 700; padding: 0 4px; border-radius: 3px; letter-spacing: .3px; text-transform: uppercase; }
+.cardmini .cm-badge.tok { left: 3px; background: #3a5aa8; color: #fff; }
+.cardmini .cm-badge.sick { right: 3px; background: rgba(0,0,0,.7); color: #ffd27a; }
+.cardmini .cm-kws { position: absolute; left: 2px; right: 2px; bottom: 2px; display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
+.cardmini .cm-kw { background: rgba(10,12,16,.82); color: #c7d0de; font-size: .5rem; font-weight: 600; padding: 0 3px; border-radius: 3px; line-height: 1.5; }
+.mana-pool { display: inline-flex; align-items: center; gap: 5px; font-size: .82rem; font-weight: 600; color: #cfe0ff; background: rgba(58,90,168,.18); border: 1px solid rgba(58,90,168,.5); padding: 2px 9px; border-radius: 999px; }
+.mana-pool svg { color: var(--accent); }
+button.ghost:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+button.ghost:disabled:hover { background: transparent; border-color: var(--border); }
 .win-line { margin-top: 12px; font-size: 1.05rem; }
 
 .legend { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }

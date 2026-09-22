@@ -37,6 +37,7 @@ type Legal = {
   gy_abilities?: { i: number; index: number; name: string; label: string; cost: string; playable: boolean }[];
   attack_targets: { index: number; name: string; life: number; pw_uid?: number }[];
   can_attack: boolean; can_end: boolean; can_undo?: boolean;
+  mana?: number; mana_sources?: number;
 };
 type CardInfo = { art?: string; type?: string; oracle?: string };
 type Inspect = {
@@ -495,6 +496,12 @@ export default function Play() {
                 {state.phase === "over" ? "Partida terminada"
                   : myTurn ? "Tu turno · jugá tus cartas" : `Juega ${state.players[state.active]?.name}`}
               </span>
+              {myTurn && legal && legal.mana != null && (
+                <span className="mana-pool" title="maná disponible (fuentes sin girar)">
+                  <Icon name="sparkles" size={13} /> {legal.mana} maná
+                  <span className="muted"> · {legal.mana_sources} fuentes</span>
+                </span>
+              )}
               <button className="ghost" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5 }} onClick={() => { setState(null); setError(null); }}>
                 <Icon name="undo" size={14} /> Nueva partida
               </button>

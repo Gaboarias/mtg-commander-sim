@@ -25,6 +25,18 @@ export function CardMini({
   selectable?: boolean; selected?: boolean; onClick?: () => void; onInspect?: () => void;
 }) {
   const plus = perm.counters["+1/+1"] || 0;
+  const minus = perm.counters["-1/-1"] || 0;
+  const otherCounters = Object.entries(perm.counters || {})
+    .filter(([k, v]) => k !== "+1/+1" && k !== "-1/-1" && k !== "loyalty" && v);
+  const KW_SHORT: Record<string, string> = {
+    flying: "vuela", reach: "alcance", first_strike: "1er golpe", double_strike: "doble",
+    deathtouch: "mortal", trample: "arrolla", lifelink: "vínculo", vigilance: "vigila",
+    haste: "prisa", menace: "amenaza", indestructible: "indes", hexproof: "antimal.",
+    shroud: "velo", defender: "muro", flash: "destello", prowess: "prowess",
+    infect: "infect", toxic: "toxic", wither: "wither", unblockable: "imbloq.",
+    protection: "protec.",
+  };
+  const kws = (perm.keywords || []).filter((k) => KW_SHORT[k]);
   return (
     <motion.div
       layout={!reduce}
@@ -41,6 +53,10 @@ export function CardMini({
         <button className="cm-info" title="Ver carta" aria-label="Ver detalle de la carta"
           onClick={(e) => { e.stopPropagation(); onInspect(); }}><Icon name="info" size={14} /></button>
       )}
+      {perm.is_token && <span className="cm-badge tok" title="ficha">ficha</span>}
+      {perm.is_creature && perm.sick && !perm.tapped && (
+        <span className="cm-badge sick" title="mareo de invocación (no puede atacar este turno)">zzz</span>
+      )}
       {art ? (
         <div className="art" style={{ backgroundImage: `url(${art})` }} />
       ) : (
@@ -56,7 +72,16 @@ export function CardMini({
         </div>
       )}
       {perm.is_planeswalker && perm.loyalty != null && <span className="cm-loy">◆{perm.loyalty}</span>}
-      {plus > 0 && <span className="cm-counter">+{plus}</span>}
+      {plus > 0 && <span className="cm-counter plus">+{plus}</span>}
+      {minus > 0 && <span className="cm-counter minus">−{minus}</span>}
+      {otherCounters.map(([k, v]) => (
+        <span key={k} className="cm-counter other" title={k}>{v}·{k.slice(0, 3)}</span>
+      ))}
+      {kws.length > 0 && (
+        <div className="cm-kws">
+          {kws.map((k) => <span key={k} className="cm-kw" title={k}>{KW_SHORT[k]}</span>)}
+        </div>
+      )}
     </motion.div>
   );
 }
