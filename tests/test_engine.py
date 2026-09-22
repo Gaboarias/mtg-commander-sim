@@ -2699,6 +2699,43 @@ def test_affinity_reduces_by_artifacts():
     assert g.cast(me, c) is not False        # {4} - 4 artefactos = gratis
 
 
+def test_human_chooses_x():
+    import interactive, cardsdb, cards, decks
+    fb = cardsdb.build_card_from_data({
+        "name": "Fireball", "type_line": "Sorcery", "mana_cost": "{X}{R}",
+        "color_identity": ["R"], "oracle_text": "Fireball deals X damage to any target."})
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    op = ig.g.opponents(hu)[0]
+    hu.hand.append(fb)
+    for _ in range(5):
+        ig.g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), hu)
+    i = next(j for j, c in enumerate(hu.hand) if c.name == "Fireball")
+    ig.cast(i=i, zone="hand")
+    assert ig.g.pending_choice and ig.g.pending_choice["kind"] == "x"
+    l0 = op.life
+    ig.resolve_choice(2)                    # elijo X=2 aunque el máximo sea 4
+    assert op.life == l0 - 2
+
+
+def test_aura_attaches_buffs_and_falls_off():
+    import cardsdb, cards
+    g, me, op = _duel()
+    bear = g.move_to_battlefield(cards.creature("Oso", "1G", 2, 2), me)
+    aura = cardsdb.build_card_from_data({
+        "name": "Fuerza", "type_line": "Enchantment — Aura", "mana_cost": "{1}{G}",
+        "color_identity": ["G"],
+        "oracle_text": "Enchant creature\nEnchanted creature gets +2/+2 and has trample."})
+    ap = g.move_to_battlefield(aura, me)
+    assert ap.enchanting is bear
+    assert bear.power == 4 and bear.toughness == 4 and bear.has("trample")
+    g.to_graveyard(bear, "test")            # muere el huésped
+    g.sba()
+    assert ap not in me.battlefield and aura in me.graveyard   # el aura se cae
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

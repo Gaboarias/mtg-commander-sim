@@ -572,11 +572,35 @@ class InteractiveGame:
                     if modes[m].get("target_spec"):
                         spec = modes[m].get("target_spec")
                         break
-            self.g.cast(p, card, from_command=bool(from_command),
-                        targets=self._chosen_targets(card, target_uids, spec=spec),
-                        chosen_modes=chosen)
-            self.g.sba()
+            targets = self._chosen_targets(card, target_uids, spec=spec)
+            if getattr(card, "x_spell", False):
+                self._prompt_x(p, card, bool(from_command), targets, chosen)
+            else:
+                self.g.cast(p, card, from_command=bool(from_command),
+                            targets=targets, chosen_modes=chosen)
+                self.g.sba()
         return self.state()
+
+    def _prompt_x(self, p, card, from_command, targets, chosen):
+        """Deja que el HUMANO elija X (0..máximo pagable) antes de lanzar."""
+        base = card.cost
+        extra = p.cmdr_tax if from_command else 0
+        red = getattr(card, "cost_reduction", 0) or 0
+        base_cmc = max(0, (base.cmc if base else 0) + extra - red)
+        maxx = min(20, max(0, p.available_mana() - base_cmc))
+
+        def _apply(idx):
+            x = idx if idx is not None else 0
+            self.g.cast(p, card, from_command=from_command, targets=targets,
+                        chosen_modes=chosen, x_value=x)
+            self.g.sba()
+
+        self.g.pending_choice = {
+            "kind": "x",
+            "prompt": f"Elegí X para {card.name} (0 a {maxx}).",
+            "options": [{"i": v, "name": f"X = {v}"} for v in range(maxx + 1)],
+            "allow_none": False, "_apply": _apply,
+        }
 
     def _play_from_graveyard(self, p, i, target_uids, mode):
         """Fase A: jugar una carta desde el cementerio (delega en el motor, que la

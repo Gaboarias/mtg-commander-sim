@@ -509,6 +509,46 @@ def _parse_gy_play(oracle: str, types: set):
     return {}
 
 
+def _wire_aura(card, oracle):
+    """Si la carta es un Aura (Enchantment — Aura), la anexa a un permanente al
+    entrar (huésped propio si el efecto es bueno, rival si es malo) y aplica su
+    modificador de P/T y keywords SOLO a ese huésped. Se va al cementerio (SBA)
+    si el huésped deja el campo."""
+    if "aura" not in {s.lower() for s in card.subtypes}:
+        return
+    t = re.sub(r"\s+", " ", (oracle or "")).lower()
+    m = re.search(r"enchanted creature gets ([+-]\d+)/([+-]\d+)", t)
+    dp, dt = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    kws = set()
+    for name, key in (("flying", "flying"), ("trample", "trample"),
+                      ("deathtouch", "deathtouch"), ("lifelink", "lifelink"),
+                      ("vigilance", "vigilance"), ("first strike", "first_strike"),
+                      ("double strike", "double_strike"), ("menace", "menace"),
+                      ("indestructible", "indestructible"), ("hexproof", "hexproof"),
+                      ("reach", "reach"), ("haste", "haste")):
+        if "enchanted creature" in t and re.search(r"\b" + re.escape(name) + r"\b", t):
+            kws.add(key)
+    bad = dp < 0 or dt < 0 or bool(re.search(
+        r"enchanted creature (?:can't|doesn't|does not)", t))
+    card.aura_keywords = kws
+    if dp or dt:
+        card.static_mod = (lambda src, target, _d=(dp, dt):
+                           _d if target is getattr(src, "enchanting", None) else (0, 0))
+
+    def _attach(game, ctrl, perm, _bad=bad):
+        if _bad:
+            pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield if pm.is_creature()]
+        else:
+            pool = [pm for pm in ctrl.battlefield if pm.is_creature() and pm is not perm]
+        if pool:
+            host = max(pool, key=lambda x: (x.power, x.toughness))
+            perm.enchanting = host
+            game.log(f"{ctrl.name}: {perm.name} se anexa a {host.name}")
+
+    card.on_etb = _attach
+    card.tags = card.tags | {"aura"}
+
+
 def _parse_etb_counters(oracle: str):
     """'~ enters (the battlefield) with N +1/+1 counters' (o un contador nombrado
     como charge). Devuelve {kind: n}."""
@@ -1330,6 +1370,8 @@ def build_card_from_data(data: dict) -> Card:
         card.tags = card.tags | {"delve"}
     if "affinity for artifacts" in _ktext:
         card.tags = card.tags | {"affinity_art"}
+    # auras: anexar a un huésped y bufearlo (antes de la capa ETB genérica)
+    _wire_aura(card, data.get("oracle_text", ""))
 
     # jugar/lanzar desde el CEMENTERIO (flashback / escape / unearth / embalm /
     # disturb / recursión). Descriptor en card.gy_play; interactive lo ofrece.

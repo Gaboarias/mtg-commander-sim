@@ -155,6 +155,7 @@ class Card:
     #   {evento: callback(game, player, card, **kw)}
     x_spell: bool = False                            # el coste tiene {X} (se elige al lanzar)
     etb_counters: dict = field(default_factory=dict)  # "entra con N contadores": {kind: n}
+    aura_keywords: set = field(default_factory=set)   # aura: keywords que da al huésped
     gy_grant: dict = field(default_factory=dict)     # habilidad ESTÁTICA desde el cementerio
     #   (Anger/Brawn/Wonder): {"keyword": str, "need_subtype": str|None}. Mientras esta
     #   carta está en tu cementerio (y controlás un need_subtype si aplica), tus criaturas
@@ -211,6 +212,7 @@ class Permanent:
         self.cant_block = False
         self.game = None                 # backref, lo pone move_to_battlefield
         self.activated_this_turn = False  # planeswalker: una activacion por turno
+        self.enchanting = None           # si es un aura: el permanente al que anexó
 
     def _static_delta(self):
         """Suma (dP, dT) de los modificadores estaticos (anthems/capas) que
@@ -634,6 +636,10 @@ class Game:
         if not perm.is_creature():
             return False
         ctrl = perm.controller
+        # auras anexadas a este permanente que otorgan la keyword
+        for src in self.all_permanents():
+            if src.enchanting is perm and kw in (getattr(src.card, "aura_keywords", None) or set()):
+                return True
         for card in ctrl.graveyard:
             g = getattr(card, "gy_grant", None)
             if not g or g.get("keyword") != kw:
@@ -906,6 +912,15 @@ class Game:
                             and perm.counters.get("loyalty", 0) <= 0):
                         self.to_graveyard(perm, "loyalty 0")
                         changed = True
+            # aura sin huésped válido -> al cementerio
+            for p in self.players:
+                for perm in list(p.battlefield):
+                    if "aura" not in {s.lower() for s in perm.card.subtypes}:
+                        continue
+                    host = perm.enchanting
+                    if host is None or host not in host.controller.battlefield:
+                        self.to_graveyard(perm, "aura sin objetivo")
+                        changed = True
             # regla de legendarios: el controlador elige cuál conserva. El humano
             # decide (pending_choice); los bots conservan la "mejor" copia.
             human = getattr(self, "interactive_human", None)
@@ -948,7 +963,7 @@ class Game:
 
     # -- lanzar hechizos -------------------------------------------------- #
     def cast(self, player: "Player", card: Card, from_command: bool = False,
-             targets=None, chosen_modes=None):
+             targets=None, chosen_modes=None, x_value=None):
         cost = card.cost
         # impuesto de comandante + reducción "cuesta {N} menos"
         extra = player.cmdr_tax if from_command else 0
@@ -960,7 +975,9 @@ class Game:
         self.spell_x = 0
         if getattr(card, "x_spell", False) and cost is not None:
             base = pay_cost if pay_cost is not None else cost
-            x = max(0, player.available_mana() - base.cmc)
+            # X elegido (humano) o, si no, el máximo pagable (auto para bots)
+            x = x_value if x_value is not None else max(0, player.available_mana() - base.cmc)
+            x = max(0, x)
             if x:
                 self.spell_x = x
                 pay_cost = Cost(generic=base.generic + x, pips=base.pips)

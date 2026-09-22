@@ -1028,7 +1028,7 @@ export default function Play() {
           look_take: "Elegí una carta", reveal_land: "Elegí una carta",
           etb_target: "Elegí un objetivo", creature_type: "Elegí un tipo de criatura",
           discard: "Descartar (mano de más de 7)", may: "¿Querés hacerlo?",
-          legend: "Regla de legendarios",
+          legend: "Regla de legendarios", x: "Elegí X",
         };
         const title = titles[ch.kind] || "Elegí una carta";
         const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno" : "No llevarme ninguna";
