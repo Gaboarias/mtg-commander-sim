@@ -1011,6 +1011,142 @@ class Game:
         self.move_to_battlefield(card, player)
         return True
 
+    # -- jugar/activar fuera del campo (compartido por humano y bots) ------ #
+    def play_from_graveyard(self, p: "Player", card: Card,
+                            targets=None, chosen_modes=None) -> bool:
+        """Juega una carta desde el cementerio según su `gy_play` (flashback,
+        escape, unearth, embalm, disturb, recursión). Devuelve True si se jugó."""
+        import cards as _cards
+        gp = getattr(card, "gy_play", None) or {}
+        cost = gp.get("cost")
+        if not gp or card not in p.graveyard:
+            return False
+        if cost is not None and not p.can_pay(cost):
+            return False
+        m, after = gp.get("mode"), gp.get("after")
+        if m == "escape":
+            others = [x for x in p.graveyard if x is not card]
+            need = gp.get("exile_n", 0) or 0
+            if len(others) < need:
+                return False
+            for x in others[:need]:
+                p.graveyard.remove(x)
+                p.exile.append(x)
+            if need:
+                self.log(f"{p.name} exilia {need} carta(s) del cementerio (escape)")
+        if m == "embalm":
+            if cost is not None:
+                p.pay(cost)
+            p.graveyard.remove(card)
+            p.exile.append(card)
+            _cards.make_token(self, p, card.name, card.power, card.toughness,
+                              kw=tuple(getattr(card, "keywords", ()) or ()),
+                              subtypes=tuple(getattr(card, "subtypes", ()) or ()))
+            self.log(f"{p.name} crea una ficha de {card.name} (embalm/eternalize)")
+            self.sba()
+            return True
+        is_spell = bool({"instant", "sorcery"} & card.types) and not card.is_creature()
+        if not is_spell and after != "hand":
+            if cost is not None:
+                p.pay(cost)
+            p.graveyard.remove(card)
+            perm = self.move_to_battlefield(card, p)
+            if m == "unearth":
+                perm.summoning_sick = False
+                lst = getattr(self, "unearth_eot", None)
+                if lst is None:
+                    lst = self.unearth_eot = []
+                lst.append((p, card))
+            self.log(f"{p.name} devuelve {card.name} del cementerio al campo ({m})")
+            self.sba()
+            return True
+        if after == "hand":
+            if cost is not None:
+                p.pay(cost)
+            p.graveyard.remove(card)
+            p.hand.append(card)
+            self.log(f"{p.name} devuelve {card.name} del cementerio a la mano")
+            return True
+        # hechizo (flashback / escape / disturb): lanzar por el coste alternativo,
+        # luego exiliar. Se reusa cast() sobreescribiendo el coste temporalmente.
+        p.graveyard.remove(card)
+        orig = card.cost
+        try:
+            if cost is not None:
+                card.cost = cost
+            self.cast(p, card, targets=targets, chosen_modes=chosen_modes)
+        finally:
+            card.cost = orig
+        if card in p.graveyard:
+            p.graveyard.remove(card)
+            p.exile.append(card)
+            self.log(f"{card.name} se exilia tras lanzarse desde el cementerio")
+        self.sba()
+        return True
+
+    def play_from_exile(self, p: "Player", card: Card,
+                        targets=None, chosen_modes=None) -> bool:
+        """Juega una carta desde el exilio persistente (foretell / impulse no
+        acotado) pagando su coste alternativo `_play_cost`."""
+        if card not in p.exile_play:
+            return False
+        cost = getattr(card, "_play_cost", None) or card.cost
+        if cost is not None and not p.can_pay(cost):
+            return False
+        if card.is_land():
+            if p.lands_played >= 1:
+                return False
+            p.exile_play.remove(card)
+            self.play_land(p, card)
+            self.sba()
+            return True
+        orig = card.cost
+        try:
+            card.cost = cost
+            ok = self.cast(p, card, targets=targets, chosen_modes=chosen_modes)
+        finally:
+            card.cost = orig
+        if ok is not False and card in p.exile_play:
+            p.exile_play.remove(card)
+        self.sba()
+        return True
+
+    def foretell_card(self, p: "Player", card: Card) -> bool:
+        """Predice (foretell) una carta de la mano: paga {2}, la exilia y queda
+        jugable después por su coste de foretell."""
+        fc = getattr(card, "foretell", None)
+        if fc is None or card not in p.hand or not p.can_pay(Cost(2, ())):
+            return False
+        p.pay(Cost(2, ()))
+        p.hand.remove(card)
+        card._play_cost = fc
+        p.exile_play.append(card)
+        self.log(f"{p.name} predice una carta (foretell)")
+        self.sba()
+        return True
+
+    def activate_gy_ability(self, p: "Player", card: Card, index: int = 0) -> bool:
+        """Activa una habilidad de una carta EN EL CEMENTERIO (`gy_abilities`)."""
+        abs_ = getattr(card, "gy_abilities", ()) or ()
+        if card not in p.graveyard or not (0 <= index < len(abs_)):
+            return False
+        ab = abs_[index]
+        cost = ab.get("cost")
+        if cost is not None and not p.can_pay(cost):
+            return False
+        if cost is not None:
+            p.pay(cost)
+        if ab.get("exile_self") and card in p.graveyard:
+            p.graveyard.remove(card)
+            p.exile.append(card)
+        self.note_ability(card, "habilidad desde el cementerio", controller=p)
+        eff = ab.get("effect")
+        if eff:
+            eff(self, p, card)
+        self.log(f"{p.name} activa {card.name} desde el cementerio")
+        self.sba()
+        return True
+
     # -- combate ---------------------------------------------------------- #
     def _def_player(self, attacker: Permanent) -> "Player":
         """Jugador que defiende contra `attacker`: el jugador atacado, o el

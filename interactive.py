@@ -456,170 +456,50 @@ class InteractiveGame:
         return self.state()
 
     def _play_from_graveyard(self, p, i, target_uids, mode):
-        """Fase A: jugar una carta desde el cementerio según su `gy_play`
-        (flashback / escape / unearth / embalm / disturb / recursión)."""
-        import cards
+        """Fase A: jugar una carta desde el cementerio (delega en el motor, que la
+        comparte con los bots). Acá solo se resuelven modos/objetivos del humano."""
         if i is None or not (0 <= i < len(p.graveyard)):
             return
         c = p.graveyard[i]
-        gp = getattr(c, "gy_play", None) or {}
-        cost = gp.get("cost")
-        if not gp or (cost is not None and not p.can_pay(cost)):
-            return
-        m = gp.get("mode")
-        after = gp.get("after")
-        # escape: exiliar N OTRAS cartas del cementerio como coste extra
-        if m == "escape":
-            others = [x for x in p.graveyard if x is not c]
-            need = gp.get("exile_n", 0) or 0
-            if len(others) < need:
-                return
-            for x in others[:need]:
-                p.graveyard.remove(x)
-                p.exile.append(x)
-            if need:
-                self.g.log(f"{p.name} exilia {need} carta(s) del cementerio (escape)")
-        # embalm/eternalize: exiliar la carta y crear una ficha copia
-        if m == "embalm":
-            if cost is not None:
-                p.pay(cost)
-            p.graveyard.remove(c)
-            p.exile.append(c)
-            cards.make_token(self.g, p, c.name, c.power, c.toughness,
-                             kw=tuple(getattr(c, "keywords", ()) or ()),
-                             subtypes=tuple(getattr(c, "subtypes", ()) or ()))
-            self.g.log(f"{p.name} crea una ficha de {c.name} (embalm/eternalize)")
-            self.g.sba()
-            return
-        # criatura/permanente al campo (unearth, recursión al campo, disturb-permanente)
-        is_spell = bool({"instant", "sorcery"} & c.types) and not c.is_creature()
-        if not is_spell and after != "hand":
-            if cost is not None:
-                p.pay(cost)
-            p.graveyard.remove(c)
-            perm = self.g.move_to_battlefield(c, p)
-            if m == "unearth":
-                perm.summoning_sick = False
-                # se exilia al final del turno (limpieza tipo impulse)
-                lst = getattr(self.g, "unearth_eot", None)
-                if lst is None:
-                    lst = self.g.unearth_eot = []
-                lst.append((p, c))
-            self.g.log(f"{p.name} devuelve {c.name} del cementerio al campo ({m})")
-            self.g.sba()
-            return
-        # recursión a la mano
-        if after == "hand":
-            if cost is not None:
-                p.pay(cost)
-            p.graveyard.remove(c)
-            p.hand.append(c)
-            self.g.log(f"{p.name} devuelve {c.name} del cementerio a la mano")
-            return
-        # hechizo (flashback / escape-hechizo / disturb-hechizo): lanzar por el
-        # coste alternativo y luego exiliar. Se reusa g.cast sobreescribiendo el
-        # coste temporalmente (aproximación: sin re-elegir objetivos avanzados).
-        p.graveyard.remove(c)
-        orig_cost = c.cost
-        try:
-            if cost is not None:
-                c.cost = cost
-            modes = getattr(c, "modes", ())
-            chosen = spec = None
-            if modes and mode is not None and 0 <= mode < len(modes):
-                chosen = [mode]
-                spec = modes[mode].get("target_spec")
-            self.g.cast(p, c, targets=self._chosen_targets(c, target_uids, spec=spec),
-                        chosen_modes=chosen)
-        finally:
-            c.cost = orig_cost
-        # tras resolver, el hechizo fue al cementerio: exiliarlo (flashback/escape)
-        if c in p.graveyard:
-            p.graveyard.remove(c)
-            p.exile.append(c)
-            self.g.log(f"{c.name} se exilia tras lanzarse desde el cementerio")
-        self.g.sba()
+        modes = getattr(c, "modes", ())
+        chosen = spec = None
+        if modes and mode is not None and 0 <= mode < len(modes):
+            chosen = [mode]
+            spec = modes[mode].get("target_spec")
+        targets = self._chosen_targets(c, target_uids, spec=spec) if spec else None
+        self.g.play_from_graveyard(p, c, targets=targets, chosen_modes=chosen)
 
     def _play_from_exile(self, p, i, target_uids, mode):
-        """Fase B: lanzar una carta desde el exilio persistente (foretell / impulse
-        no acotado). Paga su coste alternativo (._play_cost) y la castea normal."""
+        """Fase B: lanzar desde el exilio persistente (delega en el motor)."""
         if i is None or not (0 <= i < len(p.exile_play)):
             return
         c = p.exile_play[i]
-        cost = getattr(c, "_play_cost", None) or c.cost
-        if cost is not None and not p.can_pay(cost):
-            return
-        if c.is_land():
-            if p.lands_played >= 1:
-                return
-            p.exile_play.remove(c)
-            self.g.play_land(p, c)
-            self.g.sba()
-            return
-        orig = c.cost
-        try:
-            c.cost = cost
-            modes = getattr(c, "modes", ())
-            chosen = spec = None
-            if modes and mode is not None and 0 <= mode < len(modes):
-                chosen = [mode]
-                spec = modes[mode].get("target_spec")
-            ok = self.g.cast(p, c, targets=self._chosen_targets(c, target_uids, spec=spec),
-                             chosen_modes=chosen)
-        finally:
-            c.cost = orig
-        if ok is not False and c in p.exile_play:
-            p.exile_play.remove(c)
-        self.g.sba()
+        modes = getattr(c, "modes", ())
+        chosen = spec = None
+        if modes and mode is not None and 0 <= mode < len(modes):
+            chosen = [mode]
+            spec = modes[mode].get("target_spec")
+        targets = self._chosen_targets(c, target_uids, spec=spec) if spec else None
+        self.g.play_from_exile(p, c, targets=targets, chosen_modes=chosen)
 
     def foretell(self, i):
-        """Predice (foretell) una carta de la mano: paga {2}, la exilia y queda
-        jugable después por su coste de foretell (aprox: sin cara oculta real)."""
+        """Predice (foretell) una carta de la mano (delega en el motor)."""
         if not self._my_turn():
             return self.state()
         self._snapshot()
         p = self.human()
-        if i is None or not (0 <= i < len(p.hand)):
-            return self.state()
-        c = p.hand[i]
-        fc = getattr(c, "foretell", None)
-        if fc is None or not p.can_pay(Cost(2, ())):
-            return self.state()
-        p.pay(Cost(2, ()))
-        p.hand.remove(c)
-        c._play_cost = fc
-        p.exile_play.append(c)
-        self.g.log(f"{p.name} predice una carta (foretell)")
-        self.g.sba()
+        if i is not None and 0 <= i < len(p.hand):
+            self.g.foretell_card(p, p.hand[i])
         return self.state()
 
     def activate_gy(self, i, index=0, target_uids=None):
-        """Fase C: activa una habilidad de una carta EN EL CEMENTERIO."""
+        """Fase C: activa una habilidad de una carta EN EL CEMENTERIO (delega)."""
         if not self._my_turn():
             return self.state()
         self._snapshot()
         p = self.human()
-        if i is None or not (0 <= i < len(p.graveyard)):
-            return self.state()
-        c = p.graveyard[i]
-        abs_ = getattr(c, "gy_abilities", ()) or ()
-        if not (0 <= index < len(abs_)):
-            return self.state()
-        ab = abs_[index]
-        cost = ab.get("cost")
-        if cost is not None and not p.can_pay(cost):
-            return self.state()
-        if cost is not None:
-            p.pay(cost)
-        if ab.get("exile_self") and c in p.graveyard:
-            p.graveyard.remove(c)
-            p.exile.append(c)
-        self.g.note_ability(c, "habilidad desde el cementerio", controller=p)
-        eff = ab.get("effect")
-        if eff:
-            eff(self.g, p, c)
-        self.g.log(f"{p.name} activa {c.name} desde el cementerio")
-        self.g.sba()
+        if i is not None and 0 <= i < len(p.graveyard):
+            self.g.activate_gy_ability(p, p.graveyard[i], index)
         return self.state()
 
     def attack(self, uids=None, target_index=None, assign=None):

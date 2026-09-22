@@ -2261,6 +2261,30 @@ def test_ceaseless_conflict_wipes_then_makes_spirits():
     assert not any(pm.name == "Spirit" for pm in op.battlefield)  # el rival no recibe fichas
 
 
+def test_bot_plays_from_graveyard():
+    # el bot usa las mismas jugadas fuera del campo que el humano: reanima una
+    # criatura desde el cementerio (unearth) en su main phase.
+    import cardsdb, cards
+    from engine import Game, Player
+    from policy import Policy
+    beast = cardsdb.build_card_from_data({
+        "name": "Botcrawler", "type_line": "Creature", "mana_cost": "{3}{B}",
+        "power": "3", "toughness": "3", "color_identity": ["B"],
+        "oracle_text": "Unearth {1}{B}"})
+    me = Player("bot", [cards.land("Swamp", ["B"], basic=True) for _ in range(20)],
+                cards.creature("Cmd", "2B", 3, 3, legendary=True), policy=Policy("intermedio"))
+    op = Player("op", [cards.land("Island", ["U"], basic=True) for _ in range(20)],
+                cards.creature("O", "2U", 1, 1, legendary=True), policy=Policy("intermedio"))
+    g = Game([me, op], seed=1)
+    me.hand = []                                  # que no gaste maná en otra cosa
+    me.graveyard.append(beast)
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Swamp", ["B"], basic=True), me)
+    me.policy.main_phase(g, me, second=False)
+    g.resolve_stack()
+    assert any(pm.name == "Botcrawler" for pm in me.battlefield)   # el bot lo reanimó
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

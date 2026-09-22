@@ -83,8 +83,95 @@ class Policy:
             if me.can_pay(card.cost):
                 game.cast(me, card, targets=targets)
 
+        # 5) las MISMAS jugadas fuera del campo que puede hacer el humano:
+        # cementerio (flashback/unearth/embalm/recur), exilio (foretell), y las
+        # habilidades activadas de permanentes en juego.
+        self._use_extra_abilities(game, me, second)
+
         # planeswalkers
         self._activate_planeswalkers(game, me)
+
+    # -- habilidades fuera del campo / activadas (bots) ------------------- #
+    def _use_extra_abilities(self, game, me, second):
+        if me.lost:
+            return
+        nov = self.level == "novato"
+        if nov and game.rng.random() < 0.5:
+            return                     # el novato a veces no las usa
+        used = 0
+        # jugar desde el cementerio (reanimar/flashback/unearth/embalm/recur)
+        for c in list(me.graveyard):
+            if used >= 3:
+                break
+            if getattr(c, "gy_play", None) and game.play_from_graveyard(me, c):
+                used += 1
+        # jugar lo predicho/exiliado jugable
+        for c in list(me.exile_play):
+            if used >= 3:
+                break
+            if game.play_from_exile(me, c):
+                used += 1
+        # habilidades activadas DESDE el cementerio
+        for c in list(me.graveyard):
+            if used >= 3:
+                break
+            for j, ab in enumerate(getattr(c, "gy_abilities", ()) or ()):
+                if me.can_pay(ab.get("cost")) and game.activate_gy_ability(me, c, j):
+                    used += 1
+                    break
+        # habilidades activadas de permanentes en el campo
+        self._activate_perm_abilities(game, me, second)
+        # foretell: predecir una carta cara que todavía no podemos lanzar
+        if not second and not nov:
+            self._maybe_foretell(game, me)
+
+    def _activate_perm_abilities(self, game, me, second):
+        used = 0
+        for perm in list(me.battlefield):
+            if used >= 4:
+                return
+            for j, ab in enumerate(getattr(perm.card, "activated_abilities", ()) or ()):
+                # no girar criaturas antes del combate (podrían atacar): las de {T}
+                # solo se usan en la 2da main
+                if ab.get("tap") and not second and perm.is_creature():
+                    continue
+                if ab.get("tap") and perm.tapped:
+                    continue
+                if not me.can_pay(ab.get("cost")):
+                    continue
+                spec = ab.get("target_spec")
+                tgt = self._spec_targets(game, me, spec, ab.get("target_count", 1))
+                if spec and not tgt:
+                    continue
+                if game.activate_ability(perm, j, targets=tgt):
+                    used += 1
+                    break              # una habilidad por permanente por turno
+
+    def _spec_targets(self, game, me, spec, count):
+        if spec == "opp_creature":
+            pool = game.legal_creature_targets(me)
+            if not pool:
+                return []
+            pool.sort(key=lambda p: (p.power, p.toughness), reverse=True)
+            return pool[:max(1, count)]
+        if spec == "opp_player":
+            opps = game.opponents(me)
+            return [min(opps, key=lambda o: o.life)] if opps else []
+        if spec == "own_perm":
+            if not me.battlefield:
+                return []
+            return [max(me.battlefield,
+                        key=lambda x: (x.card.cost.cmc if x.card.cost else 0))]
+        return []
+
+    def _maybe_foretell(self, game, me):
+        for c in list(me.hand):
+            if getattr(c, "foretell", None) is None:
+                continue
+            # solo si NO podemos lanzarla normal pero sí pagar el foretell {2}
+            if not me.can_pay(c.cost) and me.can_pay(Cost(2, ())):
+                game.foretell_card(me, c)
+                return
 
     # -- planificacion de mana ------------------------------------------- #
     def _land_colors(self, card, me):
