@@ -723,15 +723,19 @@ class InteractiveGame:
             abs_ = getattr(pm.card, "activated_abilities", ()) or ()
             usable = []
             for i, ab in enumerate(abs_):
+                # las habilidades NO se descartan: se muestran deshabilitadas con
+                # el motivo, así no "desaparecen" al usar otra (girar / gastar maná).
+                reason = None
                 if ab.get("tap") and pm.tapped:
-                    continue
-                if not p.can_pay(ab.get("cost")):
-                    continue
+                    reason = "girada"
+                elif not p.can_pay(ab.get("cost")):
+                    reason = "sin maná"
                 spec = ab.get("target_spec")
                 usable.append({"i": i, "label": ab.get("label", f"Habilidad {i + 1}"),
                                "cost": _cost_str_cost(ab.get("cost")), "tap": bool(ab.get("tap")),
                                "target_spec": spec, "target_count": ab.get("target_count", 1),
-                               "targets": self._targets_for_spec(spec)})
+                               "targets": self._targets_for_spec(spec),
+                               "playable": reason is None, "reason": reason})
             if usable:
                 abilities.append({"uid": pm.uid, "name": pm.name, "abilities": usable})
 

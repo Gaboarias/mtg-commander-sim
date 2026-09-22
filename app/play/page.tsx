@@ -19,7 +19,7 @@ type HandCard = {
   keywords: string[]; abilities: string[];
 };
 type Activatable = { uid: number; name: string; loyalty: number; abilities: { i: number; cost: number; text?: string }[] };
-type AbilityOpt = { i: number; label: string; cost: string; tap: boolean; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] };
+type AbilityOpt = { i: number; label: string; cost: string; tap: boolean; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; playable?: boolean; reason?: string | null };
 type PermAbility = { uid: number; name: string; abilities: AbilityOpt[] };
 type TargetOpt = { uid?: number; idx?: number; name: string; power?: number; toughness?: number; from?: string };
 type ModeOpt = { i: number; label: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] };
@@ -780,9 +780,11 @@ export default function Play() {
                     {legal.abilities!.map((pm) =>
                       pm.abilities.map((ab) => (
                         <button key={pm.uid + "-a" + ab.i} className="ghost pw-ab"
+                          disabled={ab.playable === false}
                           onClick={() => useAbility(pm.uid, ab)}>
                           <b>{pm.name}</b> <span className="muted" style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>{ab.cost}{ab.tap ? <Icon name="refresh" size={11} /> : null}{ab.target_spec ? <Icon name="target" size={11} /> : null}</span>
                           <em className="pw-txt">{ab.label}</em>
+                          {ab.playable === false && ab.reason ? <em className="pw-txt">({ab.reason})</em> : null}
                         </button>
                       ))
                     )}

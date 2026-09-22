@@ -130,7 +130,7 @@ def _prefer_front_face(data: dict) -> dict:
         return data
     front = faces[0]
     merged = dict(data)
-    for key in ("type_line", "mana_cost", "power", "toughness", "oracle_text"):
+    for key in ("type_line", "mana_cost", "power", "toughness", "oracle_text", "loyalty"):
         v = merged.get(key)
         if v in (None, "", []) or (isinstance(v, str) and "//" in v):
             fv = front.get(key)
@@ -1419,8 +1419,10 @@ def build_card_from_data(data: dict) -> Card:
     if "planeswalker" in types:
         loy = _int_or_zero(data.get("loyalty"))
         abils, texts = _planeswalker_abilities(data.get("oracle_text", ""))
-        if loy > 0:
-            card.loyalty = loy
+        # sin lealtad válida en los datos, entraría con 0 y moriría al instante
+        # (SBA). Como todo planeswalker tiene lealtad inicial impresa, usamos un
+        # valor por defecto razonable para que no desaparezca del campo.
+        card.loyalty = loy if loy > 0 else 3
         card.loyalty_abilities = abils
         card.loyalty_texts = texts
 

@@ -2380,6 +2380,33 @@ def test_anger_grants_haste_from_graveyard():
     assert not guy.has("haste")
 
 
+def test_planeswalker_loyalty_from_face_and_survives():
+    # planeswalker de doble cara: la lealtad viene en card_faces[0], no en el nivel
+    # superior. Antes entraba con 0 y moría al instante (SBA).
+    import cardsdb, cards
+    from engine import Game, Player
+    data = {"name": "Front // Back", "type_line": "//", "color_identity": ["U"],
+            "card_faces": [
+                {"name": "Front", "type_line": "Legendary Planeswalker — Jace",
+                 "mana_cost": "{1}{U}", "loyalty": "4", "oracle_text": "+1: Nada."},
+                {"name": "Back", "type_line": "Land"}]}
+    pw = cardsdb.build_card_from_data(data)
+    assert "planeswalker" in pw.types and pw.loyalty == 4
+    me = Player("me", [cards.land("Island", ["U"], basic=True) for _ in range(10)],
+                cards.creature("C", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.land("I", ["U"]) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    perm = g.move_to_battlefield(pw, me)
+    g.sba()
+    assert perm in me.battlefield and perm.counters["loyalty"] == 4   # no desaparece
+    # planeswalker sin lealtad en los datos -> fallback, tampoco desaparece
+    pw2 = cardsdb.build_card_from_data({
+        "name": "Nolo", "type_line": "Legendary Planeswalker — X", "mana_cost": "{2}{U}",
+        "color_identity": ["U"], "oracle_text": "+1: Nada."})
+    assert pw2.loyalty == 3
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
