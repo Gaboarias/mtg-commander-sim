@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Seat, type PlayerState, type Perm } from "../board";
 import { listDecks, type SavedDeck } from "../localDecks";
 import { download, fileStamp } from "../download";
@@ -175,6 +175,18 @@ export default function Play() {
     }
     if (feed.length < abilitySeen.current) abilitySeen.current = feed.length; // nueva partida
   }, [state]);
+
+  // Escape cierra los modales informativos/opcionales (no las decisiones forzadas)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (inspect) setInspect(null);
+      else if (targeting) setTargeting(null);
+      else if (modePick) { setModePick(null); setModeSel([]); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inspect, targeting, modePick]);
 
   useEffect(() => {
     fetch("/api/catalog").then((r) => r.json()).then((d) => {
@@ -420,15 +432,21 @@ export default function Play() {
 
   return (
     <div className="wrap">
-      {abilityToast && (
-        <div className="ability-toast" role="status">
-          <Icon name="sparkles" size={16} />
-          <span>
-            <b>{abilityToast.card}</b>: {abilityToast.kind}
-            {abilityToast.controller ? <span className="muted"> — {abilityToast.controller}</span> : null}
-          </span>
-        </div>
-      )}
+      <AnimatePresence>
+        {abilityToast && (
+          <motion.div className="ability-toast" role="status"
+            initial={reduce ? false : { opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, y: -12 }}
+            transition={{ type: "spring", stiffness: 400, damping: 28 }}>
+            <Icon name="sparkles" size={16} />
+            <span>
+              <b>{abilityToast.card}</b>: {abilityToast.kind}
+              {abilityToast.controller ? <span className="muted"> — {abilityToast.controller}</span> : null}
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <header>
         <h1><Icon name="gamepad" size={26} /> Jugar contra el sistema</h1>
         <p>Elegí tu deck y hasta 3 rivales. Todo corre en tu navegador y vos manejás tu turno; el resto lo juega el sistema.</p>
@@ -491,7 +509,10 @@ export default function Play() {
         <>
           <div className="card">
             <div className="now">
-              <span className="turnbadge">Turno {state.turn}</span>
+              <motion.span className="turnbadge" key={state.turn}
+                initial={reduce ? false : { scale: 1.3, backgroundColor: "rgba(224,163,90,.35)" }}
+                animate={{ scale: 1, backgroundColor: "rgba(255,255,255,0)" }}
+                transition={{ type: "spring", stiffness: 320, damping: 22 }}>Turno {state.turn}</motion.span>
               <span className="label">
                 {state.phase === "over" ? "Partida terminada"
                   : myTurn ? "Tu turno · jugá tus cartas" : `Juega ${state.players[state.active]?.name}`}
@@ -520,7 +541,11 @@ export default function Play() {
             </div>
 
             {state.winner && (
-              <p className="win-line"><Icon name="trophy" size={18} /> {state.winner === "EMPATE" ? "Empate (límite de turnos)." : <>Gana <b>{state.winner}</b>.</>}</p>
+              <motion.p className="win-line"
+                initial={reduce ? false : { scale: 0.7, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: "spring", stiffness: 300, damping: 16 }}>
+                <Icon name="trophy" size={18} /> {state.winner === "EMPATE" ? "Empate (límite de turnos)." : <>Gana <b>{state.winner}</b>.</>}</motion.p>
             )}
           </div>
 
@@ -599,7 +624,10 @@ export default function Play() {
           )}
 
           {state.react && (
-            <div className="card def-panel">
+            <motion.div className="card def-panel"
+              initial={reduce ? false : { opacity: 0, y: -10, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{ type: "spring", stiffness: 380, damping: 26 }}>
               <h2 style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                 <Icon name="bolt" size={18} /> {state.react.from} lanza <b>{state.react.spell}</b> — ¿respondés?
               </h2>
@@ -645,7 +673,7 @@ export default function Play() {
                 Un rival lanzó un hechizo y podés responder antes de que resuelva
                 (contrahechizo, remoción a velocidad de instante, o pasar).
               </p>
-            </div>
+            </motion.div>
           )}
 
           {state.mulligan && (() => {
@@ -957,7 +985,7 @@ export default function Play() {
 
       {targeting && (
         <div className="inspect-back" onClick={() => setTargeting(null)}>
-          <div className="inspect" onClick={(e) => e.stopPropagation()}>
+          <div className="inspect" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setTargeting(null)}><Icon name="x" size={16} /></button>
             <h3><Icon name="target" size={17} /> Objetivo{targeting.count > 1 ? "s" : ""} de {targeting.name}</h3>
             <p className="muted" style={{ marginTop: 2 }}>
@@ -971,7 +999,9 @@ export default function Play() {
                 const sel = tsel.includes(tu);
                 return (
                   <button key={k} className={`ghost ${sel ? "on" : ""}`} onClick={() => chooseTarget(t)} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                    {targeting.count > 1 ? <Icon name={sel ? "check-circle" : "plus"} size={13} /> : null}
+                    {art[t.name]
+                      ? <span className="choice-thumb" style={{ backgroundImage: `url(${art[t.name]})` }} />
+                      : (targeting.count > 1 ? <Icon name={sel ? "check-circle" : "plus"} size={13} /> : null)}
                     {t.name}{t.power != null ? ` ${t.power}/${t.toughness}` : ""}
                     {t.from ? <span className="muted"> · {t.from}</span> : null}
                   </button>
