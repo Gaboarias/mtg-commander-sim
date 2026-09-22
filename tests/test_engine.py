@@ -518,6 +518,57 @@ def test_etb_target_human_chooses_creature():
     json.dumps(st)
 
 
+def test_saga_runs_chapters_and_sacrifices():
+    import cardsdb, cards
+    from engine import Game, Player
+    s = cardsdb.build_card_from_data({
+        "name": "Ceaseless Conflict", "type_line": "Enchantment — Saga",
+        "mana_cost": "{3}{R}", "color_identity": ["R"],
+        "oracle_text": "(As this Saga enters and after your draw step, add a lore "
+                       "counter. Sacrifice after III.)\n"
+                       "I — Create a 3/2 red Elemental creature token.\n"
+                       "II — Create a 3/2 red Elemental creature token.\n"
+                       "III — Each opponent loses 3 life."})
+    assert s.on_etb is not None and "upkeep" in s.triggers and "saga" in s.tags
+    me = Player("yo", [cards.creature("C", "1R", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    perm = g.move_to_battlefield(s, me)                      # capítulo I
+    assert sum(1 for p in me.battlefield if p.is_token) == 1
+    assert perm.counters.get("lore") == 1
+    g.emit("upkeep", player=me); g.resolve_stack()           # capítulo II
+    assert sum(1 for p in me.battlefield if p.is_token) == 2
+    life0 = op.life
+    g.emit("upkeep", player=me); g.resolve_stack()           # capítulo III + sacrificio
+    assert op.life == life0 - 3
+    assert perm not in me.battlefield                        # se sacrifica tras III
+
+
+def test_choose_creature_type_anthem():
+    import cardsdb, cards
+    from engine import Game, Player
+    a = cardsdb.build_card_from_data({
+        "name": "Tribal Banner", "type_line": "Artifact", "mana_cost": "{3}",
+        "oracle_text": "As this artifact enters, choose a creature type.\n"
+                       "Creatures you control of the chosen type get +1/+1."})
+    assert a.on_etb is not None and a.static_mod is not None
+    me = Player("yo", [cards.creature("E", "1G", 1, 1, subtypes=("Elf",))
+                       for _ in range(5)],
+                cards.creature("Cmd", "2G", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1U", 1, 1) for _ in range(5)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    elf = g.move_to_battlefield(cards.creature("Llanowar", "G", 1, 1, subtypes=("Elf",)), me)
+    other = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    p0 = elf.power
+    perm = g.move_to_battlefield(a, me)                       # bot: elige "Elf"
+    assert getattr(perm, "chosen_type", None) == "Elf"
+    assert elf.power == p0 + 1 and elf.toughness == 2         # elfo recibe +1/+1
+    assert other.power == 2                                   # no-elfo no cambia
+
+
 def test_etb_destroy_nonbasic_land_and_ramp():
     import cardsdb, cards
     from engine import Game, Player

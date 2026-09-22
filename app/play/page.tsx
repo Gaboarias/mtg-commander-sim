@@ -774,7 +774,7 @@ export default function Play() {
           scry: "Scry", surveil: "Surveil", fateseal: "Fateseal (biblioteca rival)",
           explore: "Explorar", search: "Buscar en la biblioteca",
           look_take: "Elegí una carta", reveal_land: "Elegí una carta",
-          etb_target: "Elegí un objetivo",
+          etb_target: "Elegí un objetivo", creature_type: "Elegí un tipo de criatura",
         };
         const title = titles[ch.kind] || "Elegí una carta";
         const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno" : "No llevarme ninguna";

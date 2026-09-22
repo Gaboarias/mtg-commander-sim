@@ -458,6 +458,31 @@ def _cmc(perm):
     return c.cost.cmc if getattr(c, "cost", None) else 0
 
 
+_ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
+
+
+def _parse_saga(oracle: str):
+    """Parsea los capítulos de un Saga: líneas 'I —', 'II, III —', etc.
+    Devuelve ({n_capítulo: efecto(g,ctrl)}, último_capítulo) o None."""
+    chapters = {}
+    for line in (oracle or "").splitlines():
+        m = re.match(r"\s*([IVX]+(?:\s*,\s*[IVX]+)*)\s*[—–-]+\s*(.+)", line.strip())
+        if not m:
+            continue
+        nums = [_ROMAN.get(r.strip().lower()) for r in m.group(1).split(",")]
+        body = m.group(2)
+        eff = _generic_amount_effect(body)
+        if eff is None:
+            eff = (lambda g, ctrl, *_a, _l=_short_label(body):
+                   g.log(f"{ctrl.name}: {_l}"))
+        for n in nums:
+            if n:
+                chapters[n] = eff
+    if not chapters:
+        return None
+    return chapters, max(chapters)
+
+
 def _human_target_choice(game, ctrl, kind, prompt, options, apply_one,
                          allow_none=False):
     """Elección de objetivo genérica para efectos (p. ej. ETB dirigidos).
@@ -1134,6 +1159,94 @@ def build_card_from_data(data: dict) -> Card:
         card.produces = (lambda perm, pl, _o=opts: dict(_o))
         card.tags = card.tags | {"ramp"}
 
+    # SAGA (encantamiento con capítulos): aproximación jugable. Al entrar corre el
+    # capítulo I; en cada mantenimiento del dueño avanza un capítulo (contador de
+    # lore) y se sacrifica al terminar el último. Se cablea ANTES de la capa genérica.
+    if "saga" in data.get("type_line", "").lower():
+        saga = _parse_saga(data.get("oracle_text", ""))
+        if saga:
+            _chapters, _maxch = saga
+
+            def _saga_run(game, ctrl, perm, n, _ch=_chapters, _mx=_maxch):
+                perm.counters["lore"] = n
+                e = _ch.get(n)
+                if e:
+                    e(game, ctrl)
+                game.log(f"{perm.name}: capítulo {n}")
+                if n >= _mx:
+                    game.to_graveyard(perm, "saga completa")
+
+            card.on_etb = (lambda g, ctrl, perm, _run=_saga_run: _run(g, ctrl, perm, 1))
+
+            def _saga_upkeep(game, perm, _run=_saga_run, **_kw):
+                _run(game, perm.controller, perm, perm.counters.get("lore", 0) + 1)
+
+            card.triggers = dict(card.triggers)
+            card.triggers["upkeep"] = _saga_upkeep
+            card.tags = card.tags | {"saga"}
+
+    # "Choose a creature type" + anthem tribal ("creatures ... of the chosen type
+    # get +N/+N"): al entrar el humano elige el tipo (pending_choice); el bonus se
+    # aplica como efecto estático (static_mod) a las criaturas de ese tipo.
+    _otc = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "").lower())
+    if "choose a creature type" in _otc and "of the chosen type" in _otc:
+        mb = re.search(r"of the chosen type get \+(\d+)/\+(\d+)", _otc)
+        dp, dt = (int(mb.group(1)), int(mb.group(2))) if mb else (1, 1)
+        yours = "you control" in _otc
+
+        def _etb_choose_type(game, ctrl, perm, _dp=dp, _dt=dt):
+            found, seen = [], set()
+            for zone in (ctrl.battlefield, ctrl.hand, ctrl.library):
+                for it in zone:
+                    cd = getattr(it, "card", it)
+                    if cd.is_creature():
+                        for st in cd.subtypes:
+                            if st.lower() not in seen:
+                                seen.add(st.lower())
+                                found.append(st)
+            if not found:
+                found = ["Human", "Elf", "Goblin", "Zombie", "Soldier", "Wizard"]
+            found = found[:14]
+
+            def _apply(idx, _t=found):
+                if idx is not None and 0 <= idx < len(_t):
+                    perm.chosen_type = _t[idx]
+                    game.log(f"{ctrl.name} elige el tipo {_t[idx]}")
+
+            if ctrl is getattr(game, "interactive_human", None):
+                game.pending_choice = {
+                    "kind": "creature_type",
+                    "prompt": "Elegí un tipo de criatura",
+                    "options": [{"i": i, "name": t, "ok": True}
+                                for i, t in enumerate(found)],
+                    "allow_none": False, "_apply": _apply,
+                }
+            else:   # bot: el tipo más común entre sus criaturas
+                counts = {}
+                for it in ctrl.battlefield:
+                    cd = getattr(it, "card", it)
+                    if cd.is_creature():
+                        for st in cd.subtypes:
+                            counts[st] = counts.get(st, 0) + 1
+                best = max(counts, key=counts.get) if counts else found[0]
+                perm.chosen_type = best
+                game.log(f"{ctrl.name} elige el tipo {best}")
+
+        card.on_etb = _etb_choose_type
+
+        def _sm(source, target, _dp=dp, _dt=dt, _yours=yours):
+            ct = getattr(source, "chosen_type", None)
+            if not ct or not target.is_creature():
+                return (0, 0)
+            if _yours and target.controller is not source.controller:
+                return (0, 0)
+            if ct.lower() in {s.lower() for s in target.card.subtypes}:
+                return (_dp, _dt)
+            return (0, 0)
+
+        card.static_mod = _sm
+        card.tags = card.tags | {"anthem"}
+
     # planeswalker: lealtad inicial + habilidades del texto de Scryfall. Sin
     # esto entraría con lealtad 0 y moriría al instante (SBA), y no tendría
     # habilidades activables. Se cablea ANTES de la capa genérica.
@@ -1186,7 +1299,8 @@ def build_card_from_data(data: dict) -> Card:
     # ganancia de vida, mill). Cubre creaturas/hechizos comunes que la capa por
     # tags no modela. No pisa remoción/barrida (más definitorias) ni efectos ya
     # cableados. Se resuelve al entrar (permanentes) o al resolverse (hechizos).
-    if not card.on_cast_resolve and not card.modes and not (card.tags & {"wipe", "removal"}):
+    if (not card.on_cast_resolve and not card.on_etb and not card.modes
+            and not (card.tags & {"wipe", "removal", "saga"})):
         geff = _generic_amount_effect(data.get("oracle_text", ""))
         if geff is not None:
             if {"instant", "sorcery"} & types:
