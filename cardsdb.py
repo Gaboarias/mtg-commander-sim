@@ -364,7 +364,15 @@ def _parse_activated(oracle: str):
         cost = parse_cost(mana_cost_to_str(mana)) if mana else parse_cost("0")
         eff, spec, count = _fragment_effect(body)
         if eff is None:
-            continue
+            # las habilidades de "agregar maná" ya se cubren con `produces`: no las
+            # dupliquemos como activables.
+            if re.search(r"\badd\b.*\bmana\b", body, re.I):
+                continue
+            # efecto no modelado: EXPONER igual la habilidad con un respaldo visible,
+            # así el jugador puede activarla (mismo criterio que los modos).
+            eff = (lambda g, c, tg=None, _l=_short_label(body):
+                   g.log(f"{c.name} activa: {_l}"))
+            spec, count = None, 1
         out.append({"cost": cost, "tap": tap, "label": _short_label(body),
                     "effect": (lambda g, c, perm, tg, _e=eff: _e(g, c, tg)),
                     "target_spec": spec, "target_count": count})

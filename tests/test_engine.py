@@ -1260,6 +1260,20 @@ def test_clone_copies_target():
     assert tok.name == "Dragon" and tok.power == 5 and tok.is_token
 
 
+def test_activated_ability_unmodeled_is_still_exposed():
+    # Una habilidad activada con efecto NO modelado (p. ej. animar una tierra) debe
+    # exponerse igual (activable, con log). La de "add mana" no se duplica (produces).
+    import cardsdb
+    c = cardsdb.build_card_from_data({
+        "name": "Gate Land", "type_line": "Land",
+        "oracle_text": "{T}: Add two mana in any combination of colors.\n"
+                       "{T}: Until end of turn, target land you control becomes an "
+                       "X/X Citizen creature with haste."})
+    labels = [a["label"] for a in c.activated_abilities]
+    assert len(c.activated_abilities) == 1                 # solo la de animar
+    assert not any("mana" in l.lower() for l in labels)    # la de maná no se duplica
+
+
 def test_activated_ability_pays_mana():
     # Habilidad activada "{2}{R}: deals 2 damage to each opponent": debe parsearse
     # y, al activarla, pagar el maná y aplicar el efecto.
