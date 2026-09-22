@@ -180,6 +180,9 @@ class Permanent:
         self.is_token = is_token
         self.uid = _next_uid()
         self.temp_pt = [0, 0]            # +P/+T "hasta el fin del turno" (prowess, pumps)
+        self.goaded = False              # goad: debe atacar en su próximo turno
+        self.must_attack = False
+        self.cant_block = False
         self.game = None                 # backref, lo pone move_to_battlefield
         self.activated_this_turn = False  # planeswalker: una activacion por turno
 
@@ -1111,6 +1114,10 @@ class Game:
         for pl in self.players:
             for perm in pl.battlefield:
                 perm.temp_pt = [0, 0]
+        # el goad/obligación de atacar del jugador activo se agota tras su combate
+        for perm in p.battlefield:
+            perm.goaded = False
+            perm.must_attack = False
         while len(p.hand) > 7:
             if p.policy and hasattr(p.policy, "choose_discard"):
                 card = p.policy.choose_discard(self, p)

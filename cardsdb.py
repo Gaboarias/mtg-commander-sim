@@ -206,9 +206,36 @@ def _clone_effect():
     return eff
 
 
+def _fight_effect():
+    """'~ fights target creature' / 'deals damage equal to its power to target
+    creature': la mejor criatura del controlador y el objetivo se hacen daño mutuo."""
+    def eff(game, ctrl, targets):
+        tg = (list(targets or []) or [None])[0]
+        if tg is None or not tg.is_creature():
+            return
+        mine = [c for c in ctrl.creatures()]
+        if not mine:
+            return
+        fighter = max(mine, key=lambda c: c.power)
+        game.log(f"{fighter.name} pelea con {tg.name}")
+        game.deal_damage(fighter, tg, fighter.power, combat=False)
+        game.deal_damage(tg, fighter, tg.power, combat=False)
+        game.sba()
+    return eff
+
+
+def _goad_effect():
+    """'Goad target creature': la criatura queda obligada a atacar en su turno."""
+    def eff(game, ctrl, targets):
+        for perm in list(targets or []):
+            perm.goaded = True
+            game.log(f"{ctrl.name} provoca (goad) a {perm.name}")
+    return eff
+
+
 def _targeted_special(oracle: str):
     """Detecta hechizos dirigidos especiales -> (effect, target_spec, count).
-    Parpadeo, robo de control y clon. None si no matchea."""
+    Parpadeo, robo de control, clon, pelea y goad. None si no matchea."""
     t = re.sub(r"\s+", " ", (oracle or "").lower())
     # robo de control
     if re.search(r"gain control of (?:up to \w+ )?target", t):
@@ -217,6 +244,13 @@ def _targeted_special(oracle: str):
     # clon
     if re.search(r"copy of (?:up to \w+ )?target (?:creature|permanent)", t):
         return _clone_effect(), "opp_creature", 1
+    # pelea
+    if re.search(r"fights? (?:up to \w+ )?target creature", t) or \
+       re.search(r"deals damage equal to its power to (?:up to \w+ )?target creature", t):
+        return _fight_effect(), "opp_creature", 1
+    # goad
+    if re.search(r"goad (?:up to \w+ )?target creature", t):
+        return _goad_effect(), "opp_creature", 1
     # parpadeo (exiliar y devolver al campo)
     if re.search(r"exile (?:up to \w+ )?target (?:creature|permanent)"
                  r"[^.]{0,80}?return (?:it|that card|them)[^.]{0,40}?battlefield", t):
@@ -700,6 +734,18 @@ def _generic_amount_effect(oracle: str):
     la capa por tags (wipe/removal/draw/ramp) no modela. Prioridad: fichas >
     quema a cada rival > ganancia de vida > mill propio."""
     t = re.sub(r"\s+", " ", (oracle or "").lower())
+
+    # fichas de recurso (Treasure/Clue/Food/Blood): visibles en el tablero.
+    m = re.search(r"create (\w+) (treasure|clue|food|blood|gold) tokens?", t)
+    if m:
+        n = _count_word(m.group(1)) or 1
+        kind = m.group(2)
+
+        def eff(game, ctrl, *_a, _n=min(n, 12), _k=kind):
+            for _ in range(_n):
+                cards.make_resource_token(game, ctrl, _k)
+            game.log(f"{ctrl.name} crea {_n} ficha(s) {_k.capitalize()}")
+        return eff
 
     m = re.search(r"create (\w+) .{0,40}?(\d+)/(\d+).{0,40}?token", t)
     if m:

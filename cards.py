@@ -83,6 +83,28 @@ def make_token(game, player, name, power, toughness, kw=(), subtypes=()):
     return game.move_to_battlefield(tok, player, is_token=True)
 
 
+def make_resource_token(game, player, kind):
+    """Treasure/Clue/Food/Blood como fichas-artefacto VISIBLES en el tablero.
+    Treasure funciona como fuente de maná (aproximación de 'sacrificar por maná');
+    las demás quedan en el campo (su sacrificio no se simula al detalle)."""
+    k = (kind or "").lower()
+    produces = None
+    if k == "treasure":
+        produces = (lambda perm, pl: {"W": 1, "U": 1, "B": 1, "R": 1, "G": 1})
+    tok = Card(
+        name=k.capitalize() or "Token",
+        types={"artifact"},
+        cost=None,
+        power=0,
+        toughness=0,
+        keywords=set(),
+        subtypes={k.capitalize()} if k else set(),
+        tags={"token", k} if k else {"token"},
+        produces=produces,
+    )
+    return game.move_to_battlefield(tok, player, is_token=True)
+
+
 # --------------------------------------------------------------------------- #
 # Efectos reutilizables
 # --------------------------------------------------------------------------- #

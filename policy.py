@@ -232,7 +232,12 @@ class Policy:
             return []
         # solo atacar con criaturas que hacen daño (>0): mandar una 0/x no aporta
         # y solo la expone a morir.
+        forced = [p for p in me.creatures() if p.can_attack()
+                  and (p.goaded or p.must_attack)]
         attackers = [p for p in me.creatures() if p.can_attack() and p.power > 0]
+        for p in forced:               # goad/obligación: deben atacar aunque no convenga
+            if p not in attackers:
+                attackers.append(p)
         if not attackers:
             return []
         target = min(opps, key=lambda o: o.life)
@@ -248,6 +253,10 @@ class Policy:
             if max_other >= me.life * 0.6:
                 keep = max(1, len(attackers) // 3)
         sending = attackers[:len(attackers) - keep] if keep else attackers
+        sending = list(sending)
+        for p in forced:               # nunca dejar en casa a un atacante obligado
+            if p not in sending:
+                sending.append(p)
 
         result = []
         pw_i = 0
@@ -261,7 +270,7 @@ class Policy:
 
     # -- bloqueo ---------------------------------------------------------- #
     def declare_blockers(self, game, me, incoming):
-        blockers = [p for p in me.creatures() if not p.tapped]
+        blockers = [p for p in me.creatures() if not p.tapped and not p.cant_block]
         if not blockers:
             return []
         life_incoming = sum(a.power for a in incoming if a.attacking is me)

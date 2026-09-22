@@ -733,6 +733,67 @@ def test_impulse_playable_from_exile_interactively():
     assert spell not in hu.impulse and len(hu.battlefield) == bf0 + 1
 
 
+def test_treasure_token_is_a_mana_source():
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Pirate", "type_line": "Creature", "mana_cost": "{1}{R}",
+        "power": "2", "toughness": "2", "color_identity": ["R"],
+        "oracle_text": "When Pirate enters, create a Treasure token."})
+    assert c.on_etb is not None
+    me = Player("yo", [cards.creature("F", "1R", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    m0 = me.available_mana()
+    g.move_to_battlefield(c, me)
+    assert any(pm.name == "Treasure" for pm in me.battlefield)
+    assert me.available_mana() == m0 + 1        # la Treasure aporta 1 maná
+
+
+def test_fight_deals_mutual_damage():
+    import cardsdb, cards
+    from engine import Game, Player
+    fight = cardsdb.build_card_from_data({
+        "name": "Prey Upon", "type_line": "Sorcery", "mana_cost": "{G}",
+        "color_identity": ["G"],
+        "oracle_text": "Target creature you control fights target creature "
+                       "you don't control."})
+    assert fight.on_cast_resolve is not None
+    me = Player("yo", [cards.creature("F", "1G", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2G", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    mine = g.move_to_battlefield(cards.creature("Bear", "1G", 4, 4), me)
+    tg = g.move_to_battlefield(cards.creature("Elk", "2G", 2, 3), op)
+    fight.on_cast_resolve(g, me, [tg])
+    assert tg not in op.battlefield              # 4 de daño mata al 2/3
+    assert mine.damage == 2                      # recibe 2 de vuelta
+
+
+def test_goad_forces_attack():
+    import cardsdb, cards
+    from engine import Game, Player
+    from policy import Policy
+    goad = cardsdb.build_card_from_data({
+        "name": "Taunt", "type_line": "Sorcery", "mana_cost": "{1}{R}",
+        "color_identity": ["R"], "oracle_text": "Goad target creature."})
+    assert goad.on_cast_resolve is not None
+    me = Player("yo", [cards.creature("F", "1R", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True), policy=Policy("intermedio"))
+    g = Game([me, op], seed=1)
+    passive = g.move_to_battlefield(cards.creature("Sloth", "2U", 2, 2), op)
+    passive.summoning_sick = False
+    goad.on_cast_resolve(g, me, [passive])
+    assert passive.goaded
+    plan = op.policy.declare_attackers(g, op)
+    assert any(atk is passive for atk, _tgt in plan)   # obligada a atacar
+
+
 def test_protection_and_shroud_block_targeting():
     import cards
     from engine import Game, Player
