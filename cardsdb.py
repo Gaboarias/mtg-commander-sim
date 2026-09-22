@@ -1321,6 +1321,15 @@ def build_card_from_data(data: dict) -> Card:
     # tags: de creatura + derivados (aprox) del texto de la carta, para que la
     # capa de efectos genericos funcione tambien con cartas de Scryfall
     card.tags = _derive_tags(data.get("oracle_text", ""), card.types)
+    # reducciones de coste dinámicas (convoke / delve / affinity for artifacts)
+    _ktext = (" ".join(data.get("keywords", []) or []) + " "
+              + (data.get("oracle_text", "") or "")).lower()
+    if "convoke" in _ktext:
+        card.tags = card.tags | {"convoke"}
+    if "delve" in _ktext:
+        card.tags = card.tags | {"delve"}
+    if "affinity for artifacts" in _ktext:
+        card.tags = card.tags | {"affinity_art"}
 
     # jugar/lanzar desde el CEMENTERIO (flashback / escape / unearth / embalm /
     # disturb / recursión). Descriptor en card.gy_play; interactive lo ofrece.

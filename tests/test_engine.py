@@ -2657,6 +2657,48 @@ def test_legend_rule_human_chooses():
     assert b in hu.battlefield and a not in hu.battlefield
 
 
+def test_convoke_taps_creatures_to_pay():
+    import cardsdb, cards
+    g, me, op = _duel()
+    c = cardsdb.build_card_from_data({
+        "name": "Machine", "type_line": "Artifact", "mana_cost": "{3}",
+        "oracle_text": "Convoke", "keywords": ["Convoke"]})
+    assert "convoke" in c.tags
+    for _ in range(3):
+        pm = g.move_to_battlefield(cards.creature("C", "1G", 1, 1), me)
+        pm.summoning_sick = False
+    assert g.cast(me, c) is not False        # pagado girando 3 criaturas
+    assert sum(1 for pm in me.battlefield if pm.is_creature() and pm.tapped) == 3
+
+
+def test_delve_exiles_graveyard_to_pay():
+    import cardsdb, cards
+    g, me, op = _duel()
+    c = cardsdb.build_card_from_data({
+        "name": "Dig", "type_line": "Sorcery", "mana_cost": "{4}{U}",
+        "color_identity": ["U"], "oracle_text": "Delve\nDraw a card.",
+        "keywords": ["Delve"]})
+    assert "delve" in c.tags
+    for _ in range(5):
+        me.graveyard.append(cards.creature("Gy", "1U", 1, 1))
+    g.move_to_battlefield(cards.land("Island", ["U"], basic=True), me)
+    ex0 = len(me.exile)
+    assert g.cast(me, c) is not False        # {4} pagado exiliando 4 del cementerio
+    assert len(me.exile) - ex0 >= 4
+
+
+def test_affinity_reduces_by_artifacts():
+    import cardsdb, cards
+    g, me, op = _duel()
+    c = cardsdb.build_card_from_data({
+        "name": "Cranium", "type_line": "Artifact", "mana_cost": "{4}",
+        "oracle_text": "Affinity for artifacts"})
+    assert "affinity_art" in c.tags
+    for _ in range(4):
+        g.move_to_battlefield(cards.rock("Rock", "2", ["C"]), me)   # 4 artefactos
+    assert g.cast(me, c) is not False        # {4} - 4 artefactos = gratis
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

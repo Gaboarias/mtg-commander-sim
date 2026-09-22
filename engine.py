@@ -965,6 +965,24 @@ class Game:
                 self.spell_x = x
                 pay_cost = Cost(generic=base.generic + x, pips=base.pips)
                 self.log(f"{player.name} elige X = {x} para {card.name}")
+        # reducciones dinámicas: affinity (artefactos), convoke (girar criaturas),
+        # delve (exiliar del cementerio). Bajan el genérico y consumen recursos.
+        convoke_tap, delve_n = [], 0
+        tags = getattr(card, "tags", set()) or set()
+        if pay_cost is not None and (tags & {"affinity_art", "convoke", "delve"}):
+            gen = pay_cost.generic
+            if "affinity_art" in tags:
+                arts = sum(1 for pm in player.battlefield if "artifact" in pm.card.types)
+                gen = max(0, gen - arts)
+            if "convoke" in tags:
+                creqs = [pm for pm in player.battlefield if pm.is_creature() and not pm.tapped]
+                use = min(gen, len(creqs))
+                convoke_tap = creqs[:use]
+                gen -= use
+            if "delve" in tags:
+                delve_n = min(gen, len(player.graveyard))
+                gen -= delve_n
+            pay_cost = Cost(generic=gen, pips=pay_cost.pips)
         if not player.can_pay(pay_cost):
             return False
         # coste adicional al lanzar (pagar vida / descartar / sacrificar)
@@ -983,6 +1001,16 @@ class Game:
                     self.to_graveyard(victim, "coste adicional")
             self.log(f"{player.name} paga el coste adicional de {card.name}")
         player.pay(pay_cost)
+        # consumir recursos de las reducciones dinámicas
+        for pm in convoke_tap:
+            pm.tapped = True
+        if convoke_tap:
+            self.log(f"{player.name} gira {len(convoke_tap)} criatura(s) (convoke)")
+        if delve_n:
+            for _ in range(delve_n):
+                if player.graveyard:
+                    player.exile.append(player.graveyard.pop())
+            self.log(f"{player.name} exilia {delve_n} del cementerio (delve)")
 
         # quitar de la zona de origen
         if from_command:
