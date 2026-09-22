@@ -2467,6 +2467,29 @@ def test_reaction_window_to_opponent_spell():
     assert ig._offer_reaction(op, beast) is False
 
 
+def test_optional_may_draw_asks_human_auto_for_bot():
+    # "you may draw a card": el humano decide (sí/no); el bot auto-acepta.
+    import interactive, cardsdb, decks
+    data = {"name": "Peek", "type_line": "Creature", "mana_cost": "{1}{U}",
+            "power": "1", "toughness": "1", "color_identity": ["U"],
+            "oracle_text": "When Peek enters, you may draw a card."}
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    h0 = len(hu.hand)
+    ig.g.move_to_battlefield(cardsdb.build_card_from_data(data), hu)
+    assert ig.g.pending_choice and ig.g.pending_choice["kind"] == "may"  # le pregunta
+    assert len(hu.hand) == h0                    # todavía no robó
+    ig.resolve_choice(0)                          # dice que sí
+    assert len(hu.hand) == h0 + 1
+    # el bot auto-acepta (sin pending_choice)
+    op = ig.g.opponents(hu)[0]
+    ob = len(op.hand)
+    ig.g.move_to_battlefield(cardsdb.build_card_from_data(data), op)
+    assert ig.g.pending_choice is None and len(op.hand) == ob + 1
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

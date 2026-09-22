@@ -1247,11 +1247,19 @@ def _generic_amount_effect(oracle: str):
                                      kind="look_take",
                                      prompt="Elegí una carta para tu mano")
 
-    # "you may draw a card" (opcional, singular): la tomamos y lo registramos.
+    # "(you may) draw a card": si es OPCIONAL ('you may'), el humano decide; si es
+    # obligatorio, roba directo.
     if re.search(r"(?:you may )?draw a card", t):
-        def eff(game, ctrl, *_a):
-            ctrl.draw(1, game)
-            game.log(f"{ctrl.name} roba una carta")
+        optional = bool(re.search(r"you may draw a card", t))
+
+        def eff(game, ctrl, *_a, _opt=optional):
+            def _do(g, c):
+                c.draw(1, g)
+                g.log(f"{c.name} roba una carta")
+            if _opt:
+                game.may(ctrl, "¿Robar una carta?", _do)
+            else:
+                _do(game, ctrl)
         return eff
 
     return None

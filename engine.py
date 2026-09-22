@@ -606,6 +606,21 @@ class Game:
             out.extend(pl.battlefield)
         return out
 
+    def may(self, ctrl: "Player", prompt: str, on_yes) -> None:
+        """Decisión OPCIONAL ('podés hacer X'). El humano elige sí/no vía
+        pending_choice; los bots auto-aceptan (heurística: suele convenir).
+        `on_yes(game, ctrl)` corre solo si se acepta."""
+        if ctrl is getattr(self, "interactive_human", None):
+            self.pending_choice = {
+                "kind": "may", "prompt": prompt,
+                "options": [{"i": 0, "name": "Sí"}, {"i": 1, "name": "No"}],
+                "allow_none": False,
+                "_apply": (lambda idx, _f=on_yes, _c=ctrl:
+                           _f(self, _c) if idx == 0 else None),
+            }
+        else:
+            on_yes(self, ctrl)
+
     def grants_keyword(self, perm: "Permanent", kw: str) -> bool:
         """¿Alguna habilidad estática le OTORGA `kw` a `perm`? Hoy cubre las
         estáticas desde el cementerio (Anger/Brawn/Wonder): 'mientras esta carta
