@@ -4,6 +4,8 @@ Depende de engine.py. No toca el motor. Para agregar cartas ver ADDING_CARDS.md.
 """
 from __future__ import annotations
 
+import copy as _copy
+
 from engine import Card, Cost, Permanent, parse_cost, W, U, B, R, G, C
 
 
@@ -81,6 +83,17 @@ def make_token(game, player, name, power, toughness, kw=(), subtypes=()):
         tags={"creature"},
     )
     return game.move_to_battlefield(tok, player, is_token=True)
+
+
+def make_copy_token(game, player, src_card):
+    """Ficha que es una COPIA de `src_card` (clon / populate / embalm avanzado).
+    A diferencia de make_token, copia TODAS las características imprimibles y los
+    ganchos de habilidad (ETB, muerte, activadas, disparadas, estáticas, lealtad),
+    no solo P/T + keywords. Las funciones se comparten por referencia (deepcopy las
+    trata como átomos); los sets se duplican para no compartir estado con el original."""
+    c = _copy.deepcopy(src_card)
+    # una copia no es la carta comandante ni conserva historial de zona
+    return game.move_to_battlefield(c, player, is_token=True)
 
 
 def make_resource_token(game, player, kind):

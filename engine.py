@@ -477,6 +477,9 @@ class Game:
         # turnos extra pendientes (para el mismo jugador)
         self.extra_turns: list = []
         self.spell_x = 0            # X elegido del último hechizo con {X} lanzado
+        # última habilidad activada resuelta (para copiarla: Strionic Resonator):
+        # (perm, ability_dict, targets)
+        self.last_activated = None
         for p in players:
             p.setup(self.rng)
         if mulligan:
@@ -1169,8 +1172,59 @@ class Game:
         eff = ab.get("effect")
         if eff:
             eff(self, ctrl, perm, targets or [])
+        # recordar esta habilidad para que efectos "copiá la última habilidad"
+        # (Strionic Resonator) la puedan duplicar. La propia habilidad de copia
+        # NO se registra (si no, copiarse a sí misma sería el único efecto).
+        if not ab.get("is_copy_ability"):
+            self.last_activated = (perm, ab, list(targets or []))
         self.sba()
         return True
+
+    def copy_spell_on_stack(self, obj, controller=None):
+        """Pone en la pila una COPIA del hechizo `obj` (StackObject). La copia se
+        resuelve con el mismo efecto y objetivos y luego deja de existir (no va a
+        ninguna zona). Cubre Fork / Twincast / Reverberate."""
+        src = getattr(obj, "source", None)
+        if src is None:
+            return
+        ctrl = controller or obj.controller
+        tgts = list(getattr(obj, "targets", None) or [])
+
+        def _resolve(g, _src=src, _ctrl=ctrl, _tgts=tgts):
+            g.note_ability(_src, "copia del hechizo se resuelve", controller=_ctrl)
+            if getattr(_src, "modes", None):
+                m = _src.modes[0]
+                e = m.get("effect")
+                if e:
+                    e(g, _ctrl, _tgts)
+            elif _src.on_cast_resolve:
+                _src.on_cast_resolve(g, _ctrl, _tgts)
+            else:
+                g.log(f"copia de {_src.name} (efecto complejo: no se simula en detalle)")
+            # una copia no se pone en ninguna zona: deja de existir al resolverse
+
+        self.stack.append(StackObject(ctrl, _resolve, source=src, targets=tgts,
+                                      label=f"copy:{src.name}"))
+        self.log(f"{ctrl.name} copia el hechizo {src.name}")
+
+    def copy_last_ability(self, ctrl):
+        """Copia (vuelve a ejecutar) la última habilidad activada resuelta, sin
+        volver a pagar su coste. Aproximación de Strionic Resonator: como el motor
+        resuelve las habilidades al instante (no van a la pila), se copia la más
+        reciente registrada en `last_activated`."""
+        la = self.last_activated
+        if not la:
+            self.log(f"{ctrl.name}: no hay habilidad reciente para copiar")
+            return
+        perm, ab, tgts = la
+        eff = ab.get("effect")
+        if not eff:
+            return
+        label = ab.get("label", "")
+        self.note_ability(perm.card, f"copia de «{label}»", controller=ctrl)
+        self.log(f"{ctrl.name} copia la habilidad «{label}» de {perm.name}")
+        eff(self, perm.controller, perm, list(tgts or []))
+        self.sba()
 
     def play_land(self, player: "Player", card: Card) -> bool:
         if player.lands_played >= 1:

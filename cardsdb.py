@@ -193,14 +193,39 @@ def _control_effect(temp):
 
 
 def _clone_effect():
-    """Clon: crea una ficha copia (P/T + keywords) del objetivo."""
+    """Clon: crea una ficha que es una COPIA COMPLETA del objetivo (P/T, keywords
+    y también sus habilidades: ETB, activadas, disparadas, estáticas, lealtad)."""
     def eff(game, ctrl, targets):
         tg = (list(targets or []) or [None])[0]
         if tg is None:
             return
-        cards.make_token(game, ctrl, tg.card.name, tg.card.power, tg.card.toughness,
-                         kw=tuple(tg.card.keywords))
+        cards.make_copy_token(game, ctrl, tg.card)
         game.log(f"{ctrl.name} crea una copia de {tg.card.name}")
+    return eff
+
+
+def _copy_spell_effect():
+    """Copia un hechizo de la pila (Fork / Twincast / Reverberate). El objetivo es
+    un StackObject (target_spec='stack_spell')."""
+    def eff(game, ctrl, targets):
+        obj = (list(targets or []) or [None])[0]
+        if obj is None or obj not in game.stack:
+            game.log(f"{ctrl.name}: no hay hechizo en la pila para copiar")
+            return
+        game.copy_spell_on_stack(obj, controller=ctrl)
+    return eff
+
+
+def _populate_effect():
+    """Populate: crea una ficha copia de la MEJOR ficha de criatura que controlás."""
+    def eff(game, ctrl, targets):
+        toks = [pm for pm in ctrl.battlefield if pm.is_token and pm.is_creature()]
+        if not toks:
+            game.log(f"{ctrl.name} no tiene fichas de criatura para poblar (populate)")
+            return
+        best = max(toks, key=lambda c: (c.power, c.toughness))
+        cards.make_copy_token(game, ctrl, best.card)
+        game.log(f"{ctrl.name} puebla (populate): copia {best.name}")
     return eff
 
 
@@ -235,6 +260,10 @@ def _targeted_special(oracle: str):
     """Detecta hechizos dirigidos especiales -> (effect, target_spec, count).
     Parpadeo, robo de control, clon, pelea y goad. None si no matchea."""
     t = re.sub(r"\s+", " ", (oracle or "").lower())
+    # copiar hechizo (Fork / Twincast / Reverberate): apunta a un hechizo de la pila
+    if re.search(r"copy target (?:instant or sorcery |instant |sorcery )?spell", t) or \
+       re.search(r"copy that spell", t):
+        return _copy_spell_effect(), "stack_spell", 1
     # robo de control
     if re.search(r"gain control of (?:up to \w+ )?target", t):
         temp = "until end of turn" in t or "end of turn" in t
@@ -265,6 +294,13 @@ def _short_label(s, n=52):
 def _fragment_effect(seg: str):
     """Parsea un fragmento de texto a (effect(g,ctrl,targets), target_spec, count).
     Reusa los helpers de remoción/monto/robar. effect=None si no se reconoce."""
+    # copiar una habilidad activada/disparada (Strionic Resonator / Lithoform Engine):
+    # como el motor resuelve las habilidades al instante, copiamos la última resuelta.
+    if re.search(r"copy target (?:activated|triggered)", seg, re.I) or \
+       re.search(r"copy (?:that|the target) (?:activated |triggered )?ability", seg, re.I):
+        def copy_ab(game, ctrl, targets):
+            game.copy_last_ability(ctrl)
+        return copy_ab, None, 1
     spec = _targeted_spell(seg)
     if spec is not None:
         mode, count = spec
@@ -378,9 +414,13 @@ def _parse_activated(oracle: str):
             eff = (lambda g, c, tg=None, _l=_short_label(body):
                    g.log(f"{c.name} activa: {_l}"))
             spec, count = None, 1
+        is_copy = bool(re.search(r"copy target (?:activated|triggered)", body, re.I)
+                       or re.search(r"copy (?:that|the target) (?:activated |triggered )?ability",
+                                    body, re.I))
         out.append({"cost": cost, "tap": tap, "label": _short_label(body),
                     "effect": (lambda g, c, perm, tg, _e=eff: _e(g, c, tg)),
-                    "target_spec": spec, "target_count": count})
+                    "target_spec": spec, "target_count": count,
+                    "is_copy_ability": is_copy})
     return tuple(out[:4])
 
 
@@ -1585,6 +1625,21 @@ def build_card_from_data(data: dict) -> Card:
         geff = _generic_amount_effect(data.get("oracle_text", ""))
         if geff is not None:
             card.on_etb = geff
+
+    # populate ("Populate" / "then populate"): copia tu mejor ficha de criatura.
+    # Se ejecuta al resolverse el hechizo (encadenado con el efecto previo si lo hay).
+    if re.search(r"\bpopulate\b", (data.get("oracle_text", "") or ""), re.I) \
+            and {"instant", "sorcery"} & types:
+        _pop = _populate_effect()
+        _prev = card.on_cast_resolve
+        if _prev is None:
+            card.on_cast_resolve = _pop
+        else:
+            def _combo(g, c, tg, _p=_prev, _q=_pop):
+                _p(g, c, tg)
+                _q(g, c, tg)
+            card.on_cast_resolve = _combo
+        card.tags = card.tags | {"populate"}
 
     # habilidades activadas con coste de maná (creaturas/permanentes/tierras):
     # "{cost}: efecto" -> se pueden activar en juego pagando el maná.

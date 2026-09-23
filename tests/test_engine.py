@@ -2736,6 +2736,105 @@ def test_aura_attaches_buffs_and_falls_off():
     assert ap not in me.battlefield and aura in me.graveyard   # el aura se cae
 
 
+# -- copiar: clones completos, hechizos, habilidades, populate ------------- #
+def test_clone_copies_abilities_not_just_pt():
+    # un clon ahora copia también las habilidades (ETB, activadas), no solo P/T.
+    import cardsdb, cards
+    g, me, op = _duel()
+    hits = {"n": 0}
+    src = cards.creature("Maga", "2U", 2, 2)
+    src.on_etb = lambda game, ctrl, perm: hits.__setitem__("n", hits["n"] + 1)
+    src.activated_abilities = ({"cost": cards.parse_cost("0"), "tap": False,
+                                "label": "ping", "effect":
+                                (lambda game, ctrl, perm, tg: game.log("ping")),
+                                "target_spec": None, "target_count": 1},)
+    victim = g.move_to_battlefield(src, op)          # ETB del original: +1
+    assert hits["n"] == 1
+    tok = cards.make_copy_token(g, me, victim.card)
+    assert hits["n"] == 2                             # ETB del clon también dispara
+    assert tok.is_token and tok.name == "Maga"
+    assert tok.card.activated_abilities              # copió la habilidad activada
+    assert g.activate_ability(tok, 0) is True
+
+
+def test_copy_spell_duplicates_effect():
+    import cardsdb, cards
+    from engine import Game, Player, StackObject
+    g, me, op = _duel()
+    # hechizo objetivo: quema 3 a un jugador. Lo ponemos en la pila a mano.
+    burn = cardsdb.build_card_from_data({
+        "name": "Rayo", "type_line": "Instant", "mana_cost": "{R}",
+        "color_identity": ["R"],
+        "oracle_text": "Rayo deals 3 damage to any target."})
+    assert burn.on_cast_resolve is not None
+    l0 = op.life
+    obj = StackObject(me, lambda gg: burn.on_cast_resolve(gg, me, [op]),
+                      source=burn, targets=[op], label="spell:Rayo")
+    g.stack.append(obj)
+    # Fork copia el hechizo de la pila
+    g.copy_spell_on_stack(obj, controller=me)
+    # resolver la pila: primero la copia (3), luego el original (3) => -6
+    while g.stack:
+        top = g.stack.pop()
+        top.resolve(g)
+    assert op.life == l0 - 6
+
+
+def test_fork_card_parses_as_stack_spell_copy():
+    import cardsdb
+    fork = cardsdb.build_card_from_data({
+        "name": "Twincast", "type_line": "Instant", "mana_cost": "{U}{U}",
+        "color_identity": ["U"],
+        "oracle_text": "Copy target instant or sorcery spell. You may choose new "
+                       "targets for the copy."})
+    assert fork.target_spec == "stack_spell" and fork.on_cast_resolve is not None
+
+
+def test_strionic_copies_last_activated_ability():
+    import cardsdb, cards
+    g, me, op = _duel()
+    calls = {"n": 0}
+    src = cards.creature("Pinchador", "1R", 1, 1)
+    src.activated_abilities = ({"cost": cards.parse_cost("0"), "tap": False,
+                                "label": "ping", "effect":
+                                (lambda game, ctrl, perm, tg: calls.__setitem__(
+                                    "n", calls["n"] + 1)),
+                                "target_spec": None, "target_count": 1},)
+    pm = g.move_to_battlefield(src, me)
+    assert g.activate_ability(pm, 0) is True and calls["n"] == 1
+    reson = cardsdb.build_card_from_data({
+        "name": "Strionic Resonator", "type_line": "Artifact",
+        "oracle_text": "{2}, {T}: Copy target activated or triggered ability. You "
+                       "may choose new targets for the copy."})
+    assert reson.activated_abilities
+    ab = reson.activated_abilities[0]
+    assert ab.get("is_copy_ability") is True
+    for _ in range(2):                           # maná para pagar el {2} de Strionic
+        g.move_to_battlefield(cards.land("Plains", ["W"], basic=True), me)
+    rp = g.move_to_battlefield(reson, me)
+    rp.summoning_sick = False
+    assert g.activate_ability(rp, 0) is True     # copia la última habilidad => +1
+    assert calls["n"] == 2
+    # la habilidad de copia NO se registra como "última" (no se copia a sí misma)
+    assert g.last_activated is not None and g.last_activated[0] is pm
+
+
+def test_populate_copies_best_creature_token():
+    import cardsdb, cards
+    g, me, op = _duel()
+    cards.make_token(g, me, "Saproling", 1, 1)
+    cards.make_token(g, me, "Bestia", 3, 3)
+    spell = cardsdb.build_card_from_data({
+        "name": "Crecer", "type_line": "Sorcery", "mana_cost": "{2}{G}",
+        "color_identity": ["G"], "oracle_text": "Populate."})
+    assert "populate" in spell.tags and spell.on_cast_resolve is not None
+    n0 = sum(1 for pm in me.battlefield if pm.is_token)
+    spell.on_cast_resolve(g, me, [])
+    toks = [pm for pm in me.battlefield if pm.is_token]
+    assert len(toks) == n0 + 1
+    assert any(pm.name == "Bestia" for pm in toks[-1:])   # copia la mejor ficha
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
