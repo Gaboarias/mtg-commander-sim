@@ -6,6 +6,7 @@ import { Seat, type PlayerState, type Perm } from "../board";
 import { listDecks, bumpGamesPlayed, type SavedDeck } from "../localDecks";
 import { download, fileStamp } from "../download";
 import { Icon } from "../icons";
+import { Help } from "../Help";
 
 const PY_VERSION = "0.26.4";
 const PY_BASE = `https://cdn.jsdelivr.net/pyodide/v${PY_VERSION}/full/`;
@@ -487,7 +488,10 @@ export default function Play() {
                 <option value="avanzado">Avanzado</option>
               </select>
             </label>
-            <label>Semilla&nbsp;
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              Código de partida
+              <Help label="código de partida" text="Fija el azar de la partida: con el mismo código y los mismos decks sale exactamente la misma partida. Cambialo para ver otra (o compartilo para que otra persona vea la misma)." />
+              &nbsp;
               <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} style={{ width: 90 }} />
             </label>
           </div>

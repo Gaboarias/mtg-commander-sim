@@ -5,6 +5,7 @@ import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import { listDecks, type SavedDeck } from "../localDecks";
 import { Seat, type PlayerState } from "../board";
+import { Help } from "../Help";
 import { download, fileStamp } from "../download";
 import { Icon } from "../icons";
 
@@ -205,7 +206,10 @@ export default function Watch() {
               <option value="avanzado">Avanzado</option>
             </select>
           </label>
-          <label>Semilla&nbsp;
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+            Código de partida
+            <Help label="código de partida" text="Fija el azar de la partida: con el mismo código y los mismos decks sale exactamente la misma partida. Cambialo para ver otra (o compartilo para que otra persona vea la misma)." />
+            &nbsp;
             <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} style={{ width: 90 }} />
           </label>
           <button className="go" onClick={run} disabled={busy || selected.length < 2}>
