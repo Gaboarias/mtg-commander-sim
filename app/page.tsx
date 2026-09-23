@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
-import { listDecks, removeDeck, type SavedDeck } from "./localDecks";
+import { listDecks, removeDeck, bumpGamesPlayed, type SavedDeck } from "./localDecks";
 import { effectiveCode, getToken } from "./auth";
 import { download, fileStamp } from "./download";
 import { Icon } from "./icons";
@@ -133,7 +133,7 @@ export default function Home() {
       }
       if (d.error) throw new Error(d.error);
       if (logMode) setLog(d);
-      else setResult(d);
+      else { setResult(d); try { bumpGamesPlayed(); } catch { /* storage off */ } }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

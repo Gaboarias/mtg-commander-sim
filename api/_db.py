@@ -134,6 +134,9 @@ _SCHEMA = [
          created_at INTEGER, fails INTEGER DEFAULT 0, last_fail INTEGER DEFAULT 0)""",
     """CREATE TABLE IF NOT EXISTS mtg_sessions (
          token TEXT PRIMARY KEY, user_id TEXT, created_at INTEGER)""",
+    """CREATE TABLE IF NOT EXISTS mtg_feedback (
+         id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT, rating INTEGER,
+         message TEXT, page TEXT, contact TEXT, created_at INTEGER)""",
 ]
 
 

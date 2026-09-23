@@ -120,6 +120,37 @@ export function setBinder(cards: BinderCard[]): BinderCard[] {
   return listBinder();
 }
 
+// -- contador de partidas + estado del feedback ------------------------- //
+const GAMES_KEY = "mtgsim:games";
+const FEEDBACK_KEY = "mtgsim:feedback";
+
+export function getGamesPlayed(): number {
+  return read<number>(GAMES_KEY, 0);
+}
+
+// suma 1 partida jugada y devuelve el total nuevo
+export function bumpGamesPlayed(): number {
+  const n = getGamesPlayed() + 1;
+  write(GAMES_KEY, n);
+  return n;
+}
+
+export type FeedbackState = { done: boolean; dismissedAt: number };
+
+export function getFeedbackState(): FeedbackState {
+  return read<FeedbackState>(FEEDBACK_KEY, { done: false, dismissedAt: 0 });
+}
+
+export function markFeedbackDone(): void {
+  write(FEEDBACK_KEY, { done: true, dismissedAt: Date.now() });
+}
+
+// posponer la burbuja (no volver a mostrarla por un tiempo)
+export function dismissFeedbackBubble(): void {
+  const s = getFeedbackState();
+  write(FEEDBACK_KEY, { done: s.done, dismissedAt: Date.now() });
+}
+
 export function storageAvailable(): boolean {
   try {
     const k = "mtgsim:test";

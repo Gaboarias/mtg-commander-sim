@@ -602,3 +602,84 @@ h3 svg { color: currentColor; }
   .deck-btn .del { width: 32px; height: 32px; }
   .play-line { min-height: 36px; }
 }
+
+/* -- Feedback widget (botón flotante + burbuja + modal) ------------------ */
+.fb-fab {
+  position: fixed; right: 18px; bottom: 18px; z-index: 60;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 10px 15px; border-radius: 999px; cursor: pointer;
+  background: var(--accent, #d8b23a); color: #1a1400; font-weight: 700;
+  border: none; box-shadow: 0 6px 20px rgba(0,0,0,.35);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.fb-fab:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(0,0,0,.42); }
+.fb-fab:focus-visible { outline: 3px solid var(--accent, #d8b23a); outline-offset: 3px; }
+.fb-fab-label { font-size: .9rem; }
+@media (max-width: 560px) { .fb-fab-label { display: none; } .fb-fab { padding: 12px; } }
+
+.fb-bubble {
+  position: fixed; right: 18px; bottom: 74px; z-index: 61; width: 260px;
+  background: var(--panel, #1c2230); color: var(--text, #eef);
+  border: 1px solid var(--border, #3a4150); border-radius: 14px;
+  padding: 14px 14px 12px; box-shadow: 0 12px 34px rgba(0,0,0,.45);
+}
+.fb-bubble::after {
+  content: ""; position: absolute; right: 30px; bottom: -8px; width: 16px; height: 16px;
+  background: var(--panel, #1c2230); border-right: 1px solid var(--border, #3a4150);
+  border-bottom: 1px solid var(--border, #3a4150); transform: rotate(45deg);
+}
+.fb-bubble-x {
+  position: absolute; top: 8px; right: 8px; background: none; border: none;
+  color: var(--muted, #9aa4b2); cursor: pointer; padding: 2px; line-height: 0;
+}
+.fb-bubble-t { font-weight: 700; margin: 0 20px 4px 0; }
+.fb-bubble-s { color: var(--muted, #9aa4b2); font-size: .86rem; margin: 0 0 10px; }
+.fb-bubble-cta {
+  width: 100%; padding: 8px; border-radius: 9px; cursor: pointer;
+  background: var(--accent, #d8b23a); color: #1a1400; font-weight: 700; border: none;
+}
+
+.fb-overlay {
+  position: fixed; inset: 0; z-index: 70; display: flex;
+  align-items: center; justify-content: center; padding: 16px;
+  background: rgba(0,0,0,.55); backdrop-filter: blur(2px);
+}
+.fb-panel {
+  position: relative; width: 100%; max-width: 440px;
+  background: var(--panel, #1c2230); color: var(--text, #eef);
+  border: 1px solid var(--border, #3a4150); border-radius: 16px;
+  padding: 22px 20px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+}
+.fb-close {
+  position: absolute; top: 12px; right: 12px; background: none; border: none;
+  color: var(--muted, #9aa4b2); cursor: pointer; padding: 4px; line-height: 0;
+}
+.fb-close:hover { color: var(--text, #eef); }
+.fb-title { margin: 0 0 4px; font-size: 1.25rem; }
+.fb-sub { margin: 0 0 14px; color: var(--muted, #9aa4b2); font-size: .9rem; }
+.fb-stars { display: flex; gap: 4px; margin-bottom: 14px; }
+.fb-star { background: none; border: none; cursor: pointer; padding: 3px; line-height: 0;
+  color: var(--border, #3a4150); transition: transform .1s ease, color .1s ease; }
+.fb-star:hover { transform: scale(1.15); }
+.fb-star.on { color: var(--accent, #d8b23a); }
+.fb-text, .fb-contact {
+  width: 100%; box-sizing: border-box; background: var(--panel-2, #141a26);
+  color: var(--text, #eef); border: 1px solid var(--border, #3a4150);
+  border-radius: 10px; padding: 10px 12px; font: inherit; resize: vertical;
+}
+.fb-contact { margin-top: 10px; }
+.fb-text:focus, .fb-contact:focus { outline: 2px solid var(--accent, #d8b23a); border-color: transparent; }
+.fb-err { color: #ff9a9a; font-size: .84rem; margin: 10px 0 0; }
+.fb-err a { color: var(--accent, #d8b23a); }
+.fb-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.fb-cancel {
+  padding: 9px 16px; border-radius: 9px; cursor: pointer;
+  background: none; color: var(--text, #eef); border: 1px solid var(--border, #3a4150);
+}
+.fb-send {
+  padding: 9px 18px; border-radius: 9px; cursor: pointer; border: none;
+  background: var(--accent, #d8b23a); color: #1a1400; font-weight: 700;
+}
+.fb-send:disabled { opacity: .5; cursor: not-allowed; }
+.fb-thanks { text-align: center; padding: 22px 0 10px; color: var(--accent, #d8b23a); }
+.fb-thanks p { margin: 10px 0 0; color: var(--text, #eef); font-weight: 600; }

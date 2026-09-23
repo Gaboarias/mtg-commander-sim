@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Nav from "./Nav";
+import Feedback from "./Feedback";
 import { KOFI_URL, PAYPAL_URL, HOSTINGER_URL } from "./support";
 import { Icon } from "./icons";
 
@@ -59,6 +60,7 @@ export default function RootLayout({
             {" "}Proyecto fan, no afiliado a Wizards of the Coast. Contenido bajo su Fan Content Policy.
           </div>
         </div>
+        <Feedback />
       </body>
     </html>
   );

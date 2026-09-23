@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Seat, type PlayerState, type Perm } from "../board";
-import { listDecks, type SavedDeck } from "../localDecks";
+import { listDecks, bumpGamesPlayed, type SavedDeck } from "../localDecks";
 import { download, fileStamp } from "../download";
 import { Icon } from "../icons";
 
@@ -123,6 +123,15 @@ export default function Play() {
   const [booting, setBooting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<GameState | null>(null);
+  const countedRef = useRef(false);
+  // contar la partida cuando termina (una sola vez por partida)
+  useEffect(() => {
+    if (state?.winner && !countedRef.current) {
+      countedRef.current = true;
+      try { bumpGamesPlayed(); } catch { /* storage off */ }
+    }
+    if (!state?.winner) countedRef.current = false;   // reset para la próxima
+  }, [state?.winner]);
   const [picked, setPicked] = useState<Set<number>>(new Set());  // atacantes elegidos
   const [atkTarget, setAtkTarget] = useState<number | null>(null); // rival a atacar
   const [atkAssign, setAtkAssign] = useState<Record<number, number>>({}); // atacante -> rival
