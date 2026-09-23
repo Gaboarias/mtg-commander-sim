@@ -1232,6 +1232,10 @@ class Game:
         ctrl.pay(ab.get("cost"))
         if ab.get("tap"):
             perm.tapped = True
+        if ab.get("sacrifice_self"):
+            # el sacrificio es parte del COSTE: se paga al activar (el efecto ya
+            # está en la pila y no necesita al permanente).
+            self.to_graveyard(perm, "coste: sacrificio")
         self.log(f"{ctrl.name}: {perm.name} activa «{ab.get('label', '')}»")
         self.note_ability(perm.card, f"habilidad: {ab.get('label', '')}", controller=ctrl)
         eff = ab.get("effect")

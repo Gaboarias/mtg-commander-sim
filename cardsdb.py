@@ -307,6 +307,13 @@ def _fragment_effect(seg: str):
             else:
                 game.copy_last_ability(ctrl)
         return copy_ab, None, 1
+    # buscar una tierra básica al campo (fetchlands: Evolving Wilds, panoramas…)
+    if re.search(r"search your library for a basic land", seg, re.I):
+        tapped = "tapped" in seg.lower()
+        pred = lambda c: c.is_land() and "basic" in c.supertypes  # noqa: E731
+        return (_search_library_effect(pred, to_battlefield=True, allow_none=False,
+                                        label="una tierra básica", tapped=tapped),
+                None, 1)
     spec = _targeted_spell(seg)
     if spec is not None:
         mode, count = spec
@@ -392,10 +399,12 @@ def _parse_modes(oracle: str):
     return modes, pick
 
 
-def _parse_activated(oracle: str):
-    """Habilidades activadas con coste de MANÁ (y opcional {T}). Devuelve una tupla
-    de dicts {cost, tap, label, effect, target_spec, target_count}. Ignora costes
-    con sacrificio/descarte y efectos que no reconocemos."""
+def _parse_activated(oracle: str, name: str = ""):
+    """Habilidades activadas con coste de MANÁ (+ opcional {T} y opcional
+    'Sacrifice this ~' como coste). Devuelve una tupla de dicts {cost, tap,
+    sacrifice_self, label, effect, target_spec, target_count}. Ignora otros costes
+    (descartar, pagar vida) y efectos que no reconocemos."""
+    name_key = re.sub(r"[^a-z]", "", (name or "").lower())
     out = []
     for raw in (oracle or "").split("\n"):
         m = re.match(r"([^:]+):\s*(.+)", raw.strip())
@@ -403,8 +412,16 @@ def _parse_activated(oracle: str):
             continue
         costtxt, body = m.group(1), m.group(2)
         syms = re.findall(r"\{([^}]+)\}", costtxt)
-        # el coste debe ser SOLO símbolos {..}; si queda texto (sacrifice, discard) saltar
-        if not syms or re.sub(r"\{[^}]+\}|[,\s]", "", costtxt):
+        # texto del coste sin símbolos ni separadores; debe quedar vacío, salvo un
+        # "sacrifice this ~ / sacrifice <nombre>" que aceptamos como coste de sacrificio.
+        leftover = re.sub(r"\{[^}]+\}|[,\s]", "", costtxt).lower()
+        sac_self = False
+        if leftover.startswith("sacrifice"):
+            rest = leftover[len("sacrifice"):]
+            if rest.startswith(("this", "it", "~")) or (name_key and rest == name_key):
+                sac_self = True
+                leftover = ""
+        if not syms or leftover:
             continue
         tap = any(s.upper() == "T" for s in syms)
         mana = "".join("{%s}" % s for s in syms if s.upper() != "T")
@@ -423,7 +440,8 @@ def _parse_activated(oracle: str):
         is_copy = bool(re.search(r"copy target (?:activated|triggered)", body, re.I)
                        or re.search(r"copy (?:that|the target) (?:activated |triggered )?ability",
                                     body, re.I))
-        out.append({"cost": cost, "tap": tap, "label": _short_label(body),
+        out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                    "label": _short_label(body),
                     "effect": (lambda g, c, perm, tg, _e=eff: _e(g, c, tg)),
                     "target_spec": spec, "target_count": count,
                     "is_copy_ability": is_copy})
@@ -996,10 +1014,10 @@ def _look_take_effect(n, keep_pred, rest_dest="bottom", allow_none=True,
 
 
 def _search_library_effect(keep_pred, to_battlefield=False, allow_none=True,
-                           label="una carta"):
+                           label="una carta", tapped=False):
     """Tutor: buscar en la biblioteca una carta que cumpla keep_pred y ponerla en
-    la mano (o al campo). El humano elige; el bot toma el mejor candidato. Baraja
-    después."""
+    la mano (o al campo, opcionalmente girada). El humano elige; el bot toma el
+    mejor candidato. Baraja después."""
     def eff(game, ctrl, *_a):
         cands = [c for c in ctrl.library if keep_pred(c)]
         if not cands:
@@ -1013,7 +1031,9 @@ def _search_library_effect(keep_pred, to_battlefield=False, allow_none=True,
                 if pick in ctrl.library:
                     ctrl.library.remove(pick)
                     if to_battlefield:
-                        game.move_to_battlefield(pick, ctrl)
+                        perm = game.move_to_battlefield(pick, ctrl)
+                        if tapped and perm is not None:
+                            perm.tapped = True
                     else:
                         ctrl.hand.append(pick)
                     where = "al campo" if to_battlefield else "a la mano"
@@ -1650,7 +1670,7 @@ def build_card_from_data(data: dict) -> Card:
     # habilidades activadas con coste de maná (creaturas/permanentes/tierras):
     # "{cost}: efecto" -> se pueden activar en juego pagando el maná.
     if not ({"instant", "sorcery"} & types):
-        ab = _parse_activated(data.get("oracle_text", ""))
+        ab = _parse_activated(data.get("oracle_text", ""), data.get("name", ""))
         if ab:
             card.activated_abilities = ab
 

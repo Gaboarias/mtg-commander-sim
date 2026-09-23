@@ -2986,6 +2986,28 @@ def test_bot_copies_own_beneficial_spell_with_fork():
     assert fork not in me.hand             # usó el Twincast
 
 
+def test_fetchland_sacrifice_fetches_basic_tapped():
+    # habilidad "{T}, Sacrifice ~: Search your library for a basic land, put it
+    # onto the battlefield tapped, then shuffle" (Evolving Wilds y similares).
+    import cardsdb, cards
+    g, me, op = _duel()
+    ew = cardsdb.build_card_from_data({
+        "name": "Evolving Wilds", "type_line": "Land",
+        "oracle_text": "{T}, Sacrifice Evolving Wilds: Search your library for a "
+                       "basic land card, put it onto the battlefield tapped, then shuffle."})
+    assert ew.activated_abilities, "la habilidad debe parsearse"
+    ab = ew.activated_abilities[0]
+    assert ab.get("tap") is True and ab.get("sacrifice_self") is True
+    # biblioteca con una básica para buscar
+    me.library.append(cards.land("Forest", ["G"], basic=True))
+    pm = g.move_to_battlefield(ew, me)
+    lib0 = len(me.library)
+    assert g.activate_ability(pm, 0) is True
+    assert pm not in me.battlefield                     # se sacrificó
+    assert len(me.library) == lib0 - 1                  # sacó una carta de la biblioteca
+    assert any(p.tapped and "basic" in p.card.supertypes for p in me.battlefield)
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
