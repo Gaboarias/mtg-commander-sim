@@ -207,6 +207,7 @@ class Permanent:
         self.is_token = is_token
         self.uid = _next_uid()
         self.temp_pt = [0, 0]            # +P/+T "hasta el fin del turno" (prowess, pumps)
+        self.temp_keywords = set()       # keywords otorgadas "hasta el fin del turno"
         self.goaded = False              # goad: debe atacar en su próximo turno
         self.must_attack = False
         self.cant_block = False
@@ -247,13 +248,13 @@ class Permanent:
 
     @property
     def keywords(self) -> set:
-        return set(self.card.keywords)
+        return set(self.card.keywords) | self.temp_keywords
 
     def is_creature(self) -> bool:
         return self.card.is_creature()
 
     def has(self, kw: str) -> bool:
-        if kw in self.card.keywords:
+        if kw in self.card.keywords or kw in self.temp_keywords:
             return True
         # keywords otorgadas por efectos estáticos (p. ej. Anger desde el cementerio)
         return self.game is not None and self.game.grants_keyword(self, kw)
@@ -1719,6 +1720,7 @@ class Game:
         for pl in self.players:
             for perm in pl.battlefield:
                 perm.temp_pt = [0, 0]
+                perm.temp_keywords = set()
         # el goad/obligación de atacar del jugador activo se agota tras su combate
         for perm in p.battlefield:
             perm.goaded = False

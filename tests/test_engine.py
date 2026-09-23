@@ -3154,6 +3154,82 @@ def test_activated_cost_discard():
     assert len(me.hand) == 2                            # descartó 1, robó 2
 
 
+def _spell(oracle, tl="Instant", cost="{1}{U}"):
+    import cardsdb
+    return cardsdb.build_card_from_data(
+        {"name": "S", "type_line": tl, "mana_cost": cost, "oracle_text": oracle})
+
+
+def test_imported_counterspell_counters():
+    import cards
+    from engine import StackObject
+    g, me, op = _duel()
+    cs = _spell("Counter target spell.", cost="{U}{U}")
+    assert cs.target_spec == "stack_spell" and "counter" in cs.tags
+    victim_card = cards.creature("Bomb", "3U", 5, 5)
+    so = StackObject(op, lambda g: None, source=victim_card, label="spell")
+    g.stack.append(so)
+    cs.on_cast_resolve(g, me, [so])
+    assert so not in g.stack and victim_card in op.graveyard
+
+
+def test_burn_to_target_creature_kills():
+    import cards
+    g, me, op = _duel()
+    v = g.move_to_battlefield(cards.creature("V", "1U", 3, 3), op)
+    _spell("Deal 3 damage to target creature.").on_cast_resolve(g, me, [])
+    assert v not in op.battlefield
+
+
+def test_edict_forces_sacrifice():
+    import cards
+    g, me, op = _duel()
+    e = g.move_to_battlefield(cards.creature("Sac", "1U", 2, 2), op)
+    _spell("Target player sacrifices a creature.", "Sorcery").on_cast_resolve(g, me, [])
+    assert e not in op.battlefield
+
+
+def test_forced_discard():
+    import cards
+    g, me, op = _duel()
+    op.hand = [cards.creature(f"H{i}", "1U", 1, 1) for i in range(3)]
+    _spell("Target player discards two cards.", "Sorcery").on_cast_resolve(g, me, [])
+    assert len(op.hand) == 1
+
+
+def test_each_player_draws():
+    import cards
+    g, me, op = _duel()
+    me.library += [cards.land("Plains", ["W"], basic=True) for _ in range(5)]
+    op.library += [cards.land("Island", ["U"], basic=True) for _ in range(5)]
+    h0m, h0o = len(me.hand), len(op.hand)
+    _spell("Each player draws two cards.", "Sorcery").on_cast_resolve(g, me, [])
+    assert len(me.hand) == h0m + 2 and len(op.hand) == h0o + 2
+
+
+def test_proliferate_adds_counter():
+    import cards
+    g, me, op = _duel()
+    c = g.move_to_battlefield(cards.creature("C", "1U", 1, 1), me)
+    g.add_counters(c, "+1/+1", 1)
+    p0 = c.power
+    _spell("Proliferate.", "Sorcery").on_cast_resolve(g, me, [])
+    assert c.power == p0 + 1
+
+
+def test_keyword_grant_until_end_of_turn():
+    import cards
+    g, me, op = _duel()
+    k = g.move_to_battlefield(cards.creature("K", "1U", 2, 2), me)
+    _spell("Target creature gains flying and trample until end of turn.").on_cast_resolve(g, me, [])
+    assert k.has("flying") and k.has("trample")
+
+
+def test_bounce_nonland_permanent_parses():
+    b = _spell("Return target nonland permanent to its owner's hand.")
+    assert b.on_cast_resolve is not None and "removal" in b.tags
+
+
 def test_look_at_top_ability_shows_a_view():
     # "Look at the top N cards of your library" (mirar/reordenar, sin llevarte
     # ninguna) antes no mostraba nada; ahora presenta una vista tipo scry con la

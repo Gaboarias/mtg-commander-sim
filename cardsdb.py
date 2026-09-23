@@ -149,10 +149,28 @@ def _targeted_spell(oracle: str):
         m = re.search(verb + r" (up to )?(\w+ )?target (?:creature|permanent)", t)
         if m:
             return mode, _NUMWORD.get((m.group(2) or "").strip(), 1)
-    m = re.search(r"return (up to )?(\w+ )?target (?:creature|permanent)[^.]{0,40}hand", t)
+    m = re.search(r"return (up to )?(\w+ )?target (?:creature|(?:nonland )?permanent)"
+                  r"[^.]{0,40}hand", t)
     if m:
         return "bounce", _NUMWORD.get((m.group(2) or "").strip(), 1)
     return None
+
+
+def _counter_spell_effect():
+    """Contrarresta el hechizo objetivo (StackObject): lo saca de la pila y su
+    carta va al cementerio. Cubre Counterspell y variantes importadas de Scryfall."""
+    def eff(game, ctrl, targets):
+        obj = (list(targets or []) or [None])[0]
+        if obj is None or obj not in game.stack:
+            return
+        game.stack.remove(obj)
+        card = getattr(obj, "source", None)
+        name = getattr(card, "name", "?")
+        if card is not None and not card.is_land():
+            obj.controller.graveyard.append(card)
+            game.emit("to_graveyard", player=obj.controller, card=card)
+        game.log(f"{ctrl.name} contrarresta {name}")
+    return eff
 
 
 def _pump_spell_effect(oracle: str):
@@ -1237,6 +1255,15 @@ def _explore_effect():
     return eff
 
 
+_KEYWORD_WORDS = [
+    ("flying", "flying"), ("trample", "trample"), ("haste", "haste"),
+    ("vigilance", "vigilance"), ("lifelink", "lifelink"), ("deathtouch", "deathtouch"),
+    ("double strike", "double_strike"), ("first strike", "first_strike"),
+    ("menace", "menace"), ("hexproof", "hexproof"),
+    ("indestructible", "indestructible"), ("reach", "reach"),
+]
+
+
 def _generic_amount_effect(oracle: str):
     """Efecto APROXIMADO con monto, deducido del oracle. Devuelve una función
     eff(game, ctrl, *_) o None. Cubre patrones comunes de creaturas/hechizos que
@@ -1395,6 +1422,119 @@ def _generic_amount_effect(oracle: str):
         def eff(game, ctrl, *_a, _n=n):
             ctrl.life += _n
         return eff
+
+    # quema a UNA criatura objetivo: "deals N damage to target creature" (Flame Slash,
+    # etc.). La quema a jugador/any target ya está arriba; esto cubre solo-criatura.
+    m = re.search(r"deals? (\w+) damage to (?:up to \w+ )?target creature(?! or player)", t)
+    if m and (m.group(1).lower() == "x" or _count_word(m.group(1))):
+        n = _count_word(m.group(1))
+        is_x = m.group(1).lower() == "x"
+
+        def eff(game, ctrl, *_a, _n=n, _x=is_x):
+            amt = getattr(game, "spell_x", 0) if _x else _n
+            pool = game.legal_creature_targets(ctrl)
+            if not pool or not amt:
+                return
+            pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness} · {pm.controller.name}", pm)
+                     for pm in pool]
+
+            def _do(pm, _amt=amt):
+                game.deal_damage(None, pm, _amt)
+                game.log(f"{ctrl.name}: {_amt} de daño a {pm.name}")
+                game.sba()
+            _human_target_choice(game, ctrl, "etb_target",
+                                 f"Elegí una criatura para {amt} de daño", cands, _do)
+        return eff
+
+    # edict: "target player/opponent sacrifices a creature" (sacrificio forzado; el
+    # dueño elige — aquí la más débil). "each player sacrifices" ya lo cubre wipe.
+    if re.search(r"target (?:player|opponent) sacrifices? a creature", t):
+        def eff(game, ctrl, *_a):
+            for o in game.opponents(ctrl):
+                cr = o.creatures()
+                if cr:
+                    victim = min(cr, key=lambda x: (x.power, x.toughness))
+                    game.to_graveyard(victim, "sacrificio forzado")
+                    game.log(f"{o.name} sacrifica {victim.name}")
+                    break                          # "target player": uno solo
+        return eff
+
+    # descartar forzado: "target player/opponent discards N" / "each opponent discards"
+    m = re.search(r"(each opponent|target player|target opponent) discards? "
+                  r"(their hand|\w+)", t)
+    if m:
+        who = m.group(1)
+        qty = m.group(2)
+        n = -1 if qty == "their hand" else (_count_word(qty) or 1)
+
+        def eff(game, ctrl, *_a, _who=who, _n=n):
+            opps = game.opponents(ctrl)
+            picks = opps if _who == "each opponent" else opps[:1]
+            for o in picks:
+                cnt = len(o.hand) if _n < 0 else _n
+                for _ in range(cnt):
+                    if not o.hand:
+                        break
+                    if o.policy and hasattr(o.policy, "choose_discard"):
+                        card = o.policy.choose_discard(game, o)
+                    else:
+                        card = o.hand[-1]
+                    o.hand.remove(card)
+                    o.graveyard.append(card)
+                    game.emit("to_graveyard", player=o, card=card)
+                game.log(f"{o.name} descarta {cnt} carta(s)")
+        return eff
+
+    # robo para jugadores: "target player/you draws N" (el que lanza) / "each player".
+    m = re.search(r"(each player|target player|you) draws? (\w+) cards?", t)
+    if m and (n := _count_word(m.group(2))):
+        who = m.group(1)
+
+        def eff(game, ctrl, *_a, _who=who, _n=n):
+            if _who == "each player":
+                for pl in game.players:
+                    pl.draw(_n, game)
+            else:
+                ctrl.draw(_n, game)
+        return eff
+
+    # proliferate: +1 a cada tipo de contador ya presente (en cualquier permanente).
+    if re.search(r"\bproliferate\b", t):
+        def eff(game, ctrl, *_a):
+            for pl in game.players:
+                for pm in pl.battlefield:
+                    for k in list(pm.counters.keys()):
+                        if pm.counters.get(k, 0) > 0:
+                            if k == "+1/+1":
+                                game.add_counters(pm, k, 1)
+                            else:
+                                pm.counters[k] += 1
+            game.sba()
+            game.log(f"{ctrl.name} prolifera")
+        return eff
+
+    # otorgar keyword(s) a una criatura objetivo hasta el fin del turno (truco de
+    # combate: "target creature gains flying/trample/… until end of turn").
+    mk = re.search(r"target creature (?:you control )?gains? "
+                   r"([a-z ,and]+?) until end of turn", t)
+    if mk:
+        found = [key for name, key in _KEYWORD_WORDS
+                 if re.search(r"\b" + name + r"\b", mk.group(1))]
+        if found:
+            def eff(game, ctrl, *_a, _kw=tuple(found)):
+                pool = list(ctrl.creatures())      # normalmente buffeás la tuya
+                if not pool:
+                    return
+                pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+                cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm) for pm in pool]
+
+                def _do(pm, _k=_kw):
+                    pm.temp_keywords |= set(_k)
+                    game.log(f"{pm.name} gana {', '.join(_k)} hasta el fin del turno")
+                _human_target_choice(game, ctrl, "etb_target",
+                                     "Elegí tu criatura a mejorar", cands, _do)
+            return eff
 
     # explore: revelar el tope (tierra -> mano; si no, +1/+1 y decidir arriba/cementerio)
     if re.search(r"\bexplores?\b", t):
@@ -1751,6 +1891,16 @@ def build_card_from_data(data: dict) -> Card:
                     card.target_count = md.get("target_count", 1)
                     break
             card.tags = card.tags | {"modal"}
+
+    # counterspells (Scryfall no trae el gancho): "counter target spell". Se cablea
+    # primero para que la capa de remoción no lo malinterprete.
+    if ({"instant", "sorcery"} & types and not card.modes and not card.on_cast_resolve
+            and re.search(r"counter target (?:[\w\- ]+ )?spell",
+                          (data.get("oracle_text", "") or ""), re.I)):
+        card.on_cast_resolve = _counter_spell_effect()
+        card.target_spec = "stack_spell"
+        card.target_count = 1
+        card.tags = card.tags | {"counter"}
 
     # hechizos DIRIGIDOS especiales (parpadeo / robo de control / clon): se cablean
     # ANTES de la remoción para no colapsarlos a "destruir".
