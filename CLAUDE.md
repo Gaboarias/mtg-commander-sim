@@ -38,6 +38,24 @@ sospechosa de bug.
    carta como vainilla y anotala en `BACKLOG.md`. Una carta mal implementada
    contamina todas las estadisticas y es peor que una carta ausente.
 
+6. **La pila no debe romper el determinismo headless.** Hechizos y habilidades
+   pasan por la pila y por `_run_priority_and_resolve()`. En headless (sims/tests)
+   no hay `reaction_check`, así que se drena sincrónicamente: misma semilla =>
+   misma partida. La pausa `ReactionPause` solo vive en `interactive.py`. Tras
+   tocar la pila, corre `python3 -c "import run; ...seeds..."` y confirma que
+   `run.one(k, seed=i)` sigue siendo reproducible.
+
+## Capa web e interactiva
+
+- `interactive.py` = juego de UNA persona + bots (para `/play`). Usa `pending_choice`
+  y `ReactionPause` para pausar en cada decisión del humano.
+- `app/` (Next.js) + `api/*.py` (funciones Vercel que envuelven el motor). El motor
+  también corre en el navegador vía Pyodide para `/play`.
+- Para ver un cambio de UI de verdad: `npm run build` y, si hace falta, renderizar
+  con el Chromium preinstalado (Playwright) — capturas, no a ciegas.
+- Skill de diseño instalado en `.claude/skills/impeccable` (invocable con
+  `/impeccable`); guía el pulido de UI.
+
 ## Orden de trabajo sugerido
 
 Sigue `BACKLOG.md` en orden. P1 primero: la cobertura de cartas es lo que hace
@@ -52,8 +70,10 @@ tags, y una linea en `decks.py`.
 ## Definicion de terminado, por tarea
 
 - El codigo corre: `python3 run.py` sin excepciones
+- `python3 tests/test_engine.py` en verde (143 tests)
+- Si tocaste el frontend: `npm run build` limpio
 - `python3 coverage.py` muestra el incremento esperado de cartas implementadas
 - Existe al menos una partida con `--log` donde se ve el efecto funcionando
 - El criterio de aceptacion de la tarea en `BACKLOG.md` se cumple
 - Si tocaste `engine.py`, los tres bugs de la tabla al final de `BACKLOG.md`
-  siguen sin reaparecer
+  siguen sin reaparecer, y el determinismo headless se mantiene

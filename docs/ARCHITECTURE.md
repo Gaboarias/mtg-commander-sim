@@ -3,12 +3,16 @@
 ## Mapa de archivos
 
 ```
-engine.py    Motor de reglas. No conoce ninguna carta concreta.
-policy.py    IA. Decide que lanzar, con que atacar y como bloquear.
-cards.py     Biblioteca de cartas: constructores y efectos concretos.
-decks.py     Las tres listas de 99 + comandante.
-run.py       CLI y agregacion estadistica.
-coverage.py  Reporte de cuantas cartas tienen efecto real implementado.
+engine.py     Motor de reglas. No conoce ninguna carta concreta.
+policy.py     IA (bots). Decide que lanzar, activar, con que atacar y como bloquear.
+cards.py      Biblioteca de cartas: constructores y efectos concretos.
+cardsdb.py    Parser de datos de Scryfall -> Card (mecánicas leídas del oracle text).
+decks.py      Listas de 99 + comandante (precons).
+interactive.py Capa de juego HUMANO (una persona + bots), con pausas de decisión.
+run.py        CLI y agregacion estadistica.
+coverage.py   Reporte de cuantas cartas tienen efecto real implementado.
+api/          Funciones serverless (Vercel, Python) que envuelven el motor.
+app/          Frontend Next.js (simulador, /play, /watch, editor de decks).
 ```
 
 **Regla de dependencias, en un solo sentido:**
@@ -91,6 +95,38 @@ haces X" debe entrar en ese conjunto.
 
 `"attacks"` no usa `emit`: se dispara directo sobre el permanente atacante en
 `combat()`, porque el disparador pertenece al atacante y no a todos.
+
+## Pila y prioridad
+
+Todo lo que se resuelve pasa por `Game.stack` como `StackObject`, con un campo
+`kind`: `"spell"` (hechizo), `"ability"` (habilidad activada / de lealtad) o
+`"trigger"` (disparada). Los objetos-habilidad guardan además `perm` (la fuente).
+
+- `cast()` y `activate_ability()`/`activate_loyalty()` **pagan el coste y ponen el
+  objeto en la pila**; luego llaman a `_after_stack_push()`, el punto compartido que
+  decide: si ya estamos en una ventana de prioridad, dejarlo para el bucle externo;
+  si hay un humano que puede reaccionar (`reaction_check`), pausar con
+  `ReactionPause`; si no, drenar con `_run_priority_and_resolve()`.
+- `_run_priority_and_resolve()` es el bucle LIFO con ventanas: el controlador del
+  tope puede copiar su propio hechizo/habilidad (`respond_copy` / `respond_ability`)
+  y cada oponente puede responder (`respond`, p. ej. counters). Tiene un cortafuegos
+  de iteraciones para no colgarse nunca.
+- **Headless (sims/tests):** no hay `reaction_check`, así que la pila se drena
+  sincrónicamente y el comportamiento/determinismo se preservan. La pausa
+  (`ReactionPause`) solo ocurre en `interactive.py`, que la captura con una máquina
+  de estados reanudable (`_ai_steps`: main1 / combat / main2).
+
+## Copiar
+
+- **Clon** (`cards.make_copy_token`): ficha que copia TODAS las características e
+  habilidades del original (ETB, activadas, disparadas, estáticas, lealtad), no solo
+  P/T + keywords.
+- **Copiar hechizo** (Fork/Twincast): `copy_spell_on_stack()` duplica el hechizo del
+  tope; la copia reproduce sus modos elegidos y no va a ninguna zona.
+- **Copiar habilidad** (Strionic Resonator): `copy_ability_on_stack()` duplica una
+  habilidad concreta de la pila; sin objetivo explícito, `copy_last_ability()` copia
+  la última resuelta (`Game.last_ability`, que registra activadas Y disparadas).
+- **Populate**: copia la mejor ficha de criatura propia.
 
 ## Acciones basadas en estado
 

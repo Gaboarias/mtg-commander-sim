@@ -152,3 +152,25 @@ generico, cada letra un simbolo de color.
 
 **La carta cuesta de menos.** Si es una roca que deberia dar 2+ manas, `rock()`
 con dos entradas en la lista da UNA, no dos. Usa `produces=lambda p,pl: {C: 2}`.
+
+---
+
+## Dos caminos para una carta
+
+1. **A mano en `cards.py`** (lo de arriba): control total, para los precons y las
+   cartas clave. Es donde se escriben los efectos concretos.
+2. **Auto desde Scryfall en `cardsdb.py`** (`build_card_from_data`): para decks del
+   usuario. Lee el *oracle text* y arma la `Card` con las mecánicas reconocidas.
+
+`cardsdb.py` ya cablea muchos ganchos extendidos del `Card`. Si agregás una
+mecánica nueva, sumá su parser ahí (no en `engine.py`) y un test:
+
+- `gy_play` (flashback/unearth/embalm/escape/recur), `foretell` (exilio),
+  `gy_abilities` / `gy_triggers` / `gy_grant` (desde el cementerio, p. ej. Anger)
+- `modes` (modal), `x_spell` ({X}), `etb_counters`, `aura_keywords`
+- copiar: clon (`_clone_effect`), hechizo (`_copy_spell_effect`), habilidad
+  (`copy_ab` -> `copy_ability_on_stack`/`copy_last_ability`), `populate`
+- habilidades activadas (`activated_abilities`) — pasan por la pila al activarse
+
+Regla que no cambia: **el motor no conoce cartas**. Si un parser nuevo necesita
+tocar `engine.py`, lo que falta es un gancho genérico.

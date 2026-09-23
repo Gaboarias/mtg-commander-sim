@@ -11,24 +11,37 @@ mazo mejora su tasa de victoria.
 ## Qué hay
 
 ```
-engine.py     Motor de reglas. No conoce ninguna carta concreta.
-policy.py     IA. Decide qué lanzar, con qué atacar y cómo bloquear.
-cards.py      Biblioteca de cartas: constructores y efectos concretos.
-decks.py      Las tres listas de 99 + comandante (lorehold / tricky / kang).
-run.py        CLI y agregación estadística.
-coverage.py   Reporte de cuántas cartas tienen efecto real implementado.
-tests/        Tests del motor (mana, comandante, combate, legendarios…).
+engine.py      Motor de reglas. No conoce ninguna carta concreta.
+policy.py      IA (bots). Decide qué lanzar, activar, con qué atacar y cómo bloquear.
+cards.py       Biblioteca de cartas: constructores y efectos concretos.
+cardsdb.py     Parser Scryfall -> Card (mecánicas leídas del oracle text).
+decks.py       Listas de 99 + comandante (precons).
+interactive.py Juego HUMANO (una persona + bots) para /play, con pausas de decisión.
+run.py         CLI y agregación estadística.
+coverage.py    Reporte de cuántas cartas tienen efecto real implementado.
+tests/         Tests del motor (143: mana, combate, pila, copiar, reacciones…).
 
-api/          Funciones serverless de Vercel (Python):
-  _sim.py       Puente al motor (agrega la raíz al sys.path).
-  simulate.py   GET /api/simulate?matchup=lorehold,kang&n=200
-                GET /api/simulate?matchup=lorehold,kang&log=1&seed=0
-  catalog.py    GET /api/catalog  (mazos + comandante + cobertura)
+api/          Funciones serverless de Vercel (Python). Entre otras:
+  simulate.py   GET  /api/simulate?matchup=lorehold,kang&n=200[&log=1&seed=0]
+  catalog.py    GET  /api/catalog     (mazos + comandante + cobertura)
+  deck.py       POST /api/deck        (resolver decklist, brackets, precios)
+  cardsearch.py GET  /api/cardsearch  (corregir cartas no encontradas)
+  feedback.py   POST /api/feedback    (comentarios de usuarios -> Turso)
+  cloud.py, precons.py, samples.py, auth.py, supporter.py, …
 
-app/          Frontend Next.js (App Router).
-docs/         ARCHITECTURE.md, API.md, BACKLOG.md, ADDING_CARDS.md
+app/          Frontend Next.js (App Router): simulador (/), /play, /watch,
+              editor de decks (/deck), reglas, y widget de feedback global.
+docs/         ARCHITECTURE.md, API.md, BACKLOG.md, ADDING_CARDS.md, DEPLOY.md,
+              MULTIPLAYER_PLAN.md (plan futuro).
 CLAUDE.md     Reglas del proyecto para trabajar el motor.
 ```
+
+**Mecánicas destacadas:** prioridad y pila (hechizos, habilidades activadas y
+disparadas pasan por la pila), reacciones a velocidad de instante, contrarrestar,
+copiar (clones completos, Fork/Twincast, Strionic, populate), jugar desde el
+cementerio (flashback/unearth/embalm/escape) y el exilio (foretell), planeswalkers,
+modales, X, y palabras clave de combate (vuelo, mortal, arrolla, amenaza, doble
+golpe, vínculo, infección…).
 
 ## Uso local (CLI)
 

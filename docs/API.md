@@ -118,9 +118,15 @@ Métodos: `setup(rng)`, `draw(n, game)`, `creatures()`, `lands()`, `identity()`,
 | `play()` | corre la partida, devuelve nombre del ganador o `"EMPATE"` |
 | `run_turn()` | un turno completo |
 | `combat(p)` | los cuatro pasos de combate |
-| `cast(player, card, from_command=False, targets=None)` | paga, apila, resuelve |
-| `emit(event, **kw)` | encola disparadores |
-| `resolve_stack()` | vacía la pila, LIFO |
+| `cast(player, card, from_command=False, targets=None, chosen_modes=None, x_value=None)` | paga, apila y (headless) resuelve; modal/X soportados |
+| `activate_ability(perm, index, targets=None)` | paga el coste y **apila** la habilidad (refactor A) |
+| `activate_loyalty(perm, index)` | habilidad de lealtad (una por turno), va a la pila |
+| `copy_spell_on_stack(obj, controller=None)` | Fork/Twincast: copia un hechizo del tope |
+| `copy_ability_on_stack(obj, controller=None)` | Strionic: copia una habilidad concreta del tope |
+| `copy_last_ability(ctrl)` | copia la última habilidad resuelta (`Game.last_ability`) |
+| `emit(event, **kw)` | encola disparadores (`StackObject` kind="trigger") |
+| `resolve_stack()` | vacía la pila, LIFO (con cortafuegos anti-bucle) |
+| `_run_priority_and_resolve()` | drena la pila dando ventanas de prioridad/respuesta |
 | `sba()` | acciones basadas en estado |
 | `move_to_battlefield(card, player, is_token=False)` | devuelve el `Permanent` |
 | `destroy(perm, reason)` | respeta indestructible |
@@ -151,13 +157,24 @@ Métodos: `setup(rng)`, `draw(n, game)`, `creatures()`, `lands()`, `identity()`,
 
 ## `Policy`
 
-Tres métodos, todos sobreescribibles:
+Métodos principales, todos sobreescribibles:
 
 ```python
 score(game, me, card) -> int                      # prioridad de lanzamiento
-main_phase(game, me, second=False) -> None        # juega tierra, comandante, hechizos
-declare_attackers(game, me) -> [(Permanent, Player)]
-declare_blockers(game, me, incoming) -> [(atacante, bloqueador)]
+                                                  #   (valora evasión/keywords, no solo fuerza)
+main_phase(game, me, second=False) -> None        # tierra, comandante, hechizos,
+                                                  #   cementerio/exilio, habilidades, foretell
+choose_targets / _spec_targets(...)               # objetivos: _threat_value prioriza
+                                                  #   comandantes y amenazas evasivas
+declare_attackers(game, me) -> [(Permanent, Player|Permanent)]  # ataca jugadores o planeswalkers;
+                                                  #   avanzado no ataca a muerte gratis
+declare_blockers(game, me, incoming) -> [(atacante, bloqueador)]  # deathtouch/menace/trample/vuelo
+
+# ventanas de prioridad (las llama _run_priority_and_resolve):
+respond(game, me, top) -> bool                    # contrarrestar un hechizo rival que vale la pena
+respond_copy(game, me, top) -> bool               # copiar el PROPIO hechizo con Fork/Twincast
+respond_ability(game, me, top) -> bool            # copiar la PROPIA habilidad con Strionic
 ```
 
-Sustituir la política de un jugador: `player.policy = MiPolitica()`
+Niveles: `Policy("novato" | "intermedio" | "avanzado")`. Sustituir la política de un
+jugador: `player.policy = MiPolitica()`.

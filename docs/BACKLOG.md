@@ -5,6 +5,27 @@ prioridad 1 son las que hacen que los porcentajes signifiquen algo.
 
 ---
 
+## Hecho recientemente (motor de reglas + web)
+
+- **Pila y prioridad completas** (refactor A): habilidades activadas y de lealtad
+  pasan por la pila; ventanas de reacción a velocidad de instante para el humano y
+  los bots (`respond` / `respond_copy` / `respond_ability`). Determinismo headless
+  preservado.
+- **Copiar**: clones completos (todas las habilidades), copiar hechizos
+  (Fork/Twincast), copiar habilidad activada/disparada (Strionic), populate.
+- **Jugar fuera del campo**: cementerio (flashback/unearth/embalm/escape/recur) y
+  exilio (foretell); habilidades y disparos desde el cementerio (Anger, etc.).
+- **UI de decisión** para el humano: scry/surveil visibles, descarte, modales,
+  objetivos, opcionales, reacciones.
+- **IA afinada**: valuación de criaturas por keywords, remoción que prioriza
+  comandantes/amenazas evasivas, ataques que no mueren gratis (avanzado).
+- **Web**: fix de tierras básicas offline + corrección de faltantes en el editor;
+  widget de **feedback** global + burbuja tras 5 partidas (`/api/feedback`, Turso);
+  pase visual (atmósfera, material de cards, tablero) verificado con capturas.
+- **Multijugador live**: planificado en `docs/MULTIPLAYER_PLAN.md` (no implementado).
+
+---
+
 ## P1 — Cobertura de cartas (el cuello de botella real)
 
 Estado actual (`python3 coverage.py`):
