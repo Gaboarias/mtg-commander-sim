@@ -2866,6 +2866,38 @@ def test_strionic_copies_last_activated_ability():
     assert g.last_activated is not None and g.last_activated[0] is pm
 
 
+def test_bot_copies_own_targeted_ability_with_strionic():
+    # A3: un bot con Strionic copia su PROPIA habilidad dirigida al activarla.
+    import cards, cardsdb, policy
+    from engine import Game, Player
+    me = Player("me", [cards.land("Mtn", ["R"], basic=True) for _ in range(10)],
+                cards.creature("Cm", "2R", 3, 3, legendary=True),
+                policy=policy.Policy("intermedio"))
+    op = Player("op", [cards.land("Isl", ["U"], basic=True) for _ in range(10)],
+                cards.creature("Om", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    hits = {"n": 0}
+    pinger = cards.creature("Pinger", "1R", 1, 1)
+    pinger.activated_abilities = ({"cost": cards.parse_cost("0"), "tap": False,
+                                   "label": "ping", "target_spec": "opp_creature",
+                                   "target_count": 1,
+                                   "effect": (lambda gg, c, perm, tg: hits.__setitem__(
+                                       "n", hits["n"] + 1))},)
+    pp = g.move_to_battlefield(pinger, me)
+    pp.summoning_sick = False
+    reson = cardsdb.build_card_from_data({
+        "name": "Strionic Resonator", "type_line": "Artifact",
+        "oracle_text": "{2}, {T}: Copy target activated or triggered ability."})
+    rp = g.move_to_battlefield(reson, me)
+    rp.summoning_sick = False
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Mtn", ["R"], basic=True), me)
+    victim = g.move_to_battlefield(cards.creature("V", "1U", 2, 2), op)
+    g.activate_ability(pp, 0, targets=[victim])   # el bot debería copiar con Strionic
+    assert hits["n"] == 2                          # copia + original
+    assert rp.tapped                               # gastó el Strionic
+
+
 def test_strionic_copies_last_triggered_ability():
     # límite 2 (mejora): Strionic ahora también copia una habilidad DISPARADA,
     # no solo activadas. Aquí copiamos un disparo "al atacar".

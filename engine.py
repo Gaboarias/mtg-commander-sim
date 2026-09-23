@@ -439,6 +439,7 @@ class StackObject:
         self.kind = kind
         self.perm = perm                # permanente fuente si es una habilidad activada
         self.is_copy_ability = is_copy_ability  # la propia habilidad de copia (no copiable)
+        self.copied = False             # ya fue copiada (evita copiarla de nuevo)
 
 
 # --------------------------------------------------------------------------- #
@@ -1146,6 +1147,11 @@ class Game:
                     pol = ctrl.policy
                     if pol is not None and hasattr(pol, "respond_copy"):
                         if pol.respond_copy(self, ctrl, top):
+                            continue
+                    # A3: el controlador puede copiar su PROPIA habilidad con un
+                    # permanente 'copiar habilidad' (Strionic) si vale la pena.
+                    if pol is not None and hasattr(pol, "respond_ability"):
+                        if pol.respond_ability(self, ctrl, top):
                             continue
                 for pl in self._respond_order():
                     pol = pl.policy

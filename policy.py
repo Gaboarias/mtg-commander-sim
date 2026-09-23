@@ -358,6 +358,43 @@ class Policy:
         game.cast(me, copier, targets=[top])
         return True
 
+    def _ability_worth_copying(self, top):
+        """Heurística: vale copiar una habilidad si es DIRIGIDA (remoción/quema/
+        robo: tiene objetivos) o si su fuente tiene tags de motor/ramp/robo."""
+        if getattr(top, "targets", None):
+            return True
+        src = getattr(top, "source", None)
+        tags = getattr(src, "tags", set()) or set()
+        return bool(tags & {"removal", "engine", "ramp", "draw"})
+
+    def respond_ability(self, game, me, top):
+        """A3: copiar la PROPIA habilidad del tope con un permanente 'copiar
+        habilidad' (Strionic) si vale la pena. Una sola vez por habilidad."""
+        if self.level == "novato":
+            return False
+        if getattr(top, "kind", "spell") not in ("ability", "trigger"):
+            return False
+        if getattr(top, "is_copy_ability", False) or getattr(top, "copied", False):
+            return False
+        if str(getattr(top, "label", "")).startswith("copy:"):
+            return False
+        if getattr(top, "controller", None) is not me:
+            return False          # solo copiamos habilidades propias
+        if not self._ability_worth_copying(top):
+            return False
+        for perm in list(me.battlefield):
+            for j, ab in enumerate(getattr(perm.card, "activated_abilities", ()) or ()):
+                if not ab.get("is_copy_ability"):
+                    continue
+                if ab.get("tap") and perm.tapped:
+                    continue
+                if not me.can_pay(ab.get("cost")):
+                    continue
+                top.copied = True     # marcar antes de activar (evita bucle)
+                game.activate_ability(perm, j, targets=[top])
+                return True
+        return False
+
     # -- mulligan --------------------------------------------------------- #
     def should_mulligan(self, hand, player=None):
         lands = sum(1 for c in hand if c.is_land())
