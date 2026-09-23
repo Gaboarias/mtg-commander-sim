@@ -64,6 +64,19 @@
 /* no quitar el foco al usar mouse, pero sí evitar doble contorno feo */
 :focus:not(:focus-visible) { outline: none; }
 
+/* superficies del navegador tematizadas (selección, caret, scrollbar): que las
+   partes que no dibujamos igual lleven el diseño, no los defaults del navegador */
+::selection { background: color-mix(in oklab, var(--accent) 32%, transparent); color: var(--text); }
+:root { caret-color: var(--accent); }
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border); border-radius: 999px;
+  border: 3px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
 /* respetar "reduce motion" del sistema operativo */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
