@@ -627,7 +627,7 @@ def test_modal_keeps_unmodeled_mode_so_picker_shows():
     c = cardsdb.build_card_from_data({
         "name": "Charm", "type_line": "Instant", "mana_cost": "{1}{U}",
         "color_identity": ["U"],
-        "oracle_text": "Choose one —\n• Tap target creature.\n• Draw two cards."})
+        "oracle_text": "Choose one —\n• Untap target creature.\n• Draw two cards."})
     assert len(c.modes) == 2                       # no se descartó por el modo no modelado
     me = Player("yo", [cards.creature("X", "1U", 1, 1) for _ in range(10)],
                 cards.creature("Cmd", "2U", 3, 3, legendary=True))
@@ -3006,6 +3006,138 @@ def test_fetchland_sacrifice_fetches_basic_tapped():
     assert pm not in me.battlefield                     # se sacrificó
     assert len(me.library) == lib0 - 1                  # sacó una carta de la biblioteca
     assert any(p.tapped and "basic" in p.card.supertypes for p in me.battlefield)
+
+
+def _with_two_plains(g, me):
+    import cards
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Plains", ["W"], basic=True), me)
+
+
+def test_activated_pump_buffs_own_creature():
+    # "{1}: Target creature gets +2/+2 until end of turn." ahora hace algo real.
+    import cardsdb, cards
+    g, me, op = _duel()
+    src = cardsdb.build_card_from_data({
+        "name": "Pumper", "type_line": "Creature — Human", "mana_cost": "{1}",
+        "power": "1", "toughness": "1",
+        "oracle_text": "{1}: Target creature gets +2/+2 until end of turn."})
+    assert src.activated_abilities[0].get("target_spec") == "own_creature"
+    _with_two_plains(g, me)
+    pm = g.move_to_battlefield(src, me)
+    assert g.activate_ability(pm, 0, targets=[pm]) is True
+    assert pm.power == 3 and pm.toughness == 3          # 1/1 +2/+2
+
+
+def test_activated_put_counter_on_target():
+    # "{1}: Put a +1/+1 counter on target creature."
+    import cardsdb
+    g, me, op = _duel()
+    src = cardsdb.build_card_from_data({
+        "name": "Counterer", "type_line": "Creature — Human", "mana_cost": "{1}",
+        "power": "1", "toughness": "1",
+        "oracle_text": "{1}: Put a +1/+1 counter on target creature."})
+    _with_two_plains(g, me)
+    pm = g.move_to_battlefield(src, me)
+    assert g.activate_ability(pm, 0, targets=[pm]) is True
+    assert pm.counters.get("+1/+1") == 1 and pm.power == 2
+
+
+def test_activated_tap_target_creature():
+    # "{1}: Tap target creature." (penalización -> criatura rival)
+    import cardsdb, cards
+    g, me, op = _duel()
+    src = cardsdb.build_card_from_data({
+        "name": "Tapper", "type_line": "Creature — Human", "mana_cost": "{1}",
+        "power": "1", "toughness": "1",
+        "oracle_text": "{1}: Tap target creature."})
+    assert src.activated_abilities[0].get("target_spec") == "opp_creature"
+    _with_two_plains(g, me)
+    pm = g.move_to_battlefield(src, me)
+    victim = g.move_to_battlefield(cards.creature("V", "1U", 2, 2), op)
+    assert g.activate_ability(pm, 0, targets=[victim]) is True
+    assert victim.tapped is True
+
+
+def test_activated_cost_pay_life():
+    # coste adicional "Pay 2 life": se paga y no te puede matar.
+    import cardsdb, cards
+    g, me, op = _duel()
+    src = cardsdb.build_card_from_data({
+        "name": "Bleeder", "type_line": "Creature — Human", "mana_cost": "{1}",
+        "power": "1", "toughness": "1",
+        "oracle_text": "{1}, Pay 2 life: Draw two cards."})
+    assert src.activated_abilities[0].get("pay_life") == 2
+    _with_two_plains(g, me)
+    me.library += [cards.land("Plains", ["W"], basic=True) for _ in range(5)]
+    pm = g.move_to_battlefield(src, me)
+    l0, h0 = me.life, len(me.hand)
+    assert g.activate_ability(pm, 0) is True
+    assert me.life == l0 - 2 and len(me.hand) == h0 + 2
+    # con 1 de vida no se puede pagar (no puede dejarte en 0)
+    me.life = 1
+    assert g.activate_ability(pm, 0) is False
+
+
+def test_activated_cost_sacrifice_other():
+    # coste adicional "Sacrifice a creature": sacrifica OTRA criatura, no la fuente.
+    import cardsdb, cards
+    g, me, op = _duel()
+    src = cardsdb.build_card_from_data({
+        "name": "Altar", "type_line": "Artifact", "mana_cost": "{1}",
+        "oracle_text": "{1}, Sacrifice a creature: Draw two cards."})
+    assert src.activated_abilities[0].get("sacrifice_other") == {"count": 1,
+                                                                 "type": "creature"}
+    _with_two_plains(g, me)
+    me.library += [cards.land("Plains", ["W"], basic=True) for _ in range(5)]
+    pm = g.move_to_battlefield(src, me)
+    spare = g.move_to_battlefield(cards.creature("Spare", "1W", 1, 1), me)
+    h0 = len(me.hand)
+    assert g.activate_ability(pm, 0) is True
+    assert spare not in me.battlefield and pm in me.battlefield
+    assert len(me.hand) == h0 + 2
+    # sin criatura que sacrificar no se puede activar
+    assert g.activate_ability(pm, 0) is False
+
+
+def test_activated_cost_discard():
+    # coste adicional "Discard a card".
+    import cardsdb, cards
+    g, me, op = _duel()
+    src = cardsdb.build_card_from_data({
+        "name": "Looter", "type_line": "Creature — Human", "mana_cost": "{1}",
+        "power": "1", "toughness": "1",
+        "oracle_text": "{1}, Discard a card: Draw two cards."})
+    assert src.activated_abilities[0].get("discard") == 1
+    _with_two_plains(g, me)
+    me.library += [cards.land("Plains", ["W"], basic=True) for _ in range(5)]
+    pm = g.move_to_battlefield(src, me)
+    me.hand = [cards.creature("Junk", "1W", 1, 1)]
+    gy0 = len(me.graveyard)
+    assert g.activate_ability(pm, 0) is True
+    assert len(me.graveyard) == gy0 + 1                 # descartó 1
+    assert len(me.hand) == 2                            # descartó 1, robó 2
+
+
+def test_loyalty_targeted_effect_resolves():
+    # un planeswalker con "-3: Destroy target creature" ahora SÍ hace algo (antes
+    # solo movía la lealtad). El objetivo se auto-elige (rival más amenazante).
+    import cardsdb, cards
+    g, me, op = _duel()
+    pw = cardsdb.build_card_from_data({
+        "name": "Slayer PW", "type_line": "Legendary Planeswalker — Test",
+        "mana_cost": "{3}{R}", "loyalty": "4",
+        "oracle_text": "+1: Put a +1/+1 counter on target creature.\n"
+                       "-3: Destroy target creature.\n-7: You get an emblem."})
+    # las tres etapas tienen texto legible para mostrar en la UI
+    assert len(pw.loyalty_texts) == 3
+    assert pw.loyalty_abilities[1][1] is not None       # -3 tiene efecto real
+    pm = g.move_to_battlefield(pw, me)
+    pm.counters["loyalty"] = 4
+    victim = g.move_to_battlefield(cards.creature("Beast", "3G", 4, 4), op)
+    assert g.activate_loyalty(pm, 1) is True             # -3
+    assert victim not in op.battlefield
+    assert pm.counters["loyalty"] == 1
 
 
 # -- partida completa corre sin excepciones -------------------------------- #

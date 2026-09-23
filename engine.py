@@ -836,6 +836,50 @@ class Game:
         ctrl.graveyard.append(perm.card)
         self.emit("to_graveyard", player=ctrl, card=perm.card)
 
+    def _sacrifice_candidates(self, ctrl, typ, n, exclude=None):
+        """Permanentes propios que sirven para pagar un coste 'Sacrifice a <tipo>'.
+        Devuelve los `n` menos valiosos (para no tirar lo mejor). No sacrifica al
+        comandante si hay alternativa."""
+        def match(pm):
+            if pm is exclude:
+                return False
+            t = pm.card.types
+            if typ == "creature":
+                return pm.is_creature()
+            if typ == "land":
+                return pm.card.is_land()
+            if typ == "token":
+                return pm.is_token
+            if typ in ("artifact", "enchantment"):
+                return typ in t
+            return True   # "permanent"
+        pool = [pm for pm in ctrl.battlefield if match(pm)]
+        # valor aproximado: comandante y tokens/criaturas fuertes valen más; ofrecemos
+        # primero lo más barato de perder.
+        def worth(pm):
+            v = pm.card.power + pm.card.toughness if pm.is_creature() else 0
+            if pm.card is ctrl.commander_card:
+                v += 100
+            return v
+        pool.sort(key=worth)
+        return pool[:n]
+
+    def _pay_discard(self, ctrl, n):
+        """Descarta `n` cartas (o toda la mano si n<0) como coste. Usa la política
+        del jugador si expone choose_discard; si no, descarta las últimas."""
+        count = len(ctrl.hand) if n < 0 else n
+        for _ in range(count):
+            if not ctrl.hand:
+                break
+            if ctrl.policy and hasattr(ctrl.policy, "choose_discard"):
+                card = ctrl.policy.choose_discard(self, ctrl)
+            else:
+                card = ctrl.hand[-1]
+            ctrl.hand.remove(card)
+            ctrl.graveyard.append(card)
+            self.emit("to_graveyard", player=ctrl, card=card)
+        self.log(f"{ctrl.name} descarta {count} carta(s) (coste)")
+
     def leave_graveyard(self, player: "Player", card: Card, dest: str = "exile") -> bool:
         """Saca una carta del cementerio. Emite leaves_graveyard. Devuelve bool."""
         if card not in player.graveyard:
@@ -1229,9 +1273,31 @@ class Game:
         ctrl = perm.controller
         if not ctrl.can_pay(ab.get("cost")):
             return False
+        # costes adicionales: verificar que se pueden pagar ANTES de tocar nada.
+        sac_o = ab.get("sacrifice_other")
+        pay_life = ab.get("pay_life") or 0
+        disc = ab.get("discard") or 0
+        sac_victims = []
+        if sac_o:
+            sac_victims = self._sacrifice_candidates(ctrl, sac_o["type"],
+                                                     sac_o["count"], exclude=perm)
+            if len(sac_victims) < sac_o["count"]:
+                return False
+        if pay_life and ctrl.life <= pay_life:
+            return False   # pagar vida no puede dejarte en 0 o menos
+        if disc > 0 and len(ctrl.hand) < disc:
+            return False
         ctrl.pay(ab.get("cost"))
         if ab.get("tap"):
             perm.tapped = True
+        # pagar los costes adicionales (todos son parte del coste, no van a la pila)
+        for v in sac_victims:
+            self.to_graveyard(v, "coste: sacrificio")
+        if pay_life:
+            ctrl.life -= pay_life
+            self.log(f"{ctrl.name} paga {pay_life} de vida (coste)")
+        if disc:
+            self._pay_discard(ctrl, disc)
         if ab.get("sacrifice_self"):
             # el sacrificio es parte del COSTE: se paga al activar (el efecto ya
             # está en la pila y no necesita al permanente).

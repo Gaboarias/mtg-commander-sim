@@ -164,6 +164,12 @@ class Policy:
                     continue
                 if not me.can_pay(ab.get("cost")):
                     continue
+                # el bot no paga costes adicionales agresivos a ciegas (sacrificar
+                # OTRA permanente, pagar vida o descartar): evita autolesionarse y
+                # mantiene el determinismo. Los sacrificios de SÍ MISMA (fetchlands)
+                # sí se permiten.
+                if ab.get("sacrifice_other") or ab.get("pay_life") or ab.get("discard"):
+                    continue
                 spec = ab.get("target_spec")
                 tgt = self._spec_targets(game, me, spec, ab.get("target_count", 1))
                 if spec and not tgt:
@@ -212,6 +218,12 @@ class Policy:
         return v
 
     def _spec_targets(self, game, me, spec, count):
+        if spec == "own_creature":
+            mine = [c for c in me.creatures()]
+            if not mine:
+                return []
+            mine.sort(key=lambda p: (p.power, p.toughness), reverse=True)
+            return mine[:max(1, count)]
         if spec == "opp_creature":
             pool = game.legal_creature_targets(me)
             if not pool:
@@ -298,6 +310,13 @@ class Policy:
 
     def choose_targets(self, game, me, card):
         spec = getattr(card, "target_spec", None)
+        if spec == "own_creature":
+            mine = [c for c in me.creatures()]
+            if not mine:
+                return []
+            n = max(1, getattr(card, "target_count", 1))
+            mine.sort(key=lambda p: (p.power, p.toughness), reverse=True)
+            return mine[:n]
         if spec == "opp_creature":
             pool = game.legal_creature_targets(me)
             if not pool:

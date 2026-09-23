@@ -267,6 +267,22 @@ class InteractiveGame:
                     return (pm, j)
         return None
 
+    def _extra_cost_reason(self, p, pm, ab):
+        """Motivo por el que un coste ADICIONAL (sacrificar otra permanente, pagar
+        vida, descartar) no se puede pagar; None si sí se puede."""
+        sac_o = ab.get("sacrifice_other")
+        if sac_o:
+            cands = self.g._sacrifice_candidates(p, sac_o["type"], sac_o["count"],
+                                                 exclude=pm)
+            if len(cands) < sac_o["count"]:
+                return f"sin {sac_o['type']} que sacrificar"
+        if (ab.get("pay_life") or 0) and p.life <= ab["pay_life"]:
+            return "sin vida"
+        disc = ab.get("discard") or 0
+        if disc > 0 and len(p.hand) < disc:
+            return "sin cartas para descartar"
+        return None
+
     def _offer_reaction(self, caster, arg):
         """¿El humano puede/quiere responder a `arg` de `caster`? `arg` es una
         carta (hechizo) o un StackObject (habilidad). Solo durante la fase
@@ -450,6 +466,10 @@ class InteractiveGame:
         p = self.human()
         ts = getattr(card, "target_spec", None)
         n = max(1, getattr(card, "target_count", 1))
+        if ts == "own_creature":
+            mine = list(p.creatures())
+            mine.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+            return mine[:n]
         if ts == "opp_creature":
             pool = self.g.legal_creature_targets(p)
             pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
@@ -475,6 +495,10 @@ class InteractiveGame:
 
     def _targets_for_spec(self, ts):
         """Objetivos legales que el humano puede elegir para un target_spec."""
+        if ts == "own_creature":
+            return [{"uid": pm.uid, "name": pm.name, "power": pm.power,
+                     "toughness": pm.toughness, "from": "tuyo"}
+                    for pm in self.human().creatures()]
         if ts == "opp_creature":
             return [{"uid": pm.uid, "name": pm.name, "power": pm.power,
                      "toughness": pm.toughness, "from": pm.controller.name}
@@ -517,6 +541,13 @@ class InteractiveGame:
         if not target_uids:
             return self._auto_targets(card)
         uids = target_uids if isinstance(target_uids, list) else [target_uids]
+        if ts == "own_creature":
+            out = []
+            for uid in uids:
+                pm = self._find_any_perm(uid)
+                if pm is not None and pm.controller is self.human() and pm.card.is_creature():
+                    out.append(pm)
+            return out
         if ts == "opp_creature":
             out = []
             for uid in uids:
@@ -891,6 +922,8 @@ class InteractiveGame:
                     reason = "girada"
                 elif not p.can_pay(ab.get("cost")):
                     reason = "sin maná"
+                else:
+                    reason = self._extra_cost_reason(p, pm, ab)
                 spec = ab.get("target_spec")
                 usable.append({"i": i, "label": ab.get("label", f"Habilidad {i + 1}"),
                                "cost": _cost_str_cost(ab.get("cost")), "tap": bool(ab.get("tap")),

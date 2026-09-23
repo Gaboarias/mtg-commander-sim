@@ -314,6 +314,37 @@ def _fragment_effect(seg: str):
         return (_search_library_effect(pred, to_battlefield=True, allow_none=False,
                                         label="una tierra básica", tapped=tapped),
                 None, 1)
+    # pump: "target creature gets +X/+Y until end of turn"
+    mp = re.search(r"target creature gets ([+-]\d+)/([+-]\d+)(?:\s+until end of turn)?",
+                   seg, re.I)
+    if mp:
+        dp, dt = int(mp.group(1)), int(mp.group(2))
+
+        def pump(game, ctrl, targets, _p=dp, _t=dt):
+            for tg in (targets or []):
+                if hasattr(tg, "temp_pt"):
+                    tg.temp_pt[0] += _p
+                    tg.temp_pt[1] += _t
+            game.sba()
+        # bonus -> propia criatura; penalización -> criatura rival
+        return pump, ("opp_creature" if (dp < 0 or dt < 0) else "own_creature"), 1
+    # poner contadores +1/+1 en una criatura objetivo
+    mc = re.search(r"put (\w+) \+1/\+1 counters? on target creature", seg, re.I)
+    if mc and _count_word(mc.group(1)):
+        n = _count_word(mc.group(1))
+
+        def putc(game, ctrl, targets, _n=n):
+            for tg in (targets or []):
+                if hasattr(tg, "counters"):
+                    game.add_counters(tg, "+1/+1", _n)
+        return putc, "own_creature", 1
+    # girar una criatura objetivo
+    if re.search(r"\btap target creature", seg, re.I) and "untap" not in seg.lower():
+        def tapc(game, ctrl, targets):
+            for tg in (targets or []):
+                if hasattr(tg, "tapped"):
+                    tg.tapped = True
+        return tapc, "opp_creature", 1
     spec = _targeted_spell(seg)
     if spec is not None:
         mode, count = spec
@@ -411,17 +442,50 @@ def _parse_activated(oracle: str, name: str = ""):
         if not m:
             continue
         costtxt, body = m.group(1), m.group(2)
-        syms = re.findall(r"\{([^}]+)\}", costtxt)
-        # texto del coste sin símbolos ni separadores; debe quedar vacío, salvo un
-        # "sacrifice this ~ / sacrifice <nombre>" que aceptamos como coste de sacrificio.
-        leftover = re.sub(r"\{[^}]+\}|[,\s]", "", costtxt).lower()
+        # el coste puede tener varias cláusulas separadas por comas: maná ({..}),
+        # girar ({T}) y costes adicionales que sí modelamos (sacrificar esta misma
+        # permanente, sacrificar OTRA permanente, pagar vida, descartar cartas).
+        # Cualquier cláusula que no reconozcamos descarta la habilidad (bad=True).
+        syms = []
         sac_self = False
-        if leftover.startswith("sacrifice"):
-            rest = leftover[len("sacrifice"):]
-            if rest.startswith(("this", "it", "~")) or (name_key and rest == name_key):
-                sac_self = True
-                leftover = ""
-        if not syms or leftover:
+        sac_other = None   # {"count": n, "type": "..."} — sacrificar OTRAS permanentes
+        pay_life = 0
+        discard = 0        # nº de cartas a descartar (-1 = toda la mano)
+        bad = False
+        for cl in costtxt.split(","):
+            syms.extend(re.findall(r"\{([^}]+)\}", cl))
+            rest = re.sub(r"\{[^}]+\}", "", cl).strip().lower().rstrip(".")
+            if not rest:
+                continue
+            key = re.sub(r"[^a-z]", "", rest)
+            if key.startswith("sacrifice"):
+                tail = key[len("sacrifice"):]
+                if tail.startswith(("this", "it", "~")) or (name_key and tail == name_key):
+                    sac_self = True
+                    continue
+                mso = re.match(r"sacrifice (a|an|another|\d+|two|three|four|\w+) "
+                               r"(creature|permanent|artifact|land|enchantment|token)s?",
+                               rest)
+                if mso:
+                    qty = mso.group(1)
+                    n = 1 if qty in ("a", "an", "another") else (_count_word(qty) or 1)
+                    sac_other = {"count": n, "type": mso.group(2)}
+                    continue
+            mpl = re.match(r"pay (\d+) life", rest)
+            if mpl:
+                pay_life = int(mpl.group(1))
+                continue
+            if rest.startswith("discard"):
+                if "hand" in rest:
+                    discard = -1
+                else:
+                    md = re.match(r"discard (a|an|\d+|two|three|four|\w+)", rest)
+                    q = md.group(1) if md else "a"
+                    discard = 1 if q in ("a", "an") else (_count_word(q) or 1)
+                continue
+            bad = True
+            break
+        if not syms or bad:
             continue
         tap = any(s.upper() == "T" for s in syms)
         mana = "".join("{%s}" % s for s in syms if s.upper() != "T")
@@ -441,6 +505,8 @@ def _parse_activated(oracle: str, name: str = ""):
                        or re.search(r"copy (?:that|the target) (?:activated |triggered )?ability",
                                     body, re.I))
         out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                    "sacrifice_other": sac_other, "pay_life": pay_life,
+                    "discard": discard,
                     "label": _short_label(body),
                     "effect": (lambda g, c, perm, tg, _e=eff: _e(g, c, tg)),
                     "target_spec": spec, "target_count": count,
@@ -834,7 +900,35 @@ def _loyalty_effect(text: str):
             cards.make_token(game, ctrl, "Token", _p, _t)
         return eff
 
+    # efectos con objetivo (destruir / exiliar / rebote / -X/-X / tap / poner
+    # contadores): reusar el parser de fragmentos y AUTO-elegir el objetivo, para
+    # que la habilidad de lealtad haga algo real en vez de solo mover la lealtad.
+    frag, spec, count = _fragment_effect(text or "")
+    if frag is not None and spec is not None:
+        def eff(game, ctrl, perm, _f=frag, _spec=spec, _n=count):
+            _f(game, ctrl, _auto_loyalty_targets(game, ctrl, _spec, _n))
+        return eff
+
     return None
+
+
+def _auto_loyalty_targets(game, ctrl, spec, n):
+    """Objetivos automáticos para una habilidad de lealtad (el humano aún no elige
+    objetivo de lealtad): rival más amenazante, propia mejor criatura o rival con
+    menos vida, según el `target_spec` del efecto."""
+    n = max(1, n or 1)
+    if spec == "opp_creature":
+        pool = list(game.legal_creature_targets(ctrl))
+        pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+        return pool[:n]
+    if spec == "own_creature":
+        mine = list(ctrl.creatures())
+        mine.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+        return mine[:n]
+    if spec == "opp_player":
+        opps = game.opponents(ctrl)
+        return [min(opps, key=lambda o: o.life)] if opps else []
+    return []
 
 
 def _planeswalker_abilities(oracle: str):
