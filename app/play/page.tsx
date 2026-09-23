@@ -55,7 +55,7 @@ type Mulligan = { mulls: number; to_bottom: number; lands: number };
 type ChoiceOpt = { i: number; name: string; is_land?: boolean; ok?: boolean };
 type Choice = { kind: string; prompt: string; options: ChoiceOpt[]; allow_none: boolean; card?: string };
 type ReactState = {
-  spell: string; from: string;
+  spell: string; from: string; kind?: string;
   responses: { i: number; name: string; cost: string; target_spec?: string | null }[];
   abilities: { uid: number; name: string; index: number; label: string; cost: string }[];
   gy_abilities: { i: number; index: number; name: string; label: string; cost: string }[];
@@ -629,7 +629,7 @@ export default function Play() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={{ type: "spring", stiffness: 380, damping: 26 }}>
               <h2 style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                <Icon name="bolt" size={18} /> {state.react.from} lanza <b>{state.react.spell}</b> — ¿respondés?
+                <Icon name="bolt" size={18} /> {state.react.from} {state.react.kind === "ability" || state.react.kind === "trigger" ? "activa" : "lanza"} <b>{state.react.spell}</b> — ¿respondés?
               </h2>
               {state.react.responses.length > 0 && (
                 <div className="act-block">

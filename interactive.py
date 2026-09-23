@@ -211,6 +211,9 @@ class InteractiveGame:
         self.g.sba()
         if p.lost:
             return False
+        # ledger de habilidades usadas este turno: persiste a través de una
+        # ReactionPause para que el bot no re-active lo mismo al reanudar.
+        p._abil_perms_used = set()
         return self._ai_steps(p, "main1")
 
     def _ai_steps(self, p, step):
@@ -251,15 +254,33 @@ class InteractiveGame:
             self.phase = "react"
             return True
 
-    def _offer_reaction(self, caster, card):
-        """¿El humano puede/quiere responder a `card` que lanza `caster`? Solo
-        durante la fase principal de un bot, sobre hechizos que valen la pena, y
-        si el humano tiene un instantáneo pagable con qué responder."""
+    def _ready_copy_ability(self, hu):
+        """(perm, index) de una habilidad 'copiar habilidad' del humano lista para
+        activar (no girada si pide {T}, con maná), o None."""
+        for pm in hu.battlefield:
+            for j, ab in enumerate(getattr(pm.card, "activated_abilities", ()) or ()):
+                if not ab.get("is_copy_ability"):
+                    continue
+                if ab.get("tap") and pm.tapped:
+                    continue
+                if hu.can_pay(ab.get("cost")):
+                    return (pm, j)
+        return None
+
+    def _offer_reaction(self, caster, arg):
+        """¿El humano puede/quiere responder a `arg` de `caster`? `arg` es una
+        carta (hechizo) o un StackObject (habilidad). Solo durante la fase
+        principal de un bot y si el humano tiene con qué responder."""
         if not self._react_armed:
             return False
         hu = self.human()
         if caster is hu or hu.lost or hu not in self.g.opponents(caster):
             return False
+        # responder a una HABILIDAD del rival: solo si el humano puede copiarla
+        # (controla un permanente con habilidad 'copiar habilidad' pagable).
+        if getattr(arg, "kind", None) in ("ability", "trigger"):
+            return self._ready_copy_ability(hu) is not None
+        card = arg
         worth = bool(card.types & {"creature", "planeswalker"}) or \
             bool(getattr(card, "tags", set()) & {"removal", "wipe", "engine", "counter"})
         if not worth:
@@ -290,7 +311,13 @@ class InteractiveGame:
         elif action == "ability" and uid is not None:
             pm = self._find_perm(uid)
             if pm is not None:
-                self.g.activate_ability(pm, index, targets=None)
+                ab = (getattr(pm.card, "activated_abilities", ()) or (None,))[index] \
+                    if index < len(getattr(pm.card, "activated_abilities", ()) or ()) else None
+                # copiar habilidad: apuntar a la habilidad concreta del rival en la pila
+                tgt = [ctx["spell"]] if (ab and ab.get("is_copy_ability")
+                                         and getattr(ctx.get("spell"), "kind", None)
+                                         in ("ability", "trigger")) else None
+                self.g.activate_ability(pm, index, targets=tgt)
         elif action == "gy_ability" and i is not None and 0 <= i < len(hu.graveyard):
             self.g.activate_gy_ability(hu, hu.graveyard[i], index)
         # vaciar la pila (respuesta + hechizo original) con prioridad de todos
@@ -992,8 +1019,15 @@ class InteractiveGame:
                     gy_abilities.append({"i": i, "index": j, "name": c.name,
                                          "label": ab.get("label", "Habilidad"),
                                          "cost": _cost_str_cost(ab.get("cost"))})
+        # etiqueta legible del objeto en la pila (hechizo o habilidad del rival)
+        kind = getattr(spell, "kind", "spell")
+        if kind in ("ability", "trigger"):
+            label = f"habilidad de {getattr(src, 'name', '?')}"
+        else:
+            label = getattr(src, "name", "?")
         return {
-            "spell": getattr(src, "name", "?"),
+            "spell": label,
+            "kind": kind,
             "from": spell.controller.name if spell is not None else "",
             "responses": responses,
             "abilities": abilities,

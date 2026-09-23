@@ -299,7 +299,13 @@ def _fragment_effect(seg: str):
     if re.search(r"copy target (?:activated|triggered)", seg, re.I) or \
        re.search(r"copy (?:that|the target) (?:activated |triggered )?ability", seg, re.I):
         def copy_ab(game, ctrl, targets):
-            game.copy_last_ability(ctrl)
+            obj = (list(targets or []) or [None])[0]
+            # si apuntamos a una habilidad concreta en la pila, copiar ESA;
+            # si no (activación en fase principal sin objetivo), copiar la última.
+            if obj is not None and getattr(obj, "kind", None) in ("ability", "trigger"):
+                game.copy_ability_on_stack(obj, ctrl)
+            else:
+                game.copy_last_ability(ctrl)
         return copy_ab, None, 1
     spec = _targeted_spell(seg)
     if spec is not None:

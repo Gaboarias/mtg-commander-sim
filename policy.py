@@ -136,9 +136,16 @@ class Policy:
 
     def _activate_perm_abilities(self, game, me, second):
         used = 0
+        # registro de permanentes ya usados este turno (si existe): evita que, al
+        # reanudar la fase principal tras una ReactionPause, el bot re-active la
+        # misma habilidad (refactor A, riesgo 2). En headless el atributo no existe
+        # y no cambia nada.
+        done = getattr(me, "_abil_perms_used", None)
         for perm in list(me.battlefield):
             if used >= 4:
                 return
+            if done is not None and perm.uid in done:
+                continue
             for j, ab in enumerate(getattr(perm.card, "activated_abilities", ()) or ()):
                 # no girar criaturas antes del combate (podrían atacar): las de {T}
                 # solo se usan en la 2da main
@@ -152,6 +159,10 @@ class Policy:
                 tgt = self._spec_targets(game, me, spec, ab.get("target_count", 1))
                 if spec and not tgt:
                     continue
+                # marcar ANTES de activar: si la activación pausa (ReactionPause),
+                # al reanudar este permanente ya queda descartado.
+                if done is not None:
+                    done.add(perm.uid)
                 if game.activate_ability(perm, j, targets=tgt):
                     used += 1
                     break              # una habilidad por permanente por turno
@@ -302,6 +313,8 @@ class Policy:
             return False
         if str(getattr(top, "label", "")).startswith("trigger"):
             return False
+        if getattr(top, "kind", "spell") != "spell":
+            return False          # no se contrarrestan habilidades/disparos
         card = getattr(top, "source", None)
         if card is None or not hasattr(card, "types") or card.is_land():
             return False
@@ -320,6 +333,8 @@ class Policy:
         """Copiar el PROPIO hechizo del tope con un Fork/Twincast si vale la pena."""
         if self.level == "novato":
             return False
+        if getattr(top, "kind", "spell") != "spell":
+            return False          # respond_copy solo copia HECHIZOS
         src = getattr(top, "source", None)
         if src is None or not hasattr(src, "types"):
             return False

@@ -2467,6 +2467,53 @@ def test_reaction_window_to_opponent_spell():
     assert ig._offer_reaction(op, beast) is False
 
 
+def test_human_copies_bot_ability_in_reaction_window():
+    # A2: un bot activa una habilidad; el humano tiene un Strionic listo, se abre
+    # la ventana de reacción y al copiarla el efecto ocurre DOS veces.
+    import interactive, cards, decks, cardsdb, engine
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    op = ig.g.opponents(hu)[0]
+    # bot: permanente con habilidad activada que pega 2 a un jugador
+    pinger = cards.creature("Pinger", "1R", 1, 1)
+    hits = {"n": 0}
+    pinger.activated_abilities = ({"cost": cards.parse_cost("0"), "tap": False,
+                                   "label": "ping", "target_spec": None, "target_count": 1,
+                                   "effect": (lambda g, c, perm, tg: hits.__setitem__(
+                                       "n", hits["n"] + 1))},)
+    pp = ig.g.move_to_battlefield(pinger, op)
+    pp.summoning_sick = False
+    # humano: Strionic Resonator listo + maná
+    reson = cardsdb.build_card_from_data({
+        "name": "Strionic Resonator", "type_line": "Artifact",
+        "oracle_text": "{2}, {T}: Copy target activated or triggered ability."})
+    rp = ig.g.move_to_battlefield(reson, hu)
+    rp.summoning_sick = False
+    for _ in range(2):
+        ig.g.move_to_battlefield(cards.land("Plains", ["W"], basic=True), hu)
+    ig._react_armed = True
+    op._abil_perms_used = {pp.uid}     # el bot ya comprometió esta activación
+    # el bot activa su habilidad -> debe pausar (el humano puede copiar)
+    try:
+        ig.g.activate_ability(pp, 0)
+        paused = False
+    except engine.ReactionPause as rpause:
+        paused = True
+        stacked = rpause.spell
+        ig._react_ctx = {"p": op, "step": "main2", "spell": stacked}
+        ig.mode = "react"
+        ig.phase = "react"
+    assert paused and hits["n"] == 0          # aún no resolvió
+    rs = ig._react_state()
+    assert "habilidad de Pinger" in rs["spell"]
+    # el humano copia la habilidad con Strionic apuntando a la habilidad en la pila.
+    # (activamos directo para aislar la copia del avance de turno que hace react())
+    ig.g.activate_ability(rp, 0, targets=[stacked])
+    assert hits["n"] == 2                     # copia + original, ambas resuelven
+
+
 def test_optional_may_draw_asks_human_auto_for_bot():
     # "you may draw a card": el humano decide (sí/no); el bot auto-acepta.
     import interactive, cardsdb, decks

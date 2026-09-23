@@ -428,13 +428,17 @@ class Player:
 
 class StackObject:
     def __init__(self, controller, resolve, source=None, targets=None, label="",
-                 chosen_modes=None):
+                 chosen_modes=None, kind="spell", perm=None, is_copy_ability=False):
         self.controller = controller
         self.resolve = resolve          # (game) -> None
         self.source = source
         self.targets = targets or []
         self.label = label
         self.chosen_modes = list(chosen_modes) if chosen_modes else None
+        # kind: "spell" | "ability" | "trigger" — para responder/copiar habilidades
+        self.kind = kind
+        self.perm = perm                # permanente fuente si es una habilidad activada
+        self.is_copy_ability = is_copy_ability  # la propia habilidad de copia (no copiable)
 
 
 # --------------------------------------------------------------------------- #
@@ -713,6 +717,7 @@ class Game:
                     resolve=(lambda g, _cb=cb, _perm=perm, _kw=inner: _cb(g, _perm, **_kw)),
                     source=perm,
                     label=f"trigger:{event}:{perm.name}",
+                    kind="trigger", perm=perm,
                 ))
                 self.note_ability(perm.card, self.EVENT_KIND.get(event, event),
                                   controller=pl)
@@ -736,6 +741,7 @@ class Game:
                         resolve=(lambda g, _cb=cb, _p=pl, _c=card, _kw=inner: _cb(g, _p, _c, **_kw)),
                         source=card,
                         label=f"gy_trigger:{event}:{card.name}",
+                        kind="trigger",
                     ))
                     self.note_ability(card, "desde el cementerio", controller=pl)
 
@@ -1097,12 +1103,18 @@ class Game:
         self.stack.append(StackObject(player, _resolve, source=card,
                                       targets=targets, label=f"spell:{card.name}",
                                       chosen_modes=chosen_modes))
+        return self._after_stack_push(player, card)
+
+    def _after_stack_push(self, player, react_arg):
+        """Tras poner un objeto en la pila (hechizo o habilidad): si ya estamos en
+        una ventana de prioridad, dejarlo para el bucle externo; si hay un humano
+        que puede reaccionar, pausar (ReactionPause); si no, drenar con prioridad."""
         if self._in_priority:
-            return True   # lanzado en respuesta: el bucle externo lo resolvera
-        # ventana de reacción del humano: si un rival lanza algo que el humano
+            return True   # puesto en respuesta: el bucle externo lo resolverá
+        # ventana de reacción del humano: si un rival hace algo que el humano
         # podría responder, pausamos (la capa interactiva reanuda tras responder).
         rc = getattr(self, "reaction_check", None)
-        if rc is not None and rc(player, card):
+        if rc is not None and rc(player, react_arg):
             raise ReactionPause(self.stack[-1])
         self._run_priority_and_resolve()
         return True
@@ -1163,19 +1175,33 @@ class Game:
         loy = perm.counters.get("loyalty", 0)
         if cost < 0 and loy + cost < 0:
             return False
+        # el coste de lealtad se paga al activar (una por turno), pero el EFECTO
+        # va a la pila y se resuelve con prioridad (refactor A: habilidades en pila).
         perm.counters["loyalty"] = loy + cost
         perm.activated_this_turn = True
         self.log(f"{perm.controller.name}: {perm.name} activa {cost:+d} "
                  f"(lealtad {perm.counters['loyalty']})")
         self.note_ability(perm.card, f"lealtad {cost:+d}", controller=perm.controller)
-        if eff:
-            eff(self, perm.controller, perm)
-        self.sba()
-        return True
+        ctrl = perm.controller
+
+        def _resolve(g, _eff=eff, _c=ctrl, _p=perm, _cost=cost):
+            if _eff:
+                _eff(g, _c, _p)
+            g.last_ability = {
+                "source": _p.card, "perm": _p, "label": f"lealtad {_cost:+d}",
+                "run": (lambda gg, __e=_eff, __c=_c, __p=_p: __e(gg, __c, __p) if __e else None),
+            }
+
+        self.stack.append(StackObject(
+            ctrl, _resolve, source=perm.card, label=f"ability:{perm.name}:loyalty",
+            kind="ability", perm=perm))
+        return self._after_stack_push(ctrl, self.stack[-1])
 
     def activate_ability(self, perm: Permanent, index: int, targets=None) -> bool:
         """Activa una habilidad con coste de maná (y opcionalmente girar) de un
-        permanente. Se puede repetir mientras haya con qué pagar."""
+        permanente. El coste se paga al activar; el EFECTO va a la pila y se
+        resuelve con prioridad (refactor A). Se puede repetir mientras haya con
+        qué pagar."""
         abils = perm.card.activated_abilities
         if not abils or not (0 <= index < len(abils)):
             return False
@@ -1191,21 +1217,28 @@ class Game:
         self.log(f"{ctrl.name}: {perm.name} activa «{ab.get('label', '')}»")
         self.note_ability(perm.card, f"habilidad: {ab.get('label', '')}", controller=ctrl)
         eff = ab.get("effect")
-        if eff:
-            eff(self, ctrl, perm, targets or [])
-        # recordar esta habilidad para que efectos "copiá la última habilidad"
-        # (Strionic Resonator) la puedan duplicar. La propia habilidad de copia
-        # NO se registra (si no, copiarse a sí misma sería el único efecto).
-        if not ab.get("is_copy_ability"):
-            _t = list(targets or [])
-            self.last_activated = (perm, ab, _t)
-            if eff:
-                self.last_ability = {
-                    "source": perm.card, "perm": perm, "label": ab.get("label", ""),
-                    "run": (lambda g, _e=eff, _c=ctrl, _p=perm, _tg=_t: _e(g, _c, _p, _tg)),
-                }
-        self.sba()
-        return True
+        _t = list(targets or [])
+        is_copy = bool(ab.get("is_copy_ability"))
+
+        def _resolve(g, _eff=eff, _c=ctrl, _p=perm, _tg=_t, _ab=ab, _is_copy=is_copy):
+            if _eff:
+                _eff(g, _c, _p, _tg)
+            # recordar esta habilidad para "copiá la última habilidad" (Strionic).
+            # La propia habilidad de copia NO se registra (evita copiarse a sí misma).
+            if not _is_copy:
+                g.last_activated = (_p, _ab, list(_tg))
+                if _eff:
+                    g.last_ability = {
+                        "source": _p.card, "perm": _p, "label": _ab.get("label", ""),
+                        "run": (lambda gg, __e=_eff, __c=_c, __p=_p, __tg=_tg:
+                                __e(gg, __c, __p, list(__tg))),
+                    }
+
+        self.stack.append(StackObject(
+            ctrl, _resolve, source=perm.card, targets=_t,
+            label=f"ability:{perm.name}:{ab.get('label', '')}", kind="ability",
+            perm=perm, is_copy_ability=is_copy))
+        return self._after_stack_push(ctrl, self.stack[-1])
 
     def copy_spell_on_stack(self, obj, controller=None):
         """Pone en la pila una COPIA del hechizo `obj` (StackObject). La copia se
@@ -1237,6 +1270,25 @@ class Game:
         self.stack.append(StackObject(ctrl, _resolve, source=src, targets=tgts,
                                       label=f"copy:{src.name}"))
         self.log(f"{ctrl.name} copia el hechizo {src.name}")
+
+    def copy_ability_on_stack(self, obj, controller=None):
+        """Pone en la pila una COPIA de una habilidad `obj` (StackObject de tipo
+        'ability'/'trigger') que aún está en la pila. Re-ejecuta el mismo efecto
+        (misma fuente y objetivos). Cubre Strionic Resonator apuntando a una
+        habilidad concreta (no solo 'la última')."""
+        if obj is None or getattr(obj, "resolve", None) is None:
+            return
+        ctrl = controller or obj.controller
+        src = getattr(obj, "source", None)
+        label = getattr(obj, "label", "")
+
+        def _resolve(g, _r=obj.resolve):
+            _r(g)   # re-ejecuta el efecto de la habilidad copiada
+
+        self.stack.append(StackObject(
+            ctrl, _resolve, source=src, label=f"copy:{label}", kind="ability",
+            perm=getattr(obj, "perm", None)))
+        self.log(f"{ctrl.name} copia la habilidad ({label})")
 
     def copy_last_ability(self, ctrl):
         """Copia (vuelve a ejecutar) la última habilidad COPIABLE resuelta —
