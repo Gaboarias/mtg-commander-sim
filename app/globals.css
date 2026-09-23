@@ -23,8 +23,9 @@
   --radius: 16px;
   --shadow: 0 1px 2px rgba(0,0,0,.45), 0 10px 28px -14px rgba(0,0,0,.6);
   --ring: 0 0 0 1px rgba(216,178,58,.07);
-  --page-glow: radial-gradient(1100px 520px at 50% -8%, rgba(216,178,58,.10), transparent 60%),
-               radial-gradient(820px 480px at 88% 0%, rgba(111,149,255,.07), transparent 55%);
+  --page-glow: radial-gradient(920px 440px at 50% 7%, rgba(216,178,58,.26), transparent 58%),
+               radial-gradient(700px 520px at 14% 34%, rgba(111,149,255,.08), transparent 60%),
+               radial-gradient(1500px 950px at 50% 122%, rgba(0,0,0,.66), transparent 54%);
 }
 
 :root[data-theme="light"] {
@@ -49,8 +50,9 @@
   --s-none: #8a8375;
   --shadow: 0 1px 2px rgba(80,60,20,.15), 0 10px 26px -16px rgba(80,60,20,.35);
   --ring: 0 0 0 1px rgba(120,90,20,.08);
-  --page-glow: radial-gradient(1100px 520px at 50% -8%, rgba(138,90,18,.10), transparent 60%),
-               radial-gradient(820px 480px at 88% 0%, rgba(47,90,168,.06), transparent 55%);
+  --page-glow: radial-gradient(1000px 480px at 50% 11%, rgba(138,90,18,.16), transparent 60%),
+               radial-gradient(760px 520px at 12% 36%, rgba(47,90,168,.06), transparent 60%),
+               radial-gradient(1500px 900px at 50% 120%, rgba(70,52,18,.22), transparent 55%);
 }
 
 * { box-sizing: border-box; }
@@ -106,7 +108,7 @@ html, body {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(14, 16, 21, 0.72);
+  background: color-mix(in oklab, var(--bg) 82%, transparent);
   backdrop-filter: saturate(140%) blur(12px);
   border-bottom: 1px solid var(--border);
 }
@@ -142,11 +144,11 @@ html, body {
   border: 1px solid transparent;
   transition: color .18s, background .18s, border-color .18s;
 }
-.nav-link:hover { color: var(--text); background: rgba(255,255,255,.05); }
+.nav-link:hover { color: var(--text); background: color-mix(in oklab, var(--text) 8%, transparent); }
 .nav-link.on {
   color: var(--text);
-  background: rgba(91,134,255,.14);
-  border-color: rgba(91,134,255,.35);
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 42%, transparent);
 }
 @media (max-width: 520px) { .nav-brand span { display: none; } }
 
@@ -157,27 +159,35 @@ html, body {
   padding: 40px 20px 90px;
 }
 
-header { margin-bottom: 14px; }
+header { margin-bottom: 18px; animation: hero-in .5s cubic-bezier(.2,.7,.2,1) both; }
+@keyframes hero-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+header::after {
+  content: ""; display: block; width: 64px; height: 2px; margin: 18px auto 0;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  border-radius: 2px; opacity: .8;
+}
 header h1 {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 2.15rem;
-  margin: 0 0 14px;
-  letter-spacing: 0.01em;
-  line-height: 1.15;
+  font-size: clamp(2.2rem, 4.2vw, 2.9rem);
+  margin: 0 0 16px;
+  letter-spacing: 0.005em;
+  line-height: 1.08;
   color: var(--text);
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   text-align: center;
+  text-shadow: 0 1px 0 rgba(0,0,0,.25);
 }
 header p {
-  color: var(--muted);
+  color: color-mix(in oklab, var(--text) 78%, var(--muted));
   margin: 0 auto 8px;
-  max-width: 62ch;
+  max-width: 58ch;
   text-align: center;
   line-height: 1.7;
+  font-size: 1.02rem;
 }
 
 /* badge circular de paso */
@@ -192,7 +202,7 @@ header p {
 
 /* boton de tema en la nav */
 .theme-toggle {
-  background: rgba(255,255,255,.05); color: var(--text);
+  background: color-mix(in oklab, var(--text) 6%, transparent); color: var(--text);
   border: 1px solid var(--border); border-radius: 999px;
   width: 34px; height: 34px; cursor: pointer; font-size: .95rem;
   display: inline-grid; place-items: center;
@@ -202,12 +212,15 @@ header p {
 
 /* ---- cards ---- */
 .card {
-  background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,0)) , var(--panel);
-  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0) 40%), var(--panel);
+  border: 1px solid color-mix(in oklab, var(--border) 72%, var(--accent) 10%);
   border-radius: var(--radius);
-  padding: 22px 24px;
+  padding: 24px 26px;
   margin: 18px 0;
-  box-shadow: var(--shadow), var(--ring);
+  box-shadow:
+    0 1px 2px rgba(0,0,0,.5),
+    0 20px 44px -24px rgba(0,0,0,.8),
+    var(--ring), inset 0 1px 0 rgba(255,255,255,.07);
 }
 .card h2 {
   font-family: var(--font-display);
@@ -288,13 +301,14 @@ input:focus, select:focus, textarea:focus {
 
 /* ---- buttons ---- */
 button.go {
-  background: linear-gradient(180deg, #e6c14e, var(--accent));
-  color: #1a1400; border: none; border-radius: 11px;
-  padding: 11px 20px; font-weight: 700; cursor: pointer; font-size: .95rem;
-  box-shadow: 0 6px 18px -8px rgba(216,178,58,.6);
-  transition: transform .12s, box-shadow .18s, opacity .18s;
+  background: linear-gradient(180deg, #f4d873 0%, var(--accent) 52%, #c1962b 100%);
+  color: #201800; border: none; border-radius: 12px;
+  padding: 11px 22px; font-weight: 800; cursor: pointer; font-size: .95rem;
+  letter-spacing: .01em;
+  box-shadow: 0 6px 18px -8px rgba(216,178,58,.75), inset 0 1px 0 rgba(255,255,255,.5);
+  transition: transform .12s, box-shadow .18s, opacity .18s, filter .18s;
 }
-button.go:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 24px -8px rgba(216,178,58,.7); }
+button.go:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.05); box-shadow: 0 12px 30px -8px rgba(216,178,58,.9), inset 0 1px 0 rgba(255,255,255,.55); }
 button.go:active:not(:disabled) { transform: translateY(0); }
 button.go:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
 button.ghost {
