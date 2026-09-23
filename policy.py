@@ -40,6 +40,15 @@ class Policy:
                 s += 6
         if "creature" in tags:
             s += max(1, card.power)
+            # las palabras clave suben el valor real de la criatura (evasión,
+            # mortalidad, resiliencia), no solo la fuerza bruta.
+            kw = getattr(card, "keywords", set()) or set()
+            s += sum(1 for k in ("flying", "menace", "trample", "deathtouch",
+                                 "lifelink", "double_strike", "vigilance",
+                                 "hexproof", "indestructible", "unblockable") if k in kw)
+            if "flying" in kw or "unblockable" in kw:
+                s += 1                      # evasión pura vale un poco más
+            s += max(0, (getattr(card, "toughness", 0) - 1)) // 3  # cuerpos resistentes
         return s
 
     # -- fase principal --------------------------------------------------- #
@@ -187,12 +196,27 @@ class Policy:
         scored.sort(reverse=True)
         return sorted(i for _s, i in scored[:pick])
 
+    def _threat_value(self, perm):
+        """Cuán peligrosa es una criatura rival como objetivo de remoción: cuerpo,
+        evasión/keywords, y si es el comandante (matarlo es muy valioso)."""
+        v = perm.power * 2 + perm.toughness
+        for k in ("flying", "trample", "deathtouch", "double_strike", "menace",
+                  "lifelink", "unblockable"):
+            if perm.has(k):
+                v += 3
+        try:
+            if perm.card is perm.controller.commander_card:
+                v += 9              # el comandante es el objetivo de mayor valor
+        except AttributeError:
+            pass
+        return v
+
     def _spec_targets(self, game, me, spec, count):
         if spec == "opp_creature":
             pool = game.legal_creature_targets(me)
             if not pool:
                 return []
-            pool.sort(key=lambda p: (p.power, p.toughness), reverse=True)
+            pool.sort(key=lambda p: self._threat_value(p), reverse=True)
             return pool[:max(1, count)]
         if spec == "opp_player":
             opps = game.opponents(me)
@@ -279,8 +303,8 @@ class Policy:
             if not pool:
                 return []
             n = max(1, getattr(card, "target_count", 1))
-            pool.sort(key=lambda p: (p.power, p.toughness), reverse=True)
-            return pool[:n]           # las N más grandes
+            pool.sort(key=lambda p: self._threat_value(p), reverse=True)
+            return pool[:n]           # las N más amenazantes (no solo las más grandes)
         if spec == "opp_player":
             opps = game.opponents(me)
             return [min(opps, key=lambda o: o.life)] if opps else []
@@ -449,6 +473,20 @@ class Policy:
                 keep = max(1, len(attackers) // 3)
         sending = attackers[:len(attackers) - keep] if keep else attackers
         sending = list(sending)
+        # avanzado: no mandar una criatura a morir gratis (un bloqueador rival la
+        # mata y sobrevive, y ella no mata a nadie), salvo obligación.
+        if self.level == "avanzado":
+            def dies_for_free(atk):
+                for b in target.creatures():
+                    if b.tapped:
+                        continue
+                    b_kills = b.power >= atk.toughness or (b.has("deathtouch") and b.power > 0)
+                    b_survives = b.toughness > atk.power and not atk.has("deathtouch")
+                    atk_kills = atk.power >= b.toughness or (atk.has("deathtouch") and atk.power > 0)
+                    if b_kills and b_survives and not atk_kills:
+                        return True
+                return False
+            sending = [a for a in sending if a in forced or not dies_for_free(a)]
         for p in forced:               # nunca dejar en casa a un atacante obligado
             if p not in sending:
                 sending.append(p)
