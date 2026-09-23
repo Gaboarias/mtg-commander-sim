@@ -748,7 +748,13 @@ class Game:
 
     def resolve_stack(self):
         """Vacia la pila en orden LIFO."""
+        guard = 0
         while self.stack:
+            guard += 1
+            if guard > 5000:            # cortafuegos anti-bucle (nunca en juego normal)
+                self.log("aviso: se cortó el vaciado de la pila (límite de seguridad)")
+                self.stack.clear()
+                break
             obj = self.stack.pop()
             if obj.controller.lost:
                 continue
@@ -1137,8 +1143,14 @@ class Game:
         oponente puede responder (instantaneos). Cuando todos pasan, resuelve
         el tope. Repite hasta vaciar la pila."""
         self._in_priority = True
+        guard = 0
         try:
             while self.stack:
+                guard += 1
+                if guard > 5000:        # cortafuegos anti-bucle (nunca en juego normal)
+                    self.log("aviso: se cortó la ventana de prioridad (límite de seguridad)")
+                    self.stack.clear()
+                    break
                 responded = False
                 # el controlador del tope puede copiar su PROPIO hechizo (Fork/Twincast)
                 top = self.stack[-1]

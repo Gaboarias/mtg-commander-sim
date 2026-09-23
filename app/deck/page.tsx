@@ -755,7 +755,18 @@ export default function DeckPage() {
 
   function replaceCard(oldName: string, newName: string) {
     if (!newName || oldName === newName) return;
-    const next = text.split(oldName).join(newName);
+    // reemplazo por LÍNEA y por nombre completo (no substring): así "Plain" no
+    // corrompe "Plains" ni parte otras cartas, y se conserva la cantidad.
+    const target = oldName.trim().toLowerCase();
+    const next = text.split("\n").map((raw) => {
+      const l = raw.trim();
+      if (!l) return raw;
+      if (/^(commander|comandante|deck|mainboard|sideboard|maybeboard)\b/i.test(l)) return raw;
+      const m = l.match(/^(\s*\d+\s*x?\s+)(.+?)\s*$/);
+      if (m && m[2].trim().toLowerCase() === target) return m[1] + newName;
+      if (!m && l.toLowerCase() === target) return newName;
+      return raw;
+    }).join("\n");
     setText(next);
     resolve(next);
   }
@@ -1393,15 +1404,22 @@ export default function DeckPage() {
 
       {resolved && resolved.missing.length > 0 && (
         <div className="card">
-          <h2><Icon name="warning" size={19} /> Cartas no encontradas ({resolved.missing.length})</h2>
-          <p className="muted">
-            Corregí el nombre (buscá y elegí la sugerencia correcta) o traela por
-            código de set + número de colección. Al elegir, se reemplaza en la lista
-            y se vuelve a revisar.
-          </p>
-          {resolved.missing.map((m) => (
-            <MissingFixer key={m} name={m} onPick={(n) => replaceCard(m, n)} />
-          ))}
+          {(() => {
+            const uniqMissing = [...new Set(resolved.missing)];
+            return (
+              <>
+                <h2><Icon name="warning" size={19} /> Cartas no encontradas ({uniqMissing.length})</h2>
+                <p className="muted">
+                  Corregí el nombre (buscá y elegí la sugerencia correcta) o traela por
+                  código de set + número de colección. Al elegir, se reemplaza en la lista
+                  (todas sus copias) y se vuelve a revisar.
+                </p>
+                {uniqMissing.map((m) => (
+                  <MissingFixer key={m} name={m} onPick={(n) => replaceCard(m, n)} />
+                ))}
+              </>
+            );
+          })()}
         </div>
       )}
 

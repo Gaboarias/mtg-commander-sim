@@ -1725,8 +1725,13 @@ def resolve(name: str, fetch=None) -> Card:
 _BASICS = {
     "plains": W, "island": U, "swamp": B, "mountain": R, "forest": G,
     "wastes": C,
+    # singulares / plurales / typos comunes ("Plain" -> Plains, "Mountains" -> Mountain)
+    "plain": W, "islands": U, "swamps": B, "mountains": R, "forests": G,
+    "waste": C, "snow-covered plains": W, "snow-covered island": U,
+    "snow-covered swamp": B, "snow-covered mountain": R, "snow-covered forest": G,
     "llanura": W, "isla": U, "pantano": B, "montana": R, "montaña": R,
-    "bosque": G, "yermo": C,
+    "bosque": G, "yermo": C, "llanuras": W, "islas": U, "pantanos": B,
+    "montanas": R, "montañas": R, "bosques": G,
 }
 
 
