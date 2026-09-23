@@ -1609,18 +1609,30 @@ def build_card_from_data(data: dict) -> Card:
         yours = "you control" in _otc
 
         def _etb_choose_type(game, ctrl, perm, _dp=dp, _dt=dt):
-            found, seen = [], set()
-            for zone in (ctrl.battlefield, ctrl.hand, ctrl.library):
+            # tipos de criatura del jugador, ORDENADOS por frecuencia (los que más
+            # tiene primero) y con más peso a lo que ya está en juego, para que su
+            # tribu real siempre aparezca entre las opciones. Antes se recortaba a
+            # 14 en orden de escaneo y una tribu podía quedar fuera (bug).
+            weight, first = {}, {}
+            zones = ((ctrl.battlefield, 3), (ctrl.hand, 2),
+                     (ctrl.command, 3), (ctrl.library, 1))
+            order = 0
+            for zone, w in zones:
                 for it in zone:
                     cd = getattr(it, "card", it)
-                    if cd.is_creature():
-                        for st in cd.subtypes:
-                            if st.lower() not in seen:
-                                seen.add(st.lower())
-                                found.append(st)
+                    if not cd.is_creature():
+                        continue
+                    for st in cd.subtypes:
+                        k = st.lower()
+                        weight[k] = weight.get(k, 0) + w
+                        if k not in first:
+                            first[k] = (st, order)
+                            order += 1
+            found = [first[k][0] for k in sorted(
+                weight, key=lambda k: (-weight[k], first[k][1]))]
             if not found:
                 found = ["Human", "Elf", "Goblin", "Zombie", "Soldier", "Wizard"]
-            found = found[:14]
+            found = found[:20]
 
             def _apply(idx, _t=found):
                 if idx is not None and 0 <= idx < len(_t):

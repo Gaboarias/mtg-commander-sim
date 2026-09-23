@@ -595,6 +595,41 @@ def test_choose_creature_type_anthem():
     assert other.power == 2                                   # no-elfo no cambia
 
 
+def test_choose_creature_type_offers_players_tribe():
+    # con MUCHOS tipos distintos en el mazo, la tribu real del jugador (Spirit)
+    # debe seguir apareciendo entre las opciones (antes se recortaba a 14 en orden
+    # de escaneo y podía quedar fuera) y elegirla debe dar el +1/+1.
+    import cardsdb, cards
+    from engine import Game, Player
+    a = cardsdb.build_card_from_data({
+        "name": "Spirit Banner", "type_line": "Artifact", "mana_cost": "{3}",
+        "oracle_text": "As this artifact enters, choose a creature type.\n"
+                       "Creatures you control of the chosen type get +1/+1."})
+    types = ["Human", "Elf", "Goblin", "Zombie", "Soldier", "Wizard", "Merfolk",
+             "Dragon", "Angel", "Knight", "Cleric", "Rogue", "Warrior", "Beast",
+             "Bird", "Cat"]
+    lib = [cards.creature(t, "1W", 1, 1, subtypes=(t,)) for t in types]
+    lib += [cards.creature(f"Ghost{i}", "1W", 1, 1, subtypes=("Spirit",))
+            for i in range(4)]
+    me = Player("yo", lib, cards.creature("Cmd", "2W", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1U", 1, 1) for _ in range(5)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.interactive_human = me
+    sp = g.move_to_battlefield(cards.creature("Spook", "1W", 2, 2,
+                                              subtypes=("Spirit",)), me)
+    p0 = sp.power
+    perm = g.move_to_battlefield(a, me)
+    opts = g.pending_choice["options"]
+    names = [o["name"] for o in opts]
+    assert "Spirit" in names                             # la tribu real se ofrece
+    idx = next(o["i"] for o in opts if o["name"] == "Spirit")
+    g.pending_choice["_apply"](idx)
+    g.pending_choice = None
+    assert getattr(perm, "chosen_type", None) == "Spirit"
+    assert sp.power == p0 + 1                             # el spirit recibe +1/+1
+
+
 def test_etb_destroy_nonbasic_land_and_ramp():
     import cardsdb, cards
     from engine import Game, Player
