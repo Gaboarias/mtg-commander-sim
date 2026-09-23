@@ -1536,6 +1536,141 @@ def _generic_amount_effect(oracle: str):
                                      "Elegí tu criatura a mejorar", cands, _do)
             return eff
 
+    # pump/debuff a una criatura objetivo (sobre todo para disparos ETB; los HECHIZOS
+    # ya los cubre _pump_spell_effect antes de esta capa).
+    mp = re.search(r"target creature (?:you control )?gets ([+-]\d+)/([+-]\d+)", t)
+    if mp:
+        dp, dt = int(mp.group(1)), int(mp.group(2))
+        debuff = dp < 0 or dt < 0
+
+        def eff(game, ctrl, *_a, _p=dp, _t=dt, _deb=debuff):
+            pool = (game.legal_creature_targets(ctrl) if _deb
+                    else list(ctrl.creatures()))
+            if not pool:
+                return
+            pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm) for pm in pool]
+
+            def _do(pm, _pp=_p, _tt=_t):
+                pm.temp_pt[0] += _pp
+                pm.temp_pt[1] += _tt
+                game.sba()
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí una criatura", cands, _do)
+        return eff
+
+    # girar una criatura objetivo (ETB u otro; el spec de hechizo lo cubre aparte)
+    if re.search(r"\btap target creature", t) and "untap" not in t:
+        def eff(game, ctrl, *_a):
+            pool = game.legal_creature_targets(ctrl)
+            if not pool:
+                return
+            pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+            cands = [(f"{pm.name} · {pm.controller.name}", pm) for pm in pool]
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí una criatura para girar", cands,
+                                 lambda pm: setattr(pm, "tapped", True))
+        return eff
+
+    # enderezar: "untap all creatures/lands/permanents you control" o "untap target …"
+    m = re.search(r"untap all (creatures|lands|permanents)", t)
+    if m:
+        kindw = m.group(1)
+
+        def eff(game, ctrl, *_a, _k=kindw):
+            for pm in ctrl.battlefield:
+                if (_k == "permanents" or (_k == "creatures" and pm.is_creature())
+                        or (_k == "lands" and pm.card.is_land())):
+                    pm.tapped = False
+            game.log(f"{ctrl.name} endereza sus {_k}")
+        return eff
+    if re.search(r"untap target (?:creature|permanent|land)", t):
+        def eff(game, ctrl, *_a):
+            tapped = [pm for pm in ctrl.battlefield if pm.tapped]
+            if tapped:
+                tapped.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+                tapped[0].tapped = False
+                game.log(f"{ctrl.name} endereza {tapped[0].name}")
+        return eff
+
+    # girar en masa: "tap all creatures (target player/opponent controls)" (Sleep, etc.)
+    if re.search(r"tap all (?:untapped )?creatures", t) and "untap" not in t:
+        rival_only = "control" in t and "you control" not in t
+        def eff(game, ctrl, *_a, _rival=rival_only):
+            pls = game.opponents(ctrl) if _rival else game.players
+            for pl in pls:
+                for pm in pl.creatures():
+                    pm.tapped = True
+            game.log(f"{ctrl.name} gira las criaturas "
+                     + ("rivales" if _rival else "en juego"))
+        return eff
+
+    # un JUGADOR objetivo pierde N de vida (drenaje dirigido)
+    m = re.search(r"target (?:player|opponent) loses (\w+) life", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, *_a, _n=n):
+            opps = game.opponents(ctrl)
+            if opps:
+                tgt = min(opps, key=lambda o: o.life)
+                tgt.life -= _n
+                game.log(f"{tgt.name} pierde {_n} de vida")
+        return eff
+
+    # edict: "each opponent sacrifices a creature" (variante de "target player")
+    if re.search(r"each opponent sacrifices? a creature", t):
+        def eff(game, ctrl, *_a):
+            for o in game.opponents(ctrl):
+                cr = o.creatures()
+                if cr:
+                    victim = min(cr, key=lambda x: (x.power, x.toughness))
+                    game.to_graveyard(victim, "sacrificio forzado")
+                    game.log(f"{o.name} sacrifica {victim.name}")
+        return eff
+
+    # evasión: "target creature can't be blocked this turn" -> keyword temporal
+    if re.search(r"target creature can'?t be blocked", t):
+        def eff(game, ctrl, *_a):
+            pool = list(ctrl.creatures())
+            if not pool:
+                return
+            pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm) for pm in pool]
+
+            def _do(pm):
+                pm.temp_keywords.add("unblockable")
+                game.log(f"{pm.name} no puede ser bloqueada este turno")
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí tu atacante", cands, _do)
+        return eff
+
+    # Fog: "prevent all combat damage (that would be dealt) this turn"
+    if re.search(r"prevent all combat damage", t):
+        def eff(game, ctrl, *_a):
+            game.fog_turn = True
+            game.log(f"{ctrl.name}: se previene todo el daño de combate este turno")
+        return eff
+
+    # descarte dirigido con revelado (Thoughtseize/Duress): el rival revela la mano y
+    # descarta su mejor no-tierra (o lo que pida el filtro básico).
+    if (re.search(r"target (?:opponent|player) reveals their hand", t)
+            and "discard" in t):
+        noncre = "noncreature" in t or "nonland" in t
+        def eff(game, ctrl, *_a, _noncre=noncre):
+            opps = game.opponents(ctrl)
+            if not opps:
+                return
+            o = max(opps, key=lambda x: len(x.hand))
+            if not o.hand:
+                return
+            pool = [c for c in o.hand if not c.is_land()
+                    and (not _noncre or "creature" not in c.types)] or o.hand
+            card = max(pool, key=lambda c: (c.cost.cmc if c.cost else 0))
+            o.hand.remove(card)
+            o.graveyard.append(card)
+            game.emit("to_graveyard", player=o, card=card)
+            game.log(f"{ctrl.name} hace descartar {card.name} a {o.name}")
+        return eff
+
     # explore: revelar el tope (tierra -> mano; si no, +1/+1 y decidir arriba/cementerio)
     if re.search(r"\bexplores?\b", t):
         return _explore_effect()

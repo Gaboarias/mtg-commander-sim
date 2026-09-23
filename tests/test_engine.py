@@ -662,7 +662,7 @@ def test_modal_keeps_unmodeled_mode_so_picker_shows():
     c = cardsdb.build_card_from_data({
         "name": "Charm", "type_line": "Instant", "mana_cost": "{1}{U}",
         "color_identity": ["U"],
-        "oracle_text": "Choose one —\n• Untap target creature.\n• Draw two cards."})
+        "oracle_text": "Choose one —\n• You may play an additional land this turn.\n• Draw two cards."})
     assert len(c.modes) == 2                       # no se descartó por el modo no modelado
     me = Player("yo", [cards.creature("X", "1U", 1, 1) for _ in range(10)],
                 cards.creature("Cmd", "2U", 3, 3, legendary=True))
@@ -3228,6 +3228,77 @@ def test_keyword_grant_until_end_of_turn():
 def test_bounce_nonland_permanent_parses():
     b = _spell("Return target nonland permanent to its owner's hand.")
     assert b.on_cast_resolve is not None and "removal" in b.tags
+
+
+def test_untap_and_mass_tap():
+    import cards
+    g, me, op = _duel()
+    a = g.move_to_battlefield(cards.creature("A", "1U", 1, 1), me)
+    a.tapped = True
+    _spell("Untap all creatures you control.").on_cast_resolve(g, me, [])
+    assert a.tapped is False
+    e = g.move_to_battlefield(cards.creature("E", "1U", 2, 2), op)
+    _spell("Tap all creatures target player controls.", "Sorcery").on_cast_resolve(g, me, [])
+    assert e.tapped is True
+
+
+def test_target_player_loses_life():
+    g, me, op = _duel()
+    l0 = op.life
+    _spell("Target player loses 3 life.", "Sorcery").on_cast_resolve(g, me, [])
+    assert op.life == l0 - 3
+
+
+def test_each_opponent_edict():
+    import cards
+    g, me, op = _duel()
+    s = g.move_to_battlefield(cards.creature("S", "1U", 1, 1), op)
+    _spell("Each opponent sacrifices a creature.", "Sorcery").on_cast_resolve(g, me, [])
+    assert s not in op.battlefield
+
+
+def test_cant_be_blocked_grants_unblockable():
+    import cards
+    g, me, op = _duel()
+    k = g.move_to_battlefield(cards.creature("K", "1U", 2, 2), me)
+    _spell("Target creature can't be blocked this turn.").on_cast_resolve(g, me, [])
+    assert k.has("unblockable")
+
+
+def test_fog_prevents_combat_damage():
+    import cards
+    g, me, op = _duel()
+    _spell("Prevent all combat damage this turn.").on_cast_resolve(g, me, [])
+    assert g.fog_turn is True
+    atk = g.move_to_battlefield(cards.creature("Atk", "2U", 4, 4), me)
+    atk.summoning_sick = False
+    atk.attacking = op
+    life0 = op.life
+    g._combat_damage([atk], first_strike=False)
+    assert op.life == life0                              # el daño se previno
+
+
+def test_targeted_hand_discard_reveal():
+    import cards
+    g, me, op = _duel()
+    op.hand = [cards.land("Swamp", ["B"], basic=True),
+               cards.creature("Big", "5B", 6, 6)]
+    _spell("Target opponent reveals their hand. You choose a card from it. "
+           "That player discards that card.", "Sorcery").on_cast_resolve(g, me, [])
+    assert [c.name for c in op.hand] == ["Swamp"]        # descartó la no-tierra cara
+
+
+def test_etb_pump_and_tap_triggers():
+    import cardsdb, cards
+    g, me, op = _duel()
+    tapper = cardsdb.build_card_from_data({
+        "name": "Tapper", "type_line": "Creature — Human", "mana_cost": "{2}",
+        "power": "2", "toughness": "2",
+        "oracle_text": "When this creature enters, tap target creature."})
+    assert tapper.on_etb is not None
+    v = g.move_to_battlefield(cards.creature("V", "1U", 2, 2), op)
+    g.move_to_battlefield(tapper, me)
+    assert v.tapped is True
 
 
 def test_look_at_top_ability_shows_a_view():

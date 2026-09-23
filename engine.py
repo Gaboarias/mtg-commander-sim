@@ -1647,6 +1647,8 @@ class Game:
     def _combat_damage(self, attackers: list, first_strike: bool):
         """first_strike=True: solo first_strike y double_strike.
         first_strike=False: el resto, mas la segunda mitad del double_strike."""
+        if getattr(self, "fog_turn", False):     # Fog: se previene el daño de combate
+            return
         def deals_now(perm):
             if first_strike:
                 return perm.has("first_strike") or perm.has("double_strike")
@@ -1699,6 +1701,7 @@ class Game:
             perm.activated_this_turn = False
         p.lands_played = 0
         p.draws_this_turn = 0
+        self.fog_turn = False        # "prevenir daño de combate este turno" se agota
 
         # UPKEEP
         self.emit("upkeep", player=p)
