@@ -3154,6 +3154,31 @@ def test_activated_cost_discard():
     assert len(me.hand) == 2                            # descartó 1, robó 2
 
 
+def test_look_at_top_ability_shows_a_view():
+    # "Look at the top N cards of your library" (mirar/reordenar, sin llevarte
+    # ninguna) antes no mostraba nada; ahora presenta una vista tipo scry con la
+    # carta a decidir para que el humano SÍ las vea.
+    import cardsdb, cards
+    from engine import Game, Player
+    seer = cardsdb.build_card_from_data({
+        "name": "Seer", "type_line": "Creature — Wizard", "mana_cost": "{U}",
+        "power": "1", "toughness": "1",
+        "oracle_text": "{T}: Look at the top four cards of your library, then put "
+                       "them back in any order."})
+    assert seer.activated_abilities, "la habilidad debe parsearse"
+    me = Player("me", [cards.creature(f"C{i}", "1U", 1, 1) for i in range(20)],
+                cards.creature("Cm", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.land("I", ["U"], basic=True) for _ in range(10)],
+                cards.creature("Om", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.interactive_human = me
+    pm = g.move_to_battlefield(seer, me)
+    assert g.activate_ability(pm, 0) is True
+    pc = g.pending_choice
+    assert pc is not None and pc["kind"] == "scry"       # hay una vista pendiente
+    assert pc.get("card")                                # muestra qué carta se decide
+
+
 def test_pump_spell_targeted_buff():
     # Giant Growth: "Target creature gets +3/+3 until end of turn" — antes el
     # hechizo no hacía nada (on_cast_resolve=None).

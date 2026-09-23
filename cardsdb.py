@@ -1515,6 +1515,14 @@ def _generic_amount_effect(oracle: str):
                                      kind="look_take",
                                      prompt="Elegí una carta para tu mano")
 
+    # respaldo: cualquier "look at the top N cards of your library" que no encajó en
+    # los casos de arriba (mirar y reordenar, "put them back in any order", exiliar
+    # una…). Lo tratamos como Scry N: el humano VE cada carta y decide arriba/fondo,
+    # en vez de que la habilidad no muestre nada.
+    ml = re.search(r"look at the top (\w+) cards? of your library", t)
+    if ml and (ln := _count_word(ml.group(1))):
+        return _scry_surveil_effect(ln, False)
+
     # "(you may) draw a card": si es OPCIONAL ('you may'), el humano decide; si es
     # obligatorio, roba directo.
     if re.search(r"(?:you may )?draw a card", t):
