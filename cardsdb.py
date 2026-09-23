@@ -155,6 +155,49 @@ def _targeted_spell(oracle: str):
     return None
 
 
+def _pump_spell_effect(oracle: str):
+    """Hechizo (instantáneo/conjuro) que da +X/+X o -X/-X — dirigido (Giant Growth,
+    Grasp of Darkness) o masivo (pump de equipo, Infest). Devuelve
+    (effect(game, ctrl, targets), target_spec, count) o None. La remoción por
+    destruir/exiliar la maneja _targeted_spell; esto cubre lo de solo modificar P/T."""
+    tl = re.sub(r"\s+", " ", (oracle or "")).lower()
+
+    # 1) dirigido a UNA criatura: "target creature gets +X/+Y ..."
+    m = re.search(r"target creature gets ([+-]\d+)/([+-]\d+)", tl)
+    if m:
+        dp, dt = int(m.group(1)), int(m.group(2))
+
+        def eff(game, ctrl, targets, _p=dp, _t=dt):
+            for tg in (targets or []):
+                if hasattr(tg, "temp_pt"):
+                    tg.temp_pt[0] += _p
+                    tg.temp_pt[1] += _t
+            game.sba()
+        # bono -> tu criatura; penalización -> criatura rival
+        return eff, ("opp_creature" if (dp < 0 or dt < 0) else "own_creature"), 1
+
+    # 2) masivo (sin objetivo): tus criaturas, todas, o las del rival
+    m = re.search(r"(creatures you control|all creatures|each creature|"
+                  r"creatures (?:your )?opponents? control) get ([+-]\d+)/([+-]\d+)", tl)
+    if m:
+        who, dp, dt = m.group(1), int(m.group(2)), int(m.group(3))
+
+        def eff(game, ctrl, targets, _who=who, _p=dp, _t=dt):
+            if _who == "creatures you control":
+                pool = list(ctrl.creatures())
+            elif _who.startswith("creatures"):        # rival(es)
+                pool = [pm for o in game.opponents(ctrl) for pm in o.creatures()]
+            else:                                      # all / each creature
+                pool = [pm for pl in game.players for pm in pl.creatures()]
+            for tg in pool:
+                tg.temp_pt[0] += _p
+                tg.temp_pt[1] += _t
+            game.sba()
+        return eff, None, 0
+
+    return None
+
+
 def _blink_effect():
     """Parpadeo: exilia el/los permanente(s) objetivo y los devuelve al campo
     (re-dispara ETB). Los tokens desaparecen."""
@@ -1731,6 +1774,19 @@ def build_card_from_data(data: dict) -> Card:
             card.target_spec = "opp_creature"
             card.target_count = max(1, count)
             card.tags = card.tags | {"removal"}
+
+    # pump / debuff de HECHIZO (+X/+X o -X/-X), dirigido o masivo: Giant Growth,
+    # Grasp of Darkness (-4/-4), pumps de equipo, Infest… La capa de remoción no
+    # los cubre (no destruyen: solo modifican P/T), así que se cablean aquí.
+    if {"instant", "sorcery"} & types and not card.modes and not card.on_cast_resolve:
+        ps = _pump_spell_effect(data.get("oracle_text", ""))
+        if ps is not None:
+            eff, spec, count = ps
+            card.on_cast_resolve = eff
+            if spec is not None:
+                card.target_spec = spec
+                card.target_count = max(1, count)
+            card.tags = card.tags | {"pump"}
 
     # efecto genérico CON MONTO leído del oracle (fichas, quema a cada rival,
     # ganancia de vida, mill). Cubre creaturas/hechizos comunes que la capa por

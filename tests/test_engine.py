@@ -3154,6 +3154,54 @@ def test_activated_cost_discard():
     assert len(me.hand) == 2                            # descartó 1, robó 2
 
 
+def test_pump_spell_targeted_buff():
+    # Giant Growth: "Target creature gets +3/+3 until end of turn" — antes el
+    # hechizo no hacía nada (on_cast_resolve=None).
+    import cardsdb, cards
+    g, me, op = _duel()
+    gg = cardsdb.build_card_from_data({
+        "name": "Giant Growth", "type_line": "Instant", "mana_cost": "{G}",
+        "oracle_text": "Target creature gets +3/+3 until end of turn."})
+    assert gg.on_cast_resolve is not None and gg.target_spec == "own_creature"
+    bear = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    gg.on_cast_resolve(g, me, [bear])
+    assert (bear.power, bear.toughness) == (5, 5)
+
+
+def test_debuff_spell_kills_creature():
+    # Grasp of Darkness: "-4/-4" es remoción por reducción de resistencia.
+    import cardsdb, cards
+    g, me, op = _duel()
+    grasp = cardsdb.build_card_from_data({
+        "name": "Grasp of Darkness", "type_line": "Instant", "mana_cost": "{B}{B}",
+        "oracle_text": "Target creature gets -4/-4 until end of turn."})
+    assert grasp.on_cast_resolve is not None and grasp.target_spec == "opp_creature"
+    v = g.move_to_battlefield(cards.creature("Victim", "1U", 2, 2), op)
+    grasp.on_cast_resolve(g, me, [v])
+    assert v not in op.battlefield                       # murió por SBA (0 de resist.)
+
+
+def test_mass_pump_and_mass_debuff_spells():
+    import cardsdb, cards
+    g, me, op = _duel()
+    pump = cardsdb.build_card_from_data({
+        "name": "Team Pump", "type_line": "Instant", "mana_cost": "{1}{G}",
+        "oracle_text": "Creatures you control get +2/+2 until end of turn."})
+    a = g.move_to_battlefield(cards.creature("A", "1G", 1, 1), me)
+    b = g.move_to_battlefield(cards.creature("B", "1G", 2, 2), me)
+    enemy = g.move_to_battlefield(cards.creature("E", "1U", 3, 3), op)
+    pump.on_cast_resolve(g, me, [])
+    assert a.power == 3 and b.power == 4 and enemy.power == 3   # solo las tuyas
+    # barrida por -X/-X
+    infest = cardsdb.build_card_from_data({
+        "name": "Infest", "type_line": "Sorcery", "mana_cost": "{1}{B}",
+        "oracle_text": "All creatures get -2/-2 until end of turn."})
+    x = g.move_to_battlefield(cards.creature("X", "1G", 2, 2), me)
+    y = g.move_to_battlefield(cards.creature("Y", "1U", 2, 2), op)
+    infest.on_cast_resolve(g, me, [])
+    assert x not in me.battlefield and y not in op.battlefield
+
+
 def test_loyalty_targeted_effect_resolves():
     # un planeswalker con "-3: Destroy target creature" ahora SÍ hace algo (antes
     # solo movía la lealtad). El objetivo se auto-elige (rival más amenazante).
