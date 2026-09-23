@@ -2835,6 +2835,55 @@ def test_populate_copies_best_creature_token():
     assert any(pm.name == "Bestia" for pm in toks[-1:])   # copia la mejor ficha
 
 
+def test_copy_spell_replays_chosen_mode_not_first():
+    # límite 3 resuelto: la copia reproduce el MISMO modo elegido, no el modo 0.
+    import cards
+    from engine import Game, StackObject
+    g, me, op = _duel()
+    hits = {0: 0, 1: 0}
+    modal = cards.creature("Dummy", "1U", 1, 1)  # solo contenedor de modos
+    modal.types = {"instant"}
+    modal.modes = (
+        {"label": "modo A", "effect": (lambda gg, c, tg: hits.__setitem__(0, hits[0] + 1))},
+        {"label": "modo B", "effect": (lambda gg, c, tg: hits.__setitem__(1, hits[1] + 1))},
+    )
+    obj = StackObject(me, lambda gg: None, source=modal, targets=[], label="spell:Dummy",
+                      chosen_modes=[1])                  # el original eligió el modo B
+    g.stack.append(obj)
+    g.copy_spell_on_stack(obj, controller=me)
+    while g.stack:
+        g.stack.pop().resolve(g)
+    assert hits[1] == 1 and hits[0] == 0                 # copió el modo B, no el A
+
+
+def test_bot_copies_own_beneficial_spell_with_fork():
+    # límite 1 resuelto: un bot con Twincast copia su propio hechizo bueno.
+    import cardsdb, cards, policy
+    from engine import Game, Player
+    burn = cardsdb.build_card_from_data({
+        "name": "Rayo", "type_line": "Instant", "mana_cost": "{R}",
+        "color_identity": ["R"], "oracle_text": "Rayo deals 3 damage to any target."})
+    fork = cardsdb.build_card_from_data({
+        "name": "Twincast", "type_line": "Instant", "mana_cost": "{U}{U}",
+        "color_identity": ["U"],
+        "oracle_text": "Copy target instant or sorcery spell."})
+    me = Player("me", [cards.land("Mtn", ["R"], basic=True) for _ in range(10)],
+                cards.creature("Cm", "2R", 3, 3, legendary=True),
+                policy=policy.Policy("intermedio"))
+    op = Player("op", [cards.land("Island", ["U"], basic=True) for _ in range(10)],
+                cards.creature("Om", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    # maná: 3 fuentes (paga el {R} del rayo y las {U}{U} del fork = colores mixtos ok
+    # porque las tierras dan cualquiera de su lista; usamos duales de prueba)
+    for _ in range(3):
+        g.move_to_battlefield(cards.land("Dual", [cards.R, cards.U]), me)
+    me.hand = [fork]                       # el fork queda en mano para responder
+    l0 = op.life
+    g.cast(me, burn, targets=[op])         # lanza el rayo; el bot debería copiarlo
+    assert op.life == l0 - 6               # 3 (copia) + 3 (original)
+    assert fork not in me.hand             # usó el Twincast
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

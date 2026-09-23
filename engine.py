@@ -427,12 +427,14 @@ class Player:
 # --------------------------------------------------------------------------- #
 
 class StackObject:
-    def __init__(self, controller, resolve, source=None, targets=None, label=""):
+    def __init__(self, controller, resolve, source=None, targets=None, label="",
+                 chosen_modes=None):
         self.controller = controller
         self.resolve = resolve          # (game) -> None
         self.source = source
         self.targets = targets or []
         self.label = label
+        self.chosen_modes = list(chosen_modes) if chosen_modes else None
 
 
 # --------------------------------------------------------------------------- #
@@ -1083,7 +1085,8 @@ class Game:
                 g.move_to_battlefield(card, player)
 
         self.stack.append(StackObject(player, _resolve, source=card,
-                                      targets=targets, label=f"spell:{card.name}"))
+                                      targets=targets, label=f"spell:{card.name}",
+                                      chosen_modes=chosen_modes))
         if self._in_priority:
             return True   # lanzado en respuesta: el bucle externo lo resolvera
         # ventana de reacción del humano: si un rival lanza algo que el humano
@@ -1114,6 +1117,14 @@ class Game:
         try:
             while self.stack:
                 responded = False
+                # el controlador del tope puede copiar su PROPIO hechizo (Fork/Twincast)
+                top = self.stack[-1]
+                ctrl = getattr(top, "controller", None)
+                if ctrl is not None and not ctrl.lost:
+                    pol = ctrl.policy
+                    if pol is not None and hasattr(pol, "respond_copy"):
+                        if pol.respond_copy(self, ctrl, top):
+                            continue
                 for pl in self._respond_order():
                     pol = pl.policy
                     if pol is not None and hasattr(pol, "respond"):
@@ -1189,14 +1200,18 @@ class Game:
             return
         ctrl = controller or obj.controller
         tgts = list(getattr(obj, "targets", None) or [])
+        picks = list(getattr(obj, "chosen_modes", None) or [])
 
-        def _resolve(g, _src=src, _ctrl=ctrl, _tgts=tgts):
+        def _resolve(g, _src=src, _ctrl=ctrl, _tgts=tgts, _picks=picks):
             g.note_ability(_src, "copia del hechizo se resuelve", controller=_ctrl)
             if getattr(_src, "modes", None):
-                m = _src.modes[0]
-                e = m.get("effect")
-                if e:
-                    e(g, _ctrl, _tgts)
+                # la copia reproduce los MISMOS modos que eligió el original
+                idxs = _picks if _picks else [0]
+                for mi in idxs:
+                    if 0 <= mi < len(_src.modes):
+                        e = _src.modes[mi].get("effect")
+                        if e:
+                            e(g, _ctrl, _tgts)
             elif _src.on_cast_resolve:
                 _src.on_cast_resolve(g, _ctrl, _tgts)
             else:

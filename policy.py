@@ -316,6 +316,33 @@ class Policy:
         game.cast(me, counter, targets=[top])
         return True
 
+    def respond_copy(self, game, me, top):
+        """Copiar el PROPIO hechizo del tope con un Fork/Twincast si vale la pena."""
+        if self.level == "novato":
+            return False
+        src = getattr(top, "source", None)
+        if src is None or not hasattr(src, "types"):
+            return False
+        # no copiar counters ni otras copias (evita bucles y jugadas inútiles)
+        if getattr(src, "target_spec", None) == "stack_spell" or (src.tags & {"counter"}):
+            return False
+        if not ({"instant", "sorcery"} & src.types):
+            return False
+        # solo hechizos "buenos" con efecto: remoción, dirigidos, motores, modales
+        worth = bool(src.tags & {"removal", "targeted", "engine", "modal"}) \
+            or (src.on_cast_resolve is not None and not (src.tags & {"wipe"}))
+        if not worth:
+            return False
+        copier = next((c for c in me.hand
+                       if getattr(c, "target_spec", None) == "stack_spell"
+                       and "counter" not in c.tags
+                       and getattr(c, "on_cast_resolve", None) is not None
+                       and me.can_pay(c.cost)), None)
+        if copier is None:
+            return False
+        game.cast(me, copier, targets=[top])
+        return True
+
     # -- mulligan --------------------------------------------------------- #
     def should_mulligan(self, hand, player=None):
         lands = sum(1 for c in hand if c.is_land())
