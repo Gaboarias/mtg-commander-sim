@@ -2819,6 +2819,29 @@ def test_strionic_copies_last_activated_ability():
     assert g.last_activated is not None and g.last_activated[0] is pm
 
 
+def test_strionic_copies_last_triggered_ability():
+    # límite 2 (mejora): Strionic ahora también copia una habilidad DISPARADA,
+    # no solo activadas. Aquí copiamos un disparo "al atacar".
+    import cardsdb, cards
+    g, me, op = _duel()
+    fires = {"n": 0}
+    trig = cards.creature("Atacante", "1R", 2, 2)
+    trig.triggers = {"attacks": (lambda game, perm, **kw: fires.__setitem__("n", fires["n"] + 1))}
+    g.move_to_battlefield(trig, me)
+    g.emit("attacks", player=me)          # encola el disparo
+    g.resolve_stack()                     # se resuelve: fires=1 y queda como last_ability
+    assert fires["n"] == 1
+    reson = cardsdb.build_card_from_data({
+        "name": "Strionic Resonator", "type_line": "Artifact",
+        "oracle_text": "{2}, {T}: Copy target activated or triggered ability."})
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Plains", ["W"], basic=True), me)
+    rp = g.move_to_battlefield(reson, me)
+    rp.summoning_sick = False
+    assert g.activate_ability(rp, 0) is True
+    assert fires["n"] == 2                # copió el disparo "al atacar"
+
+
 def test_populate_copies_best_creature_token():
     import cardsdb, cards
     g, me, op = _duel()

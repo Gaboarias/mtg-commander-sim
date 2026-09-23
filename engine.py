@@ -482,6 +482,9 @@ class Game:
         # última habilidad activada resuelta (para copiarla: Strionic Resonator):
         # (perm, ability_dict, targets)
         self.last_activated = None
+        # última habilidad COPIABLE (activada O disparada) para Strionic Resonator:
+        # {"source": card, "perm": perm, "label": str, "run": callable(game)}
+        self.last_ability = None
         for p in players:
             p.setup(self.rng)
         if mulligan:
@@ -713,6 +716,13 @@ class Game:
                 ))
                 self.note_ability(perm.card, self.EVENT_KIND.get(event, event),
                                   controller=pl)
+                # registrar esta disparada como la última habilidad COPIABLE
+                # (Strionic Resonator puede copiar "activated OR triggered").
+                self.last_ability = {
+                    "source": perm.card, "perm": perm,
+                    "label": self.EVENT_KIND.get(event, event),
+                    "run": (lambda g, _cb=cb, _perm=perm, _kw=inner: _cb(g, _perm, **_kw)),
+                }
             # Fase D: disparos MIENTRAS la carta está en el cementerio/exilio.
             for zone in (pl.graveyard, pl.exile):
                 for card in list(zone):
@@ -1187,7 +1197,13 @@ class Game:
         # (Strionic Resonator) la puedan duplicar. La propia habilidad de copia
         # NO se registra (si no, copiarse a sí misma sería el único efecto).
         if not ab.get("is_copy_ability"):
-            self.last_activated = (perm, ab, list(targets or []))
+            _t = list(targets or [])
+            self.last_activated = (perm, ab, _t)
+            if eff:
+                self.last_ability = {
+                    "source": perm.card, "perm": perm, "label": ab.get("label", ""),
+                    "run": (lambda g, _e=eff, _c=ctrl, _p=perm, _tg=_t: _e(g, _c, _p, _tg)),
+                }
         self.sba()
         return True
 
@@ -1223,22 +1239,18 @@ class Game:
         self.log(f"{ctrl.name} copia el hechizo {src.name}")
 
     def copy_last_ability(self, ctrl):
-        """Copia (vuelve a ejecutar) la última habilidad activada resuelta, sin
-        volver a pagar su coste. Aproximación de Strionic Resonator: como el motor
-        resuelve las habilidades al instante (no van a la pila), se copia la más
-        reciente registrada en `last_activated`."""
-        la = self.last_activated
-        if not la:
+        """Copia (vuelve a ejecutar) la última habilidad COPIABLE resuelta —
+        activada O disparada— sin volver a pagar su coste. Aproximación de Strionic
+        Resonator: como el motor resuelve las habilidades al instante y sin ventana
+        de prioridad, se copia la más reciente registrada en `last_ability`."""
+        la = self.last_ability
+        if not la or not la.get("run"):
             self.log(f"{ctrl.name}: no hay habilidad reciente para copiar")
             return
-        perm, ab, tgts = la
-        eff = ab.get("effect")
-        if not eff:
-            return
-        label = ab.get("label", "")
-        self.note_ability(perm.card, f"copia de «{label}»", controller=ctrl)
-        self.log(f"{ctrl.name} copia la habilidad «{label}» de {perm.name}")
-        eff(self, perm.controller, perm, list(tgts or []))
+        label = la.get("label", "")
+        self.note_ability(la.get("source"), f"copia de «{label}»", controller=ctrl)
+        self.log(f"{ctrl.name} copia la habilidad «{label}»")
+        la["run"](self)
         self.sba()
 
     def play_land(self, player: "Player", card: Card) -> bool:
