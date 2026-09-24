@@ -3288,6 +3288,53 @@ def test_targeted_hand_discard_reveal():
     assert [c.name for c in op.hand] == ["Swamp"]        # descartó la no-tierra cara
 
 
+def _removal_setup(opp_creature, life=40, lands=8):
+    import cardsdb, cards, policy
+    from engine import Game, Player
+    pol = policy.Policy("avanzado")
+    me = Player("me", [cards.creature("z", "1B", 1, 1) for _ in range(20)],
+                cards.creature("Cm", "2B", 3, 3, legendary=True), policy=pol)
+    op = Player("op", [cards.creature("O", "1U", 1, 1) for _ in range(10)],
+                cards.creature("Om", "2U", 1, 1, legendary=True), policy=policy.Policy("avanzado"))
+    g = Game([me, op], seed=1)
+    for _ in range(lands):
+        g.move_to_battlefield(cards.land("Swamp", ["B"], basic=True), me)
+    g.move_to_battlefield(opp_creature, op)
+    rem = cardsdb.build_card_from_data({
+        "name": "Doom Blade", "type_line": "Instant", "mana_cost": "{1}{B}",
+        "oracle_text": "Destroy target creature."})
+    me.hand = [rem]
+    me.life = life
+    return pol, g, me, rem
+
+
+def test_bot_holds_removal_for_real_threats():
+    import cards
+    pol, g, me, rem = _removal_setup(cards.creature("Mouse", "U", 1, 1))
+    pol.main_phase(g, me, second=True)
+    assert rem in me.hand                          # sano + amenaza chica -> guarda
+    pol, g, me, rem = _removal_setup(cards.creature("Dragon", "4U", 6, 6, kw=("flying",)))
+    pol.main_phase(g, me, second=True)
+    assert rem not in me.hand                       # amenaza grande -> lo usa
+    pol, g, me, rem = _removal_setup(cards.creature("Mouse", "U", 1, 1), life=8)
+    pol.main_phase(g, me, second=True)
+    assert rem not in me.hand                       # bajo presión -> lo usa
+
+
+def test_board_eval_reflects_advantage():
+    import cards, policy
+    from engine import Game, Player
+    pol = policy.Policy("avanzado")
+    me = Player("me", [cards.creature("z", "1G", 1, 1) for _ in range(10)],
+                cards.creature("Cm", "2G", 3, 3, legendary=True), policy=pol)
+    op = Player("op", [cards.creature("O", "1B", 1, 1) for _ in range(10)],
+                cards.creature("Om", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    base = pol.board_eval(g, me)
+    g.move_to_battlefield(cards.creature("Big", "3G", 5, 5), me)
+    assert pol.board_eval(g, me) > base
+
+
 def test_bot_uses_loot_but_respects_gates():
     import cardsdb, cards, policy
     from engine import Game, Player

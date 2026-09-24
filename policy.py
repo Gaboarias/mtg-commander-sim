@@ -61,6 +61,33 @@ class Policy:
             s += max(0, (getattr(card, "toughness", 0) - 1)) // 3  # cuerpos resistentes
         return s
 
+    # -- valuación de estado --------------------------------------------- #
+    def board_eval(self, game, me) -> int:
+        """Puntúa el estado desde la óptica de `me`: tu tablero + ventaja de cartas
+        + vida, menos la mayor amenaza rival. Sirve para decidir con criterio de
+        tablero, no solo por carta suelta."""
+        def board_power(p):
+            v = 0
+            for pm in p.creatures():
+                v += pm.power + pm.toughness
+                for k in ("flying", "trample", "deathtouch", "double_strike",
+                          "menace", "lifelink", "unblockable"):
+                    if pm.has(k):
+                        v += 2
+            return v
+        mine = board_power(me)
+        opps = game.opponents(me)
+        worst = max((board_power(o) for o in opps), default=0)
+        return (mine - worst) + me.life // 3 + len(me.hand) * 2
+
+    def _under_pressure(self, game, me) -> bool:
+        """¿Estoy bajo presión? (poca vida o un tablero rival amenazante)."""
+        if me.life <= 12:
+            return True
+        thr = max((sum(c.power for c in o.creatures())
+                   for o in game.opponents(me)), default=0)
+        return thr >= me.life * 0.5
+
     # -- fase principal --------------------------------------------------- #
     def main_phase(self, game, me, second: bool = False):
         adv = self.level == "avanzado"
@@ -77,10 +104,15 @@ class Policy:
         # 3) comandante
         self._maybe_cast_commander(game, me)
 
-        # 4) hechizos por prioridad
+        # 4) hechizos por prioridad. Secuenciación: primero por valor, y a igual
+        # valor el más barato (entra más por turno: mejor uso del maná).
         reserve = 0 if nov else self._reserve_mana(game, me)
+        spare_removal = sum(1 for c in me.hand
+                            if "removal" in c.tags and c.cost is not None)
+        pressured = False if nov else self._under_pressure(game, me)
         castables = self._castable_spells(game, me)
-        castables.sort(key=lambda c: self.score(game, me, c), reverse=True)
+        castables.sort(key=lambda c: (self.score(game, me, c),
+                                      -(c.cost.cmc if c.cost else 0)), reverse=True)
         if nov:
             # el novato no siempre juega la mejor secuencia
             game.rng.shuffle(castables)
@@ -104,6 +136,14 @@ class Policy:
             else:
                 targets = self.choose_targets(game, me, card)
                 if card.target_spec and not targets:
+                    continue
+                # contención de remoción: no gastar un removal dirigido en una
+                # amenaza chica si no estoy presionado y no me sobra removal —
+                # se guarda para un objetivo que valga la pena.
+                if (not nov and "removal" in card.tags
+                        and card.target_spec == "opp_creature" and targets
+                        and not pressured and spare_removal <= 1
+                        and self._threat_value(targets[0]) <= 3):
                     continue
             cmc = card.cost.cmc if card.cost else 0
             if reserve and me.available_mana() - cmc < reserve:
