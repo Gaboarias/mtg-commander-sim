@@ -656,6 +656,17 @@ def _event_trigger_effect(oracle: str):
                 _e(game, perm.controller)
         out[ev] = cb
 
+    # "whenever another creature (you control) dies, put N +1/+1 counters on this
+    # creature" (aristócratas que crecen). El efecto va al permanente que observa.
+    if "death" not in out:
+        md = re.search(r"whenever (?:a|another) (?:nontoken )?creature (?:you control )?"
+                       r"dies,?\s*put (\w+) \+1/\+1 counters? on (?:this creature|it)",
+                       t, re.I)
+        if md and (dn := _count_word(md.group(1))):
+            def cbd(game, perm, _n=dn, *_a, **_kw):
+                game.add_counters(perm, "+1/+1", _n)
+            out["death"] = cbd
+
     # "cuando entra una criatura (que controlás) [con CMV N o menos], <efecto>"
     me = re.search(r"whenever (?:one or more|a|an|another) (?:nontoken )?creatures?"
                    r"(?: you control)?(?: with mana value (\d+) or less)?"
@@ -705,6 +716,26 @@ def _recurring_trigger_effects(oracle: str):
             _e(game, perm.controller)
         out[ev] = cb
     return out
+
+
+def _death_self_effect(oracle: str, name: str = ""):
+    """'When(ever) this creature/<nombre> dies, <efecto>' -> callback on_death
+    (game, ctrl, perm). Usa la capa genérica. Antes esto se cableaba mal como ETB."""
+    t = re.sub(r"\s+", " ", (oracle or "")).strip()
+    nm = re.escape(name) if name else None
+    who = r"(?:this creature|this permanent|this artifact|it" + (f"|{nm}" if nm else "") + r")"
+    m = re.search(r"when(?:ever)? " + who + r" dies,?\s*(.{0,160})", t, re.I)
+    if not m:
+        return None
+    body = m.group(1)
+    # "put N +1/+1 counters on <the creature/target>": no aplica al morir; ignoramos
+    eff = _generic_amount_effect(body)
+    if eff is None:
+        return None
+
+    def on_death(game, ctrl, perm, _e=eff):
+        _e(game, ctrl)
+    return on_death
 
 
 def _static_anthem(oracle: str):
@@ -1879,6 +1910,23 @@ def _generic_amount_effect(oracle: str):
                                  "Elegí tu atacante", cands, _do)
         return eff
 
+    # rebote masivo: "return all creatures to their owners' hands" (Evacuation…)
+    if re.search(r"return all creatures? to (?:their )?owners'? hands?", t):
+        def eff(game, ctrl, *_a):
+            for pl in game.players:
+                for pm in list(pl.battlefield):
+                    if not pm.is_creature():
+                        continue
+                    pl.battlefield.remove(pm)
+                    if pm.is_token:
+                        continue
+                    if pm.card is pl.commander_card:
+                        pl.command.append(pm.card)
+                    else:
+                        pl.hand.append(pm.card)
+            game.log(f"{ctrl.name}: todas las criaturas vuelven a la mano")
+        return eff
+
     # Fog: "prevent all combat damage (that would be dealt) this turn"
     if re.search(r"prevent all combat damage", t):
         def eff(game, ctrl, *_a):
@@ -2407,6 +2455,13 @@ def build_card_from_data(data: dict) -> Card:
             card.anthem_keywords = set(akw)
             card.anthem_others = "other creatures" in (
                 data.get("oracle_text", "") or "").lower()
+
+    # disparo de MUERTE propia ("when this creature dies, <efecto>"). Antes el
+    # efecto se cableaba mal como ETB (se disparaba al entrar en vez de al morir).
+    if card.on_death is None:
+        od = _death_self_effect(data.get("oracle_text", ""), name)
+        if od is not None:
+            card.on_death = od
 
     # disparos recurrentes de mantenimiento / final de turno ("at the beginning of
     # your upkeep/end step, <efecto>"). Antes se cableaba mal como ETB de una vez.

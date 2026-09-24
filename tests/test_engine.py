@@ -3288,6 +3288,48 @@ def test_targeted_hand_discard_reveal():
     assert [c.name for c in op.hand] == ["Swamp"]        # descartó la no-tierra cara
 
 
+def test_self_death_trigger_creates_token_not_on_etb():
+    import cardsdb
+    g, me, op = _duel()
+    c = cardsdb.build_card_from_data({
+        "name": "Thing", "type_line": "Creature — Beast", "mana_cost": "{2}",
+        "power": "2", "toughness": "2",
+        "oracle_text": "When this creature dies, create a 1/1 white Spirit creature token."})
+    assert c.on_death is not None and c.on_etb is None
+    pm = g.move_to_battlefield(c, me)
+    before = len(me.battlefield)
+    g.to_graveyard(pm, "test")
+    assert any(p.is_token for p in me.battlefield)       # token creado al morir
+    assert len(me.battlefield) == before                 # murió 1, entró 1 (token)
+
+
+def test_aristocrat_counter_on_death():
+    import cardsdb, cards
+    g, me, op = _duel()
+    ar = cardsdb.build_card_from_data({
+        "name": "Arist", "type_line": "Creature — Zombie", "mana_cost": "{2}",
+        "power": "2", "toughness": "2",
+        "oracle_text": "Whenever another creature you control dies, put a +1/+1 "
+                       "counter on this creature."})
+    assert "death" in ar.triggers
+    watcher = g.move_to_battlefield(ar, me)
+    victim = g.move_to_battlefield(cards.creature("V", "1G", 1, 1), me)
+    p0 = watcher.power
+    g.to_graveyard(victim, "test")
+    g.resolve_stack()
+    assert watcher.power == p0 + 1
+
+
+def test_mass_bounce_returns_creatures_to_hand():
+    import cards
+    g, me, op = _duel()
+    a = g.move_to_battlefield(cards.creature("Mine", "1G", 2, 2), me)
+    b = g.move_to_battlefield(cards.creature("Foe", "1U", 2, 2), op)
+    _spell("Return all creatures to their owners' hands.", "Instant").on_cast_resolve(g, me, [])
+    assert not me.creatures() and not op.creatures()
+    assert any(c.name == "Mine" for c in me.hand) and any(c.name == "Foe" for c in op.hand)
+
+
 def test_two_target_fight():
     import cards
     g, me, op = _duel()
