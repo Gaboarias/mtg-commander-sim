@@ -30,29 +30,90 @@ _FILLER_ORACLE = {
                         "Kithkin Soldier creature tokens.",
     "Leonin Warleader": "Whenever Leonin Warleader attacks, create two 1/1 white "
                         "Cat creature tokens.",
+    "Precinct Captain": "Whenever Precinct Captain deals combat damage to a player, "
+                        "create a 1/1 white Soldier creature token.",
+    "Thraben Inspector": "When Thraben Inspector enters, create a Clue token.",
+    "Ranger of Eos": "When Ranger of Eos enters, search your library for a creature "
+                     "card, reveal it, put it into your hand, then shuffle.",
+    "Mentor of the Meek": "Whenever another creature you control enters, draw a card.",
+    "Palace Jailer": "When Palace Jailer enters, exile target creature an opponent "
+                     "controls.",
+    "Banisher Priest": "When Banisher Priest enters, exile target creature.",
+    "Fiend Hunter": "When Fiend Hunter enters, exile target creature.",
     # --- azul ---
     "Mulldrifter": "When Mulldrifter enters, draw two cards.",
     "Cloudkin Seer": "When Cloudkin Seer enters, draw a card.",
     "Silvergill Adept": "When Silvergill Adept enters, draw a card.",
     "Aven Fisher": "When Aven Fisher dies, draw a card.",
+    "Man-o'-War": "When Man-o'-War enters, return target creature to its owner's hand.",
+    "Riftwing Cloudskate": "When Riftwing Cloudskate enters, return target creature "
+                           "to its owner's hand.",
+    "Pestermite": "When Pestermite enters, tap target creature.",
+    "Spire Owl": "When Spire Owl enters, scry 2.",
+    "Looter il-Kor": "Whenever Looter il-Kor deals combat damage to a player, draw "
+                     "a card, then discard a card.",
+    "Tandem Lookout": "Whenever Tandem Lookout deals combat damage to a player, "
+                      "draw a card.",
     # --- negro ---
     "Phyrexian Rager": "When Phyrexian Rager enters, draw a card.",
     "Gravedigger": "When Gravedigger enters, return target creature card from your "
                    "graveyard to your hand.",
+    "Cave Scavenger": "When Cave Scavenger enters, return target creature card from "
+                      "your graveyard to your hand.",
     "Nekrataal": "When Nekrataal enters, destroy target creature.",
     "Shriekmaw": "When Shriekmaw enters, destroy target creature.",
     "Bone Shredder": "When Bone Shredder enters, destroy target creature.",
+    "Big Game Hunter": "When Big Game Hunter enters, destroy target creature.",
     "Bloodgift Demon": "At the beginning of your upkeep, you draw a card and you "
                        "lose 1 life.",
     "Plaguecrafter": "When Plaguecrafter enters, each opponent sacrifices a creature.",
+    "Gatekeeper of Malakir": "When Gatekeeper of Malakir enters, each opponent "
+                             "sacrifices a creature.",
     "Reassembling Skeleton": "{1}{B}: Return Reassembling Skeleton from your "
                              "graveyard to the battlefield.",
+    "Dread Wanderer": "{1}{B}: Return Dread Wanderer from your graveyard to the "
+                      "battlefield.",
     "Corpse Augur": "When Corpse Augur dies, draw a card.",
+    "Doomed Dissenter": "When Doomed Dissenter dies, create a 2/2 black Zombie "
+                        "creature token.",
+    "Grim Haruspex": "Whenever another nontoken creature you control dies, draw a card.",
+    "Vampire Sovereign": "When Vampire Sovereign enters, each opponent loses 3 life "
+                         "and you gain 3 life.",
+    "Sengir Autocrat": "When Sengir Autocrat enters, create three 0/1 black Serf "
+                       "creature tokens.",
+    "Ravenous Rats": "When Ravenous Rats enters, target opponent discards a card.",
+    "Chittering Rats": "When Chittering Rats enters, target opponent discards a card.",
+    "Cackling Fiend": "When Cackling Fiend enters, each opponent discards a card.",
+    "Disciple of Bolas": "When Disciple of Bolas enters, you draw two cards and you "
+                         "gain 2 life.",
+    "Bloodghast": "Landfall — Whenever a land enters the battlefield under your "
+                  "control, if Bloodghast is in your graveyard, return it to the "
+                  "battlefield.",
+    "Bloodhusk Ritualist": "When Bloodhusk Ritualist enters, target opponent "
+                           "discards a card.",
+    "Bala Ged Scorpion": "When Bala Ged Scorpion enters, destroy target creature.",
+    "Skinrender": "When Skinrender enters, destroy target creature.",
+    "Liliana's Reaver": "Whenever Liliana's Reaver deals combat damage to a player, "
+                        "create a 2/2 black Zombie creature token.",
     "Nantuko Husk": "Sacrifice a creature: Nantuko Husk gets +2/+2 until end of turn.",
     # --- rojo ---
     "Pia Nalaar": "When Pia Nalaar enters, create a 1/1 colorless Thopter "
                   "artifact creature token with flying.",
     "Zealous Conscripts": "When Zealous Conscripts enters, untap target permanent.",
+    "Fanatic of Mogis": "When Fanatic of Mogis enters, it deals 3 damage to each "
+                        "opponent.",
+    "Ember Hauler": "{2}, Sacrifice Ember Hauler: Ember Hauler deals 2 damage to "
+                    "any target.",
+    "Torch Fiend": "{1}{R}, Sacrifice Torch Fiend: Destroy target artifact.",
+    "Young Pyromancer": "Whenever you cast an instant or sorcery spell, create a "
+                        "1/1 red Elemental creature token.",
+    "Viashino Pyromancer": "When Viashino Pyromancer enters, it deals 2 damage to "
+                           "any target.",
+    "Goblin Chainwhirler": "When Goblin Chainwhirler enters, it deals 1 damage to "
+                           "each opponent.",
+    "Goblin Rabblemaster": "Whenever Goblin Rabblemaster attacks, create a 1/1 red "
+                           "Goblin creature token.",
+    "Hellspark Elemental": "Unearth {R}",
     # --- verde ---
     "Elvish Visionary": "When Elvish Visionary enters, draw a card.",
     "Sakura-Tribe Elder": "Sacrifice Sakura-Tribe Elder: Search your library for a "
@@ -60,9 +121,16 @@ _FILLER_ORACLE = {
                           "then shuffle.",
     "Wood Elves": "When Wood Elves enters, search your library for a Forest card, "
                   "put it onto the battlefield, then shuffle.",
+    "Yavimaya Elder": "When Yavimaya Elder dies, draw a card.",
     "Eternal Witness": "When Eternal Witness enters, return target creature card "
                        "from your graveyard to your hand.",
     "Beast Whisperer": "Whenever you cast a creature spell, draw a card.",
+    "Acidic Slime": "When Acidic Slime enters, destroy target nonbasic land.",
+    "Reclamation Sage": "When Reclamation Sage enters, destroy target nonbasic land.",
+    "Tireless Tracker": "Whenever a land enters the battlefield under your control, "
+                        "create a Clue token.",
+    "Vinelasher Kudzu": "Whenever a land enters the battlefield under your control, "
+                        "put a +1/+1 counter on Vinelasher Kudzu.",
 }
 
 

@@ -1979,6 +1979,27 @@ def _generic_amount_effect(oracle: str):
                                  "Elegí una criatura", cands, _do)
         return eff
 
+    # rebote a la mano de una criatura objetivo (sobre todo ETB tipo Man-o'-War;
+    # el rebote de HECHIZO lo cubre _targeted_spell antes de esta capa).
+    if re.search(r"return target creature to (?:its|their) owner'?s? hand", t):
+        def eff(game, ctrl, *_a):
+            pool = game.legal_creature_targets(ctrl)
+            if not pool:
+                return
+            pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+            cands = [(f"{pm.name} · {pm.controller.name}", pm) for pm in pool]
+
+            def _do(pm):
+                owner = pm.controller
+                if pm in owner.battlefield:
+                    owner.battlefield.remove(pm)
+                    if not pm.is_token:
+                        owner.hand.append(pm.card)
+                    game.log(f"{ctrl.name} devuelve {pm.name} a la mano")
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí una criatura para rebotar", cands, _do)
+        return eff
+
     # girar una criatura objetivo (ETB u otro; el spec de hechizo lo cubre aparte)
     if re.search(r"\btap target creature", t) and "untap" not in t:
         def eff(game, ctrl, *_a):
