@@ -3288,6 +3288,50 @@ def test_targeted_hand_discard_reveal():
     assert [c.name for c in op.hand] == ["Swamp"]        # descartó la no-tierra cara
 
 
+def test_attack_trigger_self_pump():
+    import cardsdb, cards
+    g, me, op = _duel()
+    a = cardsdb.build_card_from_data({
+        "name": "Rager", "type_line": "Creature — Beast", "mana_cost": "{2}",
+        "power": "2", "toughness": "2",
+        "oracle_text": "Whenever this creature attacks, it gets +2/+0 until end of turn."})
+    assert "attacks" in a.triggers
+    pm = g.move_to_battlefield(a, me)
+    pm.card.triggers["attacks"](g, pm)
+    assert pm.power == 4 and pm.toughness == 2
+
+
+def test_set_and_double_life():
+    import cardsdb
+    g, me, op = _duel()
+    cardsdb.build_card_from_data({
+        "name": "S", "type_line": "Sorcery", "mana_cost": "{2}",
+        "oracle_text": "Your life total becomes 20."}).on_cast_resolve(g, me, [])
+    assert me.life == 20
+    me.life = 13
+    cardsdb.build_card_from_data({
+        "name": "D", "type_line": "Sorcery", "mana_cost": "{2}",
+        "oracle_text": "Double your life total."}).on_cast_resolve(g, me, [])
+    assert me.life == 26
+
+
+def test_double_and_remove_counters():
+    import cardsdb, cards
+    g, me, op = _duel()
+    c = g.move_to_battlefield(cards.creature("K", "1G", 2, 2), me)
+    g.add_counters(c, "+1/+1", 2)
+    cardsdb.build_card_from_data({
+        "name": "Dbl", "type_line": "Sorcery", "mana_cost": "{4}{G}",
+        "oracle_text": "Double the number of +1/+1 counters on each creature you control."}).on_cast_resolve(g, me, [])
+    assert c.counters.get("+1/+1") == 4
+    v = g.move_to_battlefield(cards.creature("V", "1U", 2, 2), op)
+    g.add_counters(v, "+1/+1", 3)
+    cardsdb.build_card_from_data({
+        "name": "Rm", "type_line": "Instant", "mana_cost": "{1}",
+        "oracle_text": "Remove all counters from target permanent."}).on_cast_resolve(g, me, [])
+    assert not v.counters
+
+
 def test_sacrifice_altar_adds_mana():
     import cardsdb, cards
     g, me, op = _duel()

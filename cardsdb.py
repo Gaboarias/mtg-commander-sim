@@ -664,7 +664,18 @@ def _attack_trigger_effect(oracle: str):
     m = re.search(r"whenever [^.]{0,50}? attacks,?\s*(.{0,180})", t, re.I)
     if not m:
         return None
-    eff, _spec, _count = _fragment_effect(m.group(1))
+    body = m.group(1)
+    # auto-pump al atacar: "it/this creature gets +X/+Y until end of turn"
+    mp = re.search(r"(?:it|this creature) gets ([+-]\d+)/([+-]\d+)", body, re.I)
+    if mp:
+        dp, dt = int(mp.group(1)), int(mp.group(2))
+
+        def trig_pump(game, perm, _p=dp, _t=dt, **_kw):
+            perm.temp_pt[0] += _p
+            perm.temp_pt[1] += _t
+            game.sba()
+        return trig_pump
+    eff, _spec, _count = _fragment_effect(body)
     if eff is None:
         return None
 
@@ -1720,10 +1731,68 @@ def _generic_amount_effect(oracle: str):
                 game.log(f"{ctrl.name}: {amt} de daño a {tgt.name}")
         return eff
 
+    # fijar / duplicar el total de vida
+    m = re.search(r"your life total becomes (\d+)", t)
+    if m:
+        def eff(game, ctrl, *_a, _v=int(m.group(1))):
+            ctrl.life = _v
+            game.log(f"{ctrl.name}: su vida pasa a {_v}")
+        return eff
+    if re.search(r"double your life total", t):
+        def eff(game, ctrl, *_a):
+            ctrl.life *= 2
+            game.log(f"{ctrl.name} duplica su vida ({ctrl.life})")
+        return eff
+
     m = re.search(r"(?:you )?gain (\w+) life", t)
     if m and (n := _count_word(m.group(1))):
         def eff(game, ctrl, *_a, _n=n):
             ctrl.life += _n
+        return eff
+
+    # duplicar contadores +1/+1 (en cada criatura tuya, o en una objetivo)
+    if re.search(r"double the number of \+1/\+1 counters on each creature you control", t):
+        def eff(game, ctrl, *_a):
+            for pm in ctrl.creatures():
+                have = pm.counters.get("+1/+1", 0)
+                if have:
+                    game.add_counters(pm, "+1/+1", have)
+        return eff
+    if re.search(r"double the number of (?:\+1/\+1 )?counters on target", t):
+        def eff(game, ctrl, *_a):
+            pool = list(ctrl.creatures())
+            if not pool:
+                return
+            pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm) for pm in pool]
+
+            def _do(pm):
+                for k, v in list(pm.counters.items()):
+                    if v > 0:
+                        pm.counters[k] = v * 2
+                game.sba()
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí una criatura (duplicar contadores)", cands, _do)
+        return eff
+
+    # quitar todos los contadores de una permanente objetivo
+    if re.search(r"remove all counters from target", t):
+        def eff(game, ctrl, *_a):
+            allp = [pm for pl in game.players for pm in pl.battlefield
+                    if any(v > 0 for v in pm.counters.values())]
+            if not allp:
+                return
+            # el bot (auto) apunta a la rival con más contadores (uso como remoción)
+            allp.sort(key=lambda pm: (pm.controller is not ctrl,
+                                      sum(pm.counters.values())), reverse=True)
+            cands = [(f"{pm.name} · {pm.controller.name}", pm) for pm in allp]
+
+            def _do(pm):
+                pm.counters.clear()
+                game.sba()
+                game.log(f"{ctrl.name} quita todos los contadores de {pm.name}")
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí una permanente (quitar contadores)", cands, _do)
         return eff
 
     # quema a UNA criatura objetivo: "deals N damage to target creature" (Flame Slash,
