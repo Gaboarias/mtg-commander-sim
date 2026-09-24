@@ -3288,6 +3288,43 @@ def test_targeted_hand_discard_reveal():
     assert [c.name for c in op.hand] == ["Swamp"]        # descartó la no-tierra cara
 
 
+def test_bot_uses_loot_but_respects_gates():
+    import cardsdb, cards, policy
+    from engine import Game, Player
+    pol = policy.Policy("avanzado")
+    me = Player("me", [cards.creature("z", "1U", 1, 1) for _ in range(20)],
+                cards.creature("Cm", "2U", 3, 3, legendary=True), policy=pol)
+    op = Player("op", [cards.creature("O", "1B", 1, 1) for _ in range(10)],
+                cards.creature("Om", "2B", 1, 1, legendary=True), policy=policy.Policy("avanzado"))
+    g = Game([me, op], seed=1)
+    loot = cardsdb.build_card_from_data({
+        "name": "Looter", "type_line": "Creature — Wizard", "mana_cost": "{1}{U}",
+        "power": "1", "toughness": "1",
+        "oracle_text": "{T}, Discard a card: Draw two cards."})
+    pm = g.move_to_battlefield(loot, me)
+    pm.summoning_sick = False
+    me.library += [cards.creature("a", "1U", 1, 1) for _ in range(5)]
+    # mano de sobra -> el bot lootea (descarta 1, roba 2 => +1)
+    me.hand = [cards.creature("h", "1U", 1, 1) for _ in range(5)]
+    h0 = len(me.hand)
+    pol._activate_perm_abilities(g, me, second=True)
+    assert len(me.hand) == h0 + 1
+
+    # mano corta -> NO lootea (respeta el gate de descarte)
+    g2 = Game([me, op], seed=1)
+    loot2 = cardsdb.build_card_from_data({
+        "name": "Looter2", "type_line": "Creature — Wizard", "mana_cost": "{1}{U}",
+        "power": "1", "toughness": "1",
+        "oracle_text": "{T}, Discard a card: Draw two cards."})
+    me.battlefield = []
+    pm2 = g2.move_to_battlefield(loot2, me)
+    pm2.summoning_sick = False
+    me.hand = [cards.creature("h", "1U", 1, 1) for _ in range(2)]
+    h1 = len(me.hand)
+    pol._activate_perm_abilities(g2, me, second=True)
+    assert len(me.hand) == h1                     # mano < 4: no descarta
+
+
 def test_flashback_casts_from_graveyard_then_exiles():
     import cardsdb, cards
     g, me, op = _duel()

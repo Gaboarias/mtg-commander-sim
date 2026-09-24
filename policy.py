@@ -38,6 +38,16 @@ class Policy:
             mine = len(me.creatures())
             if any(len(o.creatures()) >= 3 and len(o.creatures()) > mine for o in opps):
                 s += 6
+        # anthem: cuanto más criaturas tengas, más vale el bono estático
+        if "anthem" in tags:
+            s += 2 + len(me.creatures())
+        # cascade: valor gratis extra al lanzarlo
+        if "cascade" in tags:
+            s += 3
+        # relanzar desde el cementerio: bueno con cementerio cargado
+        if "gy_recast" in tags:
+            if sum(1 for c in me.graveyard if not c.is_land()) >= 2:
+                s += 5
         if "creature" in tags:
             s += max(1, card.power)
             # las palabras clave suben el valor real de la criatura (evasión,
@@ -164,11 +174,9 @@ class Policy:
                     continue
                 if not me.can_pay(ab.get("cost")):
                     continue
-                # el bot no paga costes adicionales agresivos a ciegas (sacrificar
-                # OTRA permanente, pagar vida o descartar): evita autolesionarse y
-                # mantiene el determinismo. Los sacrificios de SÍ MISMA (fetchlands)
-                # sí se permiten.
-                if ab.get("sacrifice_other") or ab.get("pay_life") or ab.get("discard"):
+                # costes adicionales agresivos: se pagan solo cuando conviene, para
+                # que el bot USE altares/aristócratas/loot sin autolesionarse.
+                if not self._agg_cost_ok(me, perm, ab):
                     continue
                 spec = ab.get("target_spec")
                 tgt = self._spec_targets(game, me, spec, ab.get("target_count", 1))
@@ -181,6 +189,27 @@ class Policy:
                 if game.activate_ability(perm, j, targets=tgt):
                     used += 1
                     break              # una habilidad por permanente por turno
+
+    def _agg_cost_ok(self, me, perm, ab):
+        """¿Conviene pagar el coste adicional agresivo de una habilidad activada?
+        - pagar vida: solo con colchón de vida.
+        - descartar: solo con mano de sobra (descarta lo peor).
+        - sacrificar OTRA: solo si hay 'carne' prescindible (ficha o cuerpo chico) y
+          no es nuestra única criatura."""
+        pay_life = ab.get("pay_life") or 0
+        disc = ab.get("discard") or 0
+        sac_o = ab.get("sacrifice_other")
+        if pay_life and me.life - pay_life < 12:
+            return False
+        if disc and len(me.hand) < 4:
+            return False
+        if sac_o:
+            creatures = me.creatures()
+            fodder = [pm for pm in creatures
+                      if pm is not perm and (pm.is_token or pm.power <= 1)]
+            if not fodder or len(creatures) <= 1:
+                return False
+        return True
 
     def _pick_modes(self, game, me, card):
         """Elige qué modo(s) de una carta modal jugar (los bots ya no van siempre
