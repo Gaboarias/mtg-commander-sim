@@ -3288,6 +3288,83 @@ def test_targeted_hand_discard_reveal():
     assert [c.name for c in op.hand] == ["Swamp"]        # descartó la no-tierra cara
 
 
+def test_scryfall_static_anthem_buffs():
+    import cardsdb, cards
+    g, me, op = _duel()
+    bear = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    anth = cardsdb.build_card_from_data({
+        "name": "Anthem", "type_line": "Enchantment", "mana_cost": "{2}{W}",
+        "oracle_text": "Creatures you control get +1/+1."})
+    g.move_to_battlefield(anth, me)
+    assert (bear.power, bear.toughness) == (3, 3)
+    kw = cardsdb.build_card_from_data({
+        "name": "Kw", "type_line": "Enchantment", "mana_cost": "{2}{G}",
+        "oracle_text": "Creatures you control have trample."})
+    g.move_to_battlefield(kw, me)
+    assert bear.has("trample")
+
+
+def test_recurring_upkeep_and_end_step_triggers():
+    import cardsdb
+    g, me, op = _duel()
+    up = cardsdb.build_card_from_data({
+        "name": "UpGain", "type_line": "Enchantment", "mana_cost": "{2}",
+        "oracle_text": "At the beginning of your upkeep, you gain 2 life."})
+    assert list(up.triggers.keys()) == ["upkeep"] and up.on_etb is None
+    g.move_to_battlefield(up, me)
+    l0 = me.life
+    g.emit("upkeep", player=me)
+    g.resolve_stack()
+    assert me.life == l0 + 2
+    es = cardsdb.build_card_from_data({
+        "name": "EndDrain", "type_line": "Enchantment", "mana_cost": "{2}",
+        "oracle_text": "At the beginning of your end step, each opponent loses 1 life."})
+    g.move_to_battlefield(es, me)
+    o0 = op.life
+    g.emit("end_step", player=me)
+    g.resolve_stack()
+    assert op.life == o0 - 1
+
+
+def test_mass_keyword_grant():
+    import cards
+    g, me, op = _duel()
+    a = g.move_to_battlefield(cards.creature("A", "1G", 2, 2), me)
+    b = g.move_to_battlefield(cards.creature("B", "1G", 1, 1), me)
+    _spell("Creatures you control gain indestructible until end of turn.").on_cast_resolve(g, me, [])
+    assert a.has("indestructible") and b.has("indestructible")
+
+
+def test_reanimation_refuses_instants():
+    import cards
+    g, me, op = _duel()
+    inst = cards.Card("Bolt", {"instant"}, cards.parse_cost("R"))
+    crea = cards.creature("Zombie", "2B", 3, 3)
+    me.graveyard = [inst, crea]
+    _spell("Return target creature card from your graveyard to the battlefield.",
+           "Sorcery").on_cast_resolve(g, me, [])
+    assert inst in me.graveyard
+    assert any(p.name == "Zombie" for p in me.battlefield)
+
+
+def test_move_instant_to_battlefield_refused():
+    import cards
+    g, me, op = _duel()
+    r = g.move_to_battlefield(cards.Card("Shock", {"instant"}, cards.parse_cost("R")), me)
+    assert r is None and any(c.name == "Shock" for c in me.graveyard)
+
+
+def test_counter_target_ability_stifle():
+    from engine import StackObject
+    g, me, op = _duel()
+    st = _spell("Counter target activated or triggered ability.", cost="{U}")
+    assert st.target_spec == "stack_ability" and "counter" in st.tags
+    so = StackObject(op, lambda g: None, source=None, label="ability:x", kind="ability")
+    g.stack.append(so)
+    st.on_cast_resolve(g, me, [so])
+    assert so not in g.stack
+
+
 def test_mana_ritual_floats_and_pays():
     from engine import Cost
     g, me, op = _duel()

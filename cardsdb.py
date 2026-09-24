@@ -156,6 +156,27 @@ def _targeted_spell(oracle: str):
     return None
 
 
+_PERMANENT_TYPES = {"creature", "artifact", "enchantment", "planeswalker",
+                    "land", "battle"}
+
+
+def _is_permanent_card(c):
+    """¿La carta puede existir como permanente en el campo? Los instantáneos y
+    conjuros NO pueden ir al campo (no se pueden reanimar/poner en juego)."""
+    return bool(set(getattr(c, "types", set())) & _PERMANENT_TYPES)
+
+
+def _counter_ability_effect():
+    """Contrarresta una habilidad activada/disparada objetivo (Stifle): la saca de
+    la pila para que no se resuelva."""
+    def eff(game, ctrl, targets):
+        obj = (list(targets or []) or [None])[0]
+        if obj is not None and obj in game.stack:
+            game.stack.remove(obj)
+            game.log(f"{ctrl.name} contrarresta una habilidad ({getattr(obj,'label','')})")
+    return eff
+
+
 def _counter_spell_effect():
     """Contrarresta el hechizo objetivo (StackObject): lo saca de la pila y su
     carta va al cementerio. Cubre Counterspell y variantes importadas de Scryfall."""
@@ -655,6 +676,52 @@ def _event_trigger_effect(oracle: str):
             _e(game, watcher.controller)
         out["creature_enters"] = cb
     return out
+
+
+def _recurring_trigger_effects(oracle: str):
+    """Disparos recurrentes 'At the beginning of (your) upkeep/end step, <efecto>'.
+    Devuelve {"upkeep"|"end_step": callback(g, perm, **kw)} usando la capa genérica
+    de efectos. Antes esto se cableaba mal como un ETB de una sola vez."""
+    t = re.sub(r"\s+", " ", (oracle or "")).strip()
+    out = {}
+    for m in re.finditer(r"at the beginning of (your|each(?: player'?s?)?) "
+                         r"(upkeep|end step|draw step)[,.]?\s*(.{0,160})", t, re.I):
+        ev = "end_step" if "end" in m.group(2).lower() else "upkeep"
+        eff = _generic_amount_effect(m.group(3))
+        if eff is None or ev in out:
+            continue
+
+        def cb(game, perm, _e=eff, **_kw):
+            _e(game, perm.controller)
+        out[ev] = cb
+    return out
+
+
+def _static_anthem(oracle: str):
+    """Anthem estático genérico de un permanente: 'creatures you control get +X/+X'
+    y 'creatures you control have <keyword>'. Devuelve (static_mod, keywords) o
+    (None, set())."""
+    t = re.sub(r"\s+", " ", (oracle or "")).lower()
+    m = re.search(r"(?:other )?creatures you control get ([+-]\d+)/([+-]\d+)", t)
+    dp, dt = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    kws = set()
+    mk = re.search(r"(?:other )?creatures you control have ([a-z ,and]+?)"
+                   r"(?:\.|$|until)", t)
+    if mk:
+        for name, key in _KEYWORD_WORDS:
+            if re.search(r"\b" + name + r"\b", mk.group(1)):
+                kws.add(key)
+    if not (dp or dt or kws):
+        return None, set()
+    others = "other creatures" in t
+
+    def sm(source, target, _dp=dp, _dt=dt, _o=others):
+        if not target.is_creature() or target.controller is not source.controller:
+            return (0, 0)
+        if _o and target is source:
+            return (0, 0)
+        return (_dp, _dt)
+    return sm, kws
 
 
 def _cmc(perm):
@@ -1659,6 +1726,20 @@ def _generic_amount_effect(oracle: str):
             game.log(f"{ctrl.name} prolifera")
         return eff
 
+    # otorgar keyword(s) EN MASA a tus criaturas hasta el fin del turno
+    # ("creatures you control gain indestructible/trample/… until end of turn").
+    mmk = re.search(r"creatures you control (?:gain|have) "
+                    r"([a-z ,and]+?) until end of turn", t)
+    if mmk:
+        found = [key for name, key in _KEYWORD_WORDS
+                 if re.search(r"\b" + name + r"\b", mmk.group(1))]
+        if found:
+            def eff(game, ctrl, *_a, _kw=tuple(found)):
+                for pm in ctrl.creatures():
+                    pm.temp_keywords |= set(_kw)
+                game.log(f"{ctrl.name}: sus criaturas ganan {', '.join(_kw)} este turno")
+            return eff
+
     # otorgar keyword(s) a una criatura objetivo hasta el fin del turno (truco de
     # combate: "target creature gains flying/trample/… until end of turn").
     mk = re.search(r"target creature (?:you control )?gains? "
@@ -1881,7 +1962,7 @@ def _generic_amount_effect(oracle: str):
 
         def eff(game, ctrl, *_a, _lim=lim, _cre=cre):
             def ok(c):
-                if c.is_land():
+                if not _is_permanent_card(c):        # instantáneos/conjuros NO al campo
                     return False
                 if _cre and "creature" not in c.types:
                     return False
@@ -2182,6 +2263,15 @@ def build_card_from_data(data: dict) -> Card:
         card.target_count = 1
         card.tags = card.tags | {"counter"}
 
+    # Stifle: "counter target activated or triggered ability".
+    if ({"instant", "sorcery"} & types and not card.modes and not card.on_cast_resolve
+            and re.search(r"counter target (?:activated|triggered)[\w /]*ability",
+                          (data.get("oracle_text", "") or ""), re.I)):
+        card.on_cast_resolve = _counter_ability_effect()
+        card.target_spec = "stack_ability"
+        card.target_count = 1
+        card.tags = card.tags | {"counter"}
+
     # hechizos DIRIGIDOS especiales (parpadeo / robo de control / clon): se cablean
     # ANTES de la remoción para no colapsarlos a "destruir".
     if {"instant", "sorcery"} & types and not card.modes and not card.on_cast_resolve:
@@ -2280,6 +2370,27 @@ def build_card_from_data(data: dict) -> Card:
     if atk_eff is not None and "attacks" not in card.triggers:
         card.triggers = dict(card.triggers)
         card.triggers["attacks"] = atk_eff
+
+    # anthem estático genérico ("creatures you control get +X/+X" / "have <kw>"),
+    # p. ej. importado de Scryfall. Se cablea antes de la capa por tags.
+    if ({"creature", "artifact", "enchantment", "planeswalker", "land"} & types
+            and card.static_mod is None):
+        sm, akw = _static_anthem(data.get("oracle_text", ""))
+        if sm is not None:
+            card.static_mod = sm
+            card.tags = card.tags | {"anthem"}
+        if akw:
+            card.anthem_keywords = set(akw)
+            card.anthem_others = "other creatures" in (
+                data.get("oracle_text", "") or "").lower()
+
+    # disparos recurrentes de mantenimiento / final de turno ("at the beginning of
+    # your upkeep/end step, <efecto>"). Antes se cableaba mal como ETB de una vez.
+    rec = _recurring_trigger_effects(data.get("oracle_text", ""))
+    if rec:
+        card.triggers = dict(card.triggers)
+        for ev, cb in rec.items():
+            card.triggers.setdefault(ev, cb)
 
     # disparos por evento: muerte de criatura, daño de combate a jugador, magecraft.
     evs = _event_trigger_effect(data.get("oracle_text", ""))

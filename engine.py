@@ -156,6 +156,8 @@ class Card:
     x_spell: bool = False                            # el coste tiene {X} (se elige al lanzar)
     etb_counters: dict = field(default_factory=dict)  # "entra con N contadores": {kind: n}
     aura_keywords: set = field(default_factory=set)   # aura: keywords que da al huésped
+    anthem_keywords: set = field(default_factory=set)  # anthem: keyword a tus criaturas
+    anthem_others: bool = False                       # el anthem excluye a la fuente
     gy_grant: dict = field(default_factory=dict)     # habilidad ESTÁTICA desde el cementerio
     #   (Anger/Brawn/Wonder): {"keyword": str, "need_subtype": str|None}. Mientras esta
     #   carta está en tu cementerio (y controlás un need_subtype si aplica), tus criaturas
@@ -663,6 +665,12 @@ class Game:
         for src in self.all_permanents():
             if src.enchanting is perm and kw in (getattr(src.card, "aura_keywords", None) or set()):
                 return True
+        # anthems estáticos que dan keyword a las criaturas de su controlador
+        for src in self.all_permanents():
+            ak = getattr(src.card, "anthem_keywords", None)
+            if ak and kw in ak and src.controller is ctrl:
+                if not (getattr(src.card, "anthem_others", False) and src is perm):
+                    return True
         for card in ctrl.graveyard:
             g = getattr(card, "gy_grant", None)
             if not g or g.get("keyword") != kw:
@@ -787,6 +795,15 @@ class Game:
 
     def move_to_battlefield(self, card: Card, player: "Player",
                             is_token: bool = False) -> Permanent:
+        # salvaguarda: un instantáneo/conjuro NUNCA puede entrar al campo. Si algún
+        # efecto lo intenta (reanimación mal parseada, etc.), va al cementerio.
+        perm_types = {"creature", "artifact", "enchantment", "planeswalker",
+                      "land", "battle"}
+        if not (set(card.types) & perm_types):
+            if not is_token and card not in player.graveyard:
+                player.graveyard.append(card)
+            self.log(f"{card.name} no puede entrar al campo (no es permanente)")
+            return None
         perm = Permanent(card, player, is_token=is_token)
         perm.game = self
         if card.enters_tapped:
@@ -1453,6 +1470,8 @@ class Game:
                 p.pay(cost)
             p.graveyard.remove(card)
             perm = self.move_to_battlefield(card, p)
+            if perm is None:
+                return False        # no era permanente: no se pudo poner en juego
             if m == "unearth":
                 perm.summoning_sick = False
                 lst = getattr(self, "unearth_eot", None)
