@@ -194,6 +194,40 @@ def _cascade_effect(cmc):
     return eff
 
 
+def _gy_mass_cast_effect():
+    """'Puedes jugar tierras y lanzar hechizos desde tu cementerio este turno'
+    (Yawgmoth's Will / Underworld Breach). Aproximación: al resolver, relanza los
+    hechizos SIN objetivo costeables del cementerio (los con objetivo abrirían
+    elecciones en cadena) y pone una tierra en juego; lo jugado se exilia."""
+    def eff(game, ctrl, *_a):
+        ctrl.gy_cast_until = game.turn
+        for c in list(ctrl.graveyard):
+            if not ({"instant", "sorcery"} & c.types) or not c.on_cast_resolve:
+                continue
+            if getattr(c, "target_spec", None):        # con objetivo -> se omite (aprox)
+                continue
+            if c.cost is not None and not ctrl.can_pay(c.cost):
+                continue
+            if c not in ctrl.graveyard:
+                continue
+            if c.cost is not None:
+                ctrl.pay(c.cost)
+            ctrl.graveyard.remove(c)
+            game.log(f"{ctrl.name} lanza {c.name} desde el cementerio")
+            try:
+                c.on_cast_resolve(game, ctrl, [])
+            except Exception:
+                pass
+            ctrl.exile.append(c)                       # lo jugado desde el cementerio se exilia
+        for c in list(ctrl.graveyard):                 # una tierra al campo
+            if c.is_land() and ctrl.lands_played < 1:
+                ctrl.graveyard.remove(c)
+                game.move_to_battlefield(c, ctrl)
+                ctrl.lands_played += 1
+                break
+    return eff
+
+
 def _counter_ability_effect():
     """Contrarresta una habilidad activada/disparada objetivo (Stifle): la saca de
     la pila para que no se resuelva."""
@@ -2453,6 +2487,13 @@ def build_card_from_data(data: dict) -> Card:
         card.target_spec = "stack_spell"
         card.target_count = 1
         card.tags = card.tags | {"counter"}
+
+    # "puedes jugar/lanzar desde tu cementerio este turno" (Yawgmoth's Will…).
+    if ({"instant", "sorcery"} & types and not card.on_cast_resolve
+            and re.search(r"(?:play|cast)[\w ,]*from your graveyard this turn",
+                          (data.get("oracle_text", "") or ""), re.I)):
+        card.on_cast_resolve = _gy_mass_cast_effect()
+        card.tags = card.tags | {"gy_recast"}
 
     # Stifle: "counter target activated or triggered ability".
     if ({"instant", "sorcery"} & types and not card.modes and not card.on_cast_resolve

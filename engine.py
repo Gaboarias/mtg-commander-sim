@@ -303,6 +303,7 @@ class Player:
         self.lands_played = 0
         self.mana_pool = 0           # maná flotante (genérico) de rituales; se vacía por turno
         self.prevent = 0             # escudo de prevención de daño (hasta fin de turno)
+        self.gy_cast_until = -1      # turno hasta el que puede lanzar desde el cementerio
         self.prevent_all = False     # previene TODO el daño a este jugador este turno
         self.draws_this_turn = 0     # se reinicia cada turno (para efectos "2do robo")
         self.lost = False

@@ -3288,6 +3288,41 @@ def test_targeted_hand_discard_reveal():
     assert [c.name for c in op.hand] == ["Swamp"]        # descartó la no-tierra cara
 
 
+def test_flashback_casts_from_graveyard_then_exiles():
+    import cardsdb, cards
+    g, me, op = _duel()
+    fb = cardsdb.build_card_from_data({
+        "name": "Deep Analysis", "type_line": "Sorcery", "mana_cost": "{3}{U}",
+        "oracle_text": "Draw two cards.\nFlashback {1}{U}", "keywords": ["Flashback"]})
+    assert fb.gy_play.get("mode") == "flashback"
+    me.graveyard = [fb]
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Island", ["U"], basic=True), me)
+    me.library += [cards.creature("z", "1U", 1, 1) for _ in range(5)]
+    h0 = len(me.hand)
+    assert g.play_from_graveyard(me, fb) is True
+    assert len(me.hand) == h0 + 2 and fb in me.exile and fb not in me.graveyard
+
+
+def test_play_from_graveyard_this_turn():
+    import cardsdb, cards
+    g, me, op = _duel()
+    draw2 = cardsdb.build_card_from_data({
+        "name": "Divination", "type_line": "Sorcery", "mana_cost": "{2}{U}",
+        "oracle_text": "Draw two cards."})
+    me.graveyard = [draw2]
+    me.library += [cards.creature("z", "1U", 1, 1) for _ in range(5)]
+    for _ in range(4):
+        g.move_to_battlefield(cards.land("Island", ["U"], basic=True), me)
+    yw = cardsdb.build_card_from_data({
+        "name": "Yawgmoth's Will", "type_line": "Sorcery", "mana_cost": "{2}{B}",
+        "oracle_text": "You may play lands and cast spells from your graveyard this turn."})
+    assert "gy_recast" in yw.tags
+    h0 = len(me.hand)
+    yw.on_cast_resolve(g, me, [])
+    assert len(me.hand) == h0 + 2 and draw2 in me.exile
+
+
 def test_attack_trigger_self_pump():
     import cardsdb, cards
     g, me, op = _duel()
