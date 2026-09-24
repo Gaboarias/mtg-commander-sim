@@ -952,6 +952,7 @@ def _wire_aura(card, oracle):
         card.aura_abilities_off = True
     if ab_off or card.aura_pt_set:
         bad = True                     # es removal: se anexa a criatura rival
+        card.tags = card.tags | {"removal"}   # la IA la valora y la juega como tal
 
     def _attach(game, ctrl, perm, _bad=bad):
         if _bad:

@@ -3321,6 +3321,56 @@ def test_bot_holds_removal_for_real_threats():
     assert rem not in me.hand                       # bajo presión -> lo usa
 
 
+def test_bot_values_doublers_and_uses_mutation_aura():
+    import cardsdb, cards, policy
+    from engine import Game, Player
+    pol = policy.Policy("avanzado")
+    me = Player("me", [cards.creature("z", "1G", 1, 1) for _ in range(20)],
+                cards.creature("Cm", "2G", 3, 3, legendary=True), policy=pol)
+    op = Player("op", [cards.creature("O", "1B", 1, 1) for _ in range(10)],
+                cards.creature("Om", "2B", 1, 1, legendary=True), policy=policy.Policy("avanzado"))
+    g = Game([me, op], seed=1)
+    # doblador valorado alto
+    ds = cardsdb.build_card_from_data({
+        "name": "Doubling Season", "type_line": "Enchantment", "mana_cost": "{4}{G}",
+        "oracle_text": "If an effect would create one or more tokens under your "
+                       "control, it creates twice that many of those tokens instead."})
+    assert ds.token_double and pol.score(g, me, ds) >= 5
+    # el bot juega el aura de mutación contra la amenaza más grande del rival
+    me.hand = [cardsdb.build_card_from_data({
+        "name": "Kenrith's Transformation", "type_line": "Enchantment — Aura",
+        "mana_cost": "{1}{G}",
+        "oracle_text": "Enchant creature\nEnchanted creature loses all abilities and "
+                       "has base power and toughness 3/3."})]
+    for _ in range(8):
+        g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me)
+    big = g.move_to_battlefield(cards.creature("Dragon", "4U", 6, 6, kw=("flying",)), op)
+    aura = me.hand[0]
+    pol.main_phase(g, me, second=True)
+    assert aura not in me.hand and (big.power, big.toughness) == (3, 3)
+    assert not big.has("flying")
+
+
+def test_bot_holds_mutation_aura_without_target():
+    import cardsdb, cards, policy
+    from engine import Game, Player
+    pol = policy.Policy("avanzado")
+    me = Player("me", [cards.creature("z", "1G", 1, 1) for _ in range(20)],
+                cards.creature("Cm", "2G", 3, 3, legendary=True), policy=pol)
+    op = Player("op", [cards.creature("O", "1B", 1, 1) for _ in range(10)],
+                cards.creature("Om", "2B", 1, 1, legendary=True), policy=policy.Policy("avanzado"))
+    g = Game([me, op], seed=1)     # el rival no tiene criaturas en juego
+    me.hand = [cardsdb.build_card_from_data({
+        "name": "Lignify", "type_line": "Enchantment — Aura", "mana_cost": "{2}{G}",
+        "oracle_text": "Enchant creature\nEnchanted creature is a Treefolk with base "
+                       "power and toughness 0/4 and loses all abilities."})]
+    for _ in range(8):
+        g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me)
+    aura = me.hand[0]
+    pol.main_phase(g, me, second=True)
+    assert aura in me.hand         # sin objetivo -> la guarda
+
+
 def test_mutation_aura_neutralizes_creature():
     import cardsdb, cards
     g, me, op = _duel()

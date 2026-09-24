@@ -48,6 +48,11 @@ class Policy:
         if "gy_recast" in tags:
             if sum(1 for c in me.graveyard if not c.is_land()) >= 2:
                 s += 5
+        # dobladores de #3 (fichas / daño / contadores): motores muy fuertes
+        if getattr(card, "token_double", False) or getattr(card, "damage_double", None):
+            s += 5
+        if getattr(card, "counter_modifier", None) is not None and "creature" not in tags:
+            s += 3
         if "creature" in tags:
             s += max(1, card.power)
             # las palabras clave suben el valor real de la criatura (evasión,
@@ -121,6 +126,11 @@ class Policy:
                 continue
             sc = self.score(game, me, card)
             if not second and sc <= 0 and not nov:
+                continue
+            # no malgastar remoción (incluye auras de mutación) si el rival no tiene
+            # criaturas: no hay a qué apuntarla.
+            if (not nov and "removal" in card.tags
+                    and not any(o.creatures() for o in game.opponents(me))):
                 continue
             # novato: a veces se olvida de jugar algo
             if nov and game.rng.random() < 0.22:
