@@ -7,9 +7,82 @@ El mazo se rellena con tierras basicas hasta 99 via `_fill()`.
 """
 from __future__ import annotations
 
+import re
+
 from engine import W, U, B, R, G, C
 import cards
+import cardsdb
 from cards import creature, land, rock
+
+
+# Oracle real de cartas del pool de relleno que SÍ tienen efecto conocido y
+# parseable. Al construirlas vía cardsdb, el parser les da su comportamiento
+# (ETB, muerte, activadas, disparos), subiendo la cobertura PAREJA en todos los
+# mazos que comparten ese color. Las que no están aquí quedan como cuerpo simple.
+_FILLER_ORACLE = {
+    # --- blanco ---
+    "Wall of Omens": "When Wall of Omens enters, draw a card.",
+    "Blade Splicer": "When Blade Splicer enters, create a 3/3 colorless Phyrexian "
+                     "Golem artifact creature token.",
+    "Attended Knight": "When Attended Knight enters, create a 1/1 white Soldier "
+                       "creature token.",
+    "Cloudgoat Ranger": "When Cloudgoat Ranger enters, create three 1/1 white "
+                        "Kithkin Soldier creature tokens.",
+    "Leonin Warleader": "Whenever Leonin Warleader attacks, create two 1/1 white "
+                        "Cat creature tokens.",
+    # --- azul ---
+    "Mulldrifter": "When Mulldrifter enters, draw two cards.",
+    "Cloudkin Seer": "When Cloudkin Seer enters, draw a card.",
+    "Silvergill Adept": "When Silvergill Adept enters, draw a card.",
+    "Aven Fisher": "When Aven Fisher dies, draw a card.",
+    # --- negro ---
+    "Phyrexian Rager": "When Phyrexian Rager enters, draw a card.",
+    "Gravedigger": "When Gravedigger enters, return target creature card from your "
+                   "graveyard to your hand.",
+    "Nekrataal": "When Nekrataal enters, destroy target creature.",
+    "Shriekmaw": "When Shriekmaw enters, destroy target creature.",
+    "Bone Shredder": "When Bone Shredder enters, destroy target creature.",
+    "Bloodgift Demon": "At the beginning of your upkeep, you draw a card and you "
+                       "lose 1 life.",
+    "Plaguecrafter": "When Plaguecrafter enters, each opponent sacrifices a creature.",
+    "Reassembling Skeleton": "{1}{B}: Return Reassembling Skeleton from your "
+                             "graveyard to the battlefield.",
+    "Corpse Augur": "When Corpse Augur dies, draw a card.",
+    "Nantuko Husk": "Sacrifice a creature: Nantuko Husk gets +2/+2 until end of turn.",
+    # --- rojo ---
+    "Pia Nalaar": "When Pia Nalaar enters, create a 1/1 colorless Thopter "
+                  "artifact creature token with flying.",
+    "Zealous Conscripts": "When Zealous Conscripts enters, untap target permanent.",
+    # --- verde ---
+    "Elvish Visionary": "When Elvish Visionary enters, draw a card.",
+    "Sakura-Tribe Elder": "Sacrifice Sakura-Tribe Elder: Search your library for a "
+                          "basic land card, put it onto the battlefield tapped, "
+                          "then shuffle.",
+    "Wood Elves": "When Wood Elves enters, search your library for a Forest card, "
+                  "put it onto the battlefield, then shuffle.",
+    "Eternal Witness": "When Eternal Witness enters, return target creature card "
+                       "from your graveyard to your hand.",
+    "Beast Whisperer": "Whenever you cast a creature spell, draw a card.",
+}
+
+
+def _braces(cost: str) -> str:
+    """'2U' / '1WW' -> '{2}{U}' / '{1}{W}{W}' para cardsdb."""
+    return "".join("{%s}" % t for t in re.findall(r"\d+|[WUBRGC]", cost.upper()))
+
+
+def _mk_filler(name, cost, pw, tf, kw, colors):
+    """Criatura de relleno: con efecto real (vía cardsdb) si conocemos su oracle;
+    si no, un cuerpo simple como antes."""
+    oracle = _FILLER_ORACLE.get(name)
+    if oracle:
+        ci = list(dict.fromkeys(re.findall(r"[WUBRG]", cost.upper())))
+        return cardsdb.build_card_from_data({
+            "name": name, "type_line": "Creature", "mana_cost": _braces(cost),
+            "power": str(pw), "toughness": str(tf),
+            "keywords": [k for k in kw], "color_identity": ci,
+            "oracle_text": oracle})
+    return creature(name, cost, pw, tf, kw=kw, color_id=colors)
 
 
 # --------------------------------------------------------------------------- #
@@ -137,7 +210,7 @@ def _fill(deck, identity):
     for name, cost, pw, tf, kw in ordered:
         if len(deck) >= 99:
             break
-        deck.append(creature(name, cost, pw, tf, kw=kw, color_id=tuple(colors)))
+        deck.append(_mk_filler(name, cost, pw, tf, kw, tuple(colors)))
 
     # 3) si el pool era chico (mono-color) y aun faltan slots, completar con tierras
     i = 0

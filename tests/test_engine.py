@@ -3321,6 +3321,19 @@ def test_bot_holds_removal_for_real_threats():
     assert rem not in me.hand                       # bajo presión -> lo usa
 
 
+def test_precons_have_even_coverage():
+    # los tres precons registrados deben tener cobertura de efectos comparable
+    # (no que un mazo esté programado y los otros sean vainilla).
+    import coverage, decks
+    counts = {}
+    for name in ("lorehold", "tricky", "kang"):
+        deck, cmd = decks.build(name)
+        pool = [c for c in ([cmd] + deck) if "basic" not in c.supertypes]
+        counts[name] = sum(1 for c in pool if coverage._implemented(c))
+    assert min(counts.values()) >= 20, counts
+    assert max(counts.values()) - min(counts.values()) <= 6, counts
+
+
 def test_board_eval_reflects_advantage():
     import cards, policy
     from engine import Game, Player
