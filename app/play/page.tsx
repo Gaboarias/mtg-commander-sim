@@ -142,6 +142,7 @@ export default function Play() {
   const [art, setArt] = useState<Record<string, string>>({});
   const [info, setInfo] = useState<Record<string, CardInfo>>({});
   const [inspect, setInspect] = useState<Inspect | null>(null);
+  const [zoneView, setZoneView] = useState<{ title: string; names: string[] } | null>(null);
   const infoReq = useRef<Set<string>>(new Set());  // nombres ya pedidos
   const [assign, setAssign] = useState<Record<number, number>>({});  // bloqueador -> atacante
   const [targeting, setTargeting] = useState<{ kind: "cast" | "respond" | "ability"; i?: number; zone?: string; name: string; targets: TargetOpt[]; count: number; mode?: number; uid?: number; index?: number } | null>(null);
@@ -549,6 +550,7 @@ export default function Play() {
                   selectedUids={i === meIdx ? picked : undefined}
                   onCard={i === meIdx ? togglePick : undefined}
                   onInspect={(pm: Perm) => inspectCard(pm)}
+                  onZone={(title, names) => setZoneView({ title, names })}
                 />
               ))}
             </div>
@@ -1085,6 +1087,31 @@ export default function Play() {
           </div>
         );
       })()}
+
+      {zoneView && (
+        <div className="inspect-back" onClick={() => setZoneView(null)}>
+          <div className="inspect zone-view" onClick={(e) => e.stopPropagation()}>
+            <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setZoneView(null)}><Icon name="x" size={16} /></button>
+            <h3><Icon name="grave" size={16} /> {zoneView.title} <span className="muted">({zoneView.names.length})</span></h3>
+            {zoneView.names.length === 0 ? (
+              <p className="muted">Vacío.</p>
+            ) : (
+              <div className="zone-grid">
+                {zoneView.names.map((n, k) => (
+                  <button key={k} type="button" className="zone-card"
+                    onClick={() => setInspect({ name: n } as Inspect)}
+                    title={n}>
+                    {art[n]
+                      ? <span className="zone-thumb" style={{ backgroundImage: `url(${art[n]})` }} />
+                      : <span className="zone-thumb ph"><span>{n}</span></span>}
+                    <span className="zone-name">{n}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {inspect && (
         <div className="inspect-back" onClick={() => setInspect(null)}>

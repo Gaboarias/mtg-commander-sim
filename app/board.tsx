@@ -14,7 +14,7 @@ export type Perm = {
 export type PlayerState = {
   name: string; life: number; lost: boolean; hand: number; library: number;
   commander: string[]; cmdr_tax: number; cmdr_damage?: Record<string, number>;
-  poison?: number; graveyard: string[]; battlefield: Perm[];
+  poison?: number; graveyard: string[]; exile?: string[]; battlefield: Perm[];
   hand_cards?: { i: number; name: string; is_land: boolean; cost: string }[];
 };
 
@@ -87,11 +87,12 @@ export function CardMini({
 }
 
 export function Seat({
-  p, active, art, reduce, selectableUids, selectedUids, onCard, onInspect, variant = "grid",
+  p, active, art, reduce, selectableUids, selectedUids, onCard, onInspect, onZone, variant = "grid",
 }: {
   p: PlayerState; active: boolean; art: Record<string, string>; reduce: boolean;
   selectableUids?: Set<number>; selectedUids?: Set<number>; onCard?: (uid: number) => void;
-  onInspect?: (perm: Perm) => void; variant?: "grid" | "hero" | "mini";
+  onInspect?: (perm: Perm) => void; onZone?: (title: string, names: string[]) => void;
+  variant?: "grid" | "hero" | "mini";
 }) {
   const lands = p.battlefield.filter((x) => x.is_land);
   const nonlands = p.battlefield.filter((x) => !x.is_land);
@@ -125,7 +126,24 @@ export function Seat({
           animate={{ scale: 1, color: "var(--muted)" }} transition={{ duration: 0.5 }}>
           <Icon name="library" size={13} /> {p.library}
         </motion.span>
-        <span title="cementerio"><Icon name="grave" size={13} /> {p.graveyard.length}</span>
+        {onZone && p.graveyard.length > 0 ? (
+          <button type="button" className="zone-chip" title="ver cementerio"
+            onClick={() => onZone(`Cementerio de ${p.name}`, p.graveyard)}>
+            <Icon name="grave" size={13} /> {p.graveyard.length}
+          </button>
+        ) : (
+          <span title="cementerio"><Icon name="grave" size={13} /> {p.graveyard.length}</span>
+        )}
+        {(p.exile?.length || 0) > 0 && (
+          onZone ? (
+            <button type="button" className="zone-chip" title="ver exilio"
+              onClick={() => onZone(`Exilio de ${p.name}`, p.exile || [])}>
+              <Icon name="x" size={13} /> {p.exile!.length}
+            </button>
+          ) : (
+            <span title="exilio"><Icon name="x" size={13} /> {p.exile!.length}</span>
+          )
+        )}
         <span title="comandante"><Icon name="crown" size={13} /> {p.commander.join(", ") || "—"}</span>
         {maxCmdr > 0 && (
           <span className={`cmdr-dmg ${maxCmdr >= 21 ? "fatal" : ""}`} title="daño de comandante recibido (21 elimina)">

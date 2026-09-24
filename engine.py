@@ -619,6 +619,7 @@ class Game:
             "cmdr_damage": dict(p.cmdr_damage),   # daño de comandante RECIBIDO
             "poison": p.poison,
             "graveyard": [c.name for c in p.graveyard],
+            "exile": [c.name for c in p.exile],
             "battlefield": [self._perm_state(pm) for pm in p.battlefield],
         }
 
