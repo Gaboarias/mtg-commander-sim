@@ -166,6 +166,34 @@ def _is_permanent_card(c):
     return bool(set(getattr(c, "types", set())) & _PERMANENT_TYPES)
 
 
+def _cascade_effect(cmc):
+    """Cascade: exilia del tope hasta hallar una no-tierra de CMV menor; la lanza
+    GRATIS (permanente -> al campo con ETB; hechizo -> resuelve su efecto) y el
+    resto va al fondo en orden aleatorio."""
+    def eff(game, ctrl, *_a, _cmc=cmc):
+        exiled = []
+        hit = None
+        while ctrl.library:
+            c = ctrl.library.pop()
+            cc = c.cost.cmc if getattr(c, "cost", None) else 0
+            if not c.is_land() and cc < _cmc:
+                hit = c
+                break
+            exiled.append(c)
+        if hit is not None:
+            game.log(f"{ctrl.name} cascadea y lanza gratis {hit.name}")
+            if _is_permanent_card(hit):
+                game.move_to_battlefield(hit, ctrl)
+            else:
+                if getattr(hit, "on_cast_resolve", None):
+                    hit.on_cast_resolve(game, ctrl, [])
+                ctrl.graveyard.append(hit)
+        game.rng.shuffle(exiled)
+        for c in exiled:
+            ctrl.library.insert(0, c)      # al fondo
+    return eff
+
+
 def _counter_ability_effect():
     """Contrarresta una habilidad activada/disparada objetivo (Stifle): la saca de
     la pila para que no se resuelva."""
@@ -577,15 +605,37 @@ def _parse_activated(oracle: str, name: str = ""):
                 continue
             bad = True
             break
-        if not syms or bad:
+        if bad:
+            continue
+        # se acepta una habilidad sin maná/{T} solo si tiene un coste real (sacrificio,
+        # pagar vida, descartar) — p. ej. "Sacrifice a creature: Add {C}{C}".
+        if not syms and not (sac_self or sac_other or pay_life or discard):
             continue
         tap = any(s.upper() == "T" for s in syms)
         mana = "".join("{%s}" % s for s in syms if s.upper() != "T")
         cost = parse_cost(mana_cost_to_str(mana)) if mana else parse_cost("0")
-        # las habilidades de "agregar maná" ya se cubren con `produces`: no las
-        # dupliquemos como activables (si no, se contaría el maná dos veces).
-        if re.search(r"\badd\b.*\bmana\b", body, re.I) or re.match(
-                r"add(\s*\{[wubrgc0-9/x]+\})+\s*\.?$", body.strip(), re.I):
+        # habilidades de "agregar maná": las de coste trivial ({T}/maná) ya las cubre
+        # `produces`. Pero las que tienen un coste REAL (sacrificar otra permanente,
+        # pagar vida, descartar) NO las cubre produces: Ashnod's Altar y compañía.
+        # Esas se modelan como activadas que llenan el maná flotante.
+        is_add_mana = bool(re.search(r"\badd\b.*\bmana\b", body, re.I)) or bool(
+            re.match(r"add(\s*\{[wubrgc0-9/x]+\})+\s*\.?$", body.strip(), re.I))
+        if is_add_mana:
+            if not (sac_other or pay_life or discard):
+                continue                       # coste trivial -> produces la cubre
+            amt = len(re.findall(r"\{[wubrgc]\}", body, re.I))
+            if not amt:
+                mn = re.search(r"add (\w+) mana", body, re.I)
+                amt = _count_word(mn.group(1)) if mn else 1
+            eff = (lambda g, c, tg=None, _n=(amt or 1):
+                   (setattr(c, "mana_pool", c.mana_pool + _n),
+                    g.log(f"{c.name} agrega {_n} maná")))
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                        "sacrifice_other": sac_other, "pay_life": pay_life,
+                        "discard": discard, "label": _short_label(body),
+                        "effect": (lambda g, c, perm, tg, _e=eff: _e(g, c, tg)),
+                        "target_spec": None, "target_count": 1,
+                        "is_copy_ability": False})
             continue
         eff, spec, count = _fragment_effect(body)
         if eff is None:
@@ -2428,6 +2478,21 @@ def build_card_from_data(data: dict) -> Card:
                 _q(g, c, tg)
             card.on_cast_resolve = _combo
         card.tags = card.tags | {"populate"}
+
+    # Cascade: al lanzar el hechizo, cascada. Se encadena a on_cast_resolve (hechizos)
+    # o a on_etb (permanentes) para dispararse al ponerse en juego / resolverse.
+    if "cascade" in _ktext:
+        _casc = _cascade_effect(card.cost.cmc if card.cost else 0)
+        if {"instant", "sorcery"} & types:
+            _prev = card.on_cast_resolve
+            card.on_cast_resolve = (_casc if _prev is None else
+                (lambda g, c, tg, _p=_prev, _q=_casc: (_p(g, c, tg), _q(g, c))))
+        else:
+            _prev = card.on_etb
+            card.on_etb = (
+                (lambda g, c, perm, _q=_casc: _q(g, c)) if _prev is None else
+                (lambda g, c, perm, _p=_prev, _q=_casc: (_p(g, c, perm), _q(g, c))))
+        card.tags = card.tags | {"cascade"}
 
     # habilidades activadas con coste de maná (creaturas/permanentes/tierras):
     # "{cost}: efecto" -> se pueden activar en juego pagando el maná.

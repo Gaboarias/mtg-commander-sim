@@ -3288,6 +3288,45 @@ def test_targeted_hand_discard_reveal():
     assert [c.name for c in op.hand] == ["Swamp"]        # descartó la no-tierra cara
 
 
+def test_sacrifice_altar_adds_mana():
+    import cardsdb, cards
+    g, me, op = _duel()
+    altar = cardsdb.build_card_from_data({
+        "name": "Altar", "type_line": "Artifact", "mana_cost": "{3}",
+        "oracle_text": "Sacrifice a creature: Add {C}{C}."})
+    assert len(altar.activated_abilities) == 1
+    assert altar.activated_abilities[0].get("sacrifice_other") == {"count": 1, "type": "creature"}
+    pm = g.move_to_battlefield(altar, me)
+    spare = g.move_to_battlefield(cards.creature("Sp", "1G", 1, 1), me)
+    assert g.activate_ability(pm, 0) is True
+    assert spare not in me.battlefield and me.mana_pool == 2
+
+
+def test_cascade_spell_free_casts_cheaper():
+    import cardsdb, cards
+    g, me, op = _duel()
+    me.library = [cards.creature("Cheap", "1G", 2, 2)] + \
+        [cards.land("Forest", ["G"], basic=True) for _ in range(5)]
+    casc = cardsdb.build_card_from_data({
+        "name": "Bloom", "type_line": "Sorcery", "mana_cost": "{4}{G}",
+        "oracle_text": "Cascade\nDraw two cards.", "keywords": ["Cascade"]})
+    assert "cascade" in casc.tags
+    casc.on_cast_resolve(g, me, [])
+    assert any(p.name == "Cheap" for p in me.battlefield)
+
+
+def test_cascade_creature_triggers_on_enter():
+    import cardsdb, cards
+    g, me, op = _duel()
+    me.library = [cards.creature("Small", "1B", 2, 2)] + \
+        [cards.land("Forest", ["G"], basic=True) for _ in range(5)]
+    cc = cardsdb.build_card_from_data({
+        "name": "Beast", "type_line": "Creature — Beast", "mana_cost": "{5}{G}",
+        "power": "6", "toughness": "6", "oracle_text": "Cascade", "keywords": ["Cascade"]})
+    g.move_to_battlefield(cc, me)
+    assert any(p.name == "Small" for p in me.battlefield)
+
+
 def test_self_death_trigger_creates_token_not_on_etb():
     import cardsdb
     g, me, op = _duel()
