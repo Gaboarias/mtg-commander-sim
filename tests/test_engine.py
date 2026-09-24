@@ -3288,6 +3288,36 @@ def test_targeted_hand_discard_reveal():
     assert [c.name for c in op.hand] == ["Swamp"]        # descartó la no-tierra cara
 
 
+def test_two_target_fight():
+    import cards
+    g, me, op = _duel()
+    mine = g.move_to_battlefield(cards.creature("Mine", "1G", 4, 4), me)
+    foe = g.move_to_battlefield(cards.creature("Foe", "1U", 2, 2), op)
+    _spell("Target creature fights another target creature.").on_cast_resolve(g, me, [foe])
+    assert foe not in op.battlefield and mine.damage == 2
+
+
+def test_targeted_sacrifice_beats_indestructible():
+    import cards
+    g, me, op = _duel()
+    v = g.move_to_battlefield(cards.creature("Big", "1U", 6, 6, kw=("indestructible",)), op)
+    _spell("Choose target creature. Its controller sacrifices it.").on_cast_resolve(g, me, [v])
+    assert v not in op.battlefield
+
+
+def test_prevent_all_and_shield_damage():
+    g, me, op = _duel()
+    _spell("Prevent all damage that would be dealt to you this turn.").on_cast_resolve(g, me, [])
+    l0 = me.life
+    g.deal_damage(None, me, 5)
+    assert me.life == l0
+    g2, me2, op2 = _duel()
+    _spell("Prevent the next 3 damage that would be dealt to any target this turn.").on_cast_resolve(g2, me2, [])
+    l2 = me2.life
+    g2.deal_damage(None, me2, 5)
+    assert me2.life == l2 - 2
+
+
 def test_scryfall_static_anthem_buffs():
     import cardsdb, cards
     g, me, op = _duel()

@@ -302,6 +302,8 @@ class Player:
         self.cmdr_damage: dict = {}          # {nombre_comandante: int}; 21 elimina
         self.lands_played = 0
         self.mana_pool = 0           # maná flotante (genérico) de rituales; se vacía por turno
+        self.prevent = 0             # escudo de prevención de daño (hasta fin de turno)
+        self.prevent_all = False     # previene TODO el daño a este jugador este turno
         self.draws_this_turn = 0     # se reinicia cada turno (para efectos "2do robo")
         self.lost = False
         self.policy = policy
@@ -924,6 +926,26 @@ class Game:
     def deal_damage(self, source, target, amount: int, combat: bool = False):
         if amount <= 0:
             return
+        # prevención de daño (escudos "hasta el fin del turno")
+        if isinstance(target, Player):
+            if getattr(target, "prevent_all", False):
+                self.log(f"se previene el daño a {target.name}")
+                return
+            pv = getattr(target, "prevent", 0)
+            if pv > 0:
+                blocked = min(pv, amount)
+                target.prevent = pv - blocked
+                amount -= blocked
+                if amount <= 0:
+                    return
+        elif isinstance(target, Permanent):
+            pv = getattr(target, "prevent", 0)
+            if pv > 0:
+                blocked = min(pv, amount)
+                target.prevent = pv - blocked
+                amount -= blocked
+                if amount <= 0:
+                    return
         src_perm = isinstance(source, Permanent)
         if isinstance(target, Player):
             if src_perm and source.has("infect"):
@@ -1731,6 +1753,9 @@ class Game:
         p.lands_played = 0
         p.draws_this_turn = 0
         p.mana_pool = 0              # el maná flotante se vacía al empezar el turno
+        for pl in self.players:      # los escudos de prevención se agotan por turno
+            pl.prevent = 0
+            pl.prevent_all = False
         self.fog_turn = False        # "prevenir daño de combate este turno" se agota
 
         # UPKEEP

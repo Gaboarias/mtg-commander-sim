@@ -353,8 +353,18 @@ def _targeted_special(oracle: str):
     # clon
     if re.search(r"copy of (?:up to \w+ )?target (?:creature|permanent)", t):
         return _clone_effect(), "opp_creature", 1
-    # pelea
-    if re.search(r"fights? (?:up to \w+ )?target creature", t) or \
+    # sacrificio forzado dirigido: "its controller sacrifices it" / "~'s controller
+    # sacrifices it" (esquiva indestructible pero sigue siendo objetivo)
+    if re.search(r"(?:its |that creature'?s? )?controller sacrifices (?:it|that creature)", t):
+        def sac(game, ctrl, targets):
+            for pm in list(targets or []):
+                if pm in pm.controller.battlefield:
+                    owner = pm.controller
+                    game.to_graveyard(pm, "sacrificio forzado")
+                    game.log(f"{owner.name} sacrifica {pm.name}")
+        return sac, "opp_creature", 1
+    # pelea (incluye "fights another target creature": aprox. tu mejor vs objetivo)
+    if re.search(r"fights? (?:up to \w+ |another )?target creature", t) or \
        re.search(r"deals damage equal to its power to (?:up to \w+ )?target creature", t):
         return _fight_effect(), "opp_creature", 1
     # goad
@@ -1874,6 +1884,20 @@ def _generic_amount_effect(oracle: str):
         def eff(game, ctrl, *_a):
             game.fog_turn = True
             game.log(f"{ctrl.name}: se previene todo el daño de combate este turno")
+        return eff
+
+    # prevención general: "prevent all damage ... to you" (todo) o "prevent the next
+    # N damage ..." (escudo de N). Aprox: protege al que lanza (uso más común).
+    if re.search(r"prevent all (?:the )?damage", t) and "combat damage" not in t:
+        def eff(game, ctrl, *_a):
+            ctrl.prevent_all = True
+            game.log(f"{ctrl.name}: se previene todo el daño hasta el fin del turno")
+        return eff
+    mpv = re.search(r"prevent the next (\w+) damage", t)
+    if mpv and (n := _count_word(mpv.group(1))):
+        def eff(game, ctrl, *_a, _n=n):
+            ctrl.prevent += _n
+            game.log(f"{ctrl.name}: escudo de {_n} de prevención de daño este turno")
         return eff
 
     # descarte dirigido con revelado (Thoughtseize/Duress): el rival revela la mano y
