@@ -3288,6 +3288,57 @@ def test_targeted_hand_discard_reveal():
     assert [c.name for c in op.hand] == ["Swamp"]        # descartó la no-tierra cara
 
 
+def test_mana_ritual_floats_and_pays():
+    from engine import Cost
+    g, me, op = _duel()
+    _spell("Add {C}{C}{C}.").on_cast_resolve(g, me, [])
+    assert me.mana_pool == 3
+    assert me.can_pay(Cost(3, ())) is True         # el pool paga sin tierras
+    me.pay(Cost(3, ()))
+    assert me.mana_pool == 0
+
+
+def test_variable_count_effects():
+    import cards
+    g, me, op = _duel()
+    for _ in range(3):
+        g.move_to_battlefield(cards.creature("E", "1G", 1, 1, subtypes=("Elf",)), me)
+    me.library += [cards.creature("z", "1G", 1, 1) for _ in range(10)]
+    h0 = len(me.hand)
+    _spell("Draw cards equal to the number of Elves you control.", "Sorcery").on_cast_resolve(g, me, [])
+    assert len(me.hand) == h0 + 3                   # 3 Elfos
+    l0 = op.life
+    _spell("Deal damage to any target equal to the number of creatures you control.").on_cast_resolve(g, me, [])
+    assert op.life == l0 - 3
+
+
+def test_variable_pump_where_x():
+    import cards
+    g, me, op = _duel()
+    k = g.move_to_battlefield(cards.creature("K", "1G", 2, 2), me)
+    g.move_to_battlefield(cards.creature("C", "1G", 1, 1), me)
+    _spell("Target creature gets +X/+X until end of turn, where X is the number "
+           "of creatures you control.").on_cast_resolve(g, me, [])
+    assert max(x.power for x in me.creatures()) == 4    # mejor 2/2 +2/+2
+
+
+def test_regenerate_grants_indestructible():
+    import cards
+    g, me, op = _duel()
+    r = g.move_to_battlefield(cards.creature("R", "1G", 2, 2), me)
+    _spell("Regenerate target creature.").on_cast_resolve(g, me, [])
+    assert r.has("indestructible")
+
+
+def test_mass_plus_one_counters():
+    import cards
+    g, me, op = _duel()
+    a = g.move_to_battlefield(cards.creature("A", "1G", 1, 1), me)
+    b = g.move_to_battlefield(cards.creature("B", "1G", 2, 2), me)
+    _spell("Put a +1/+1 counter on each creature you control.", "Sorcery").on_cast_resolve(g, me, [])
+    assert a.power == 2 and b.power == 3
+
+
 def test_etb_pump_and_tap_triggers():
     import cardsdb, cards
     g, me, op = _duel()

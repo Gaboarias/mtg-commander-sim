@@ -299,6 +299,7 @@ class Player:
         self.cmdr_tax = 0                    # +2 por lanzamiento desde la zona de mando
         self.cmdr_damage: dict = {}          # {nombre_comandante: int}; 21 elimina
         self.lands_played = 0
+        self.mana_pool = 0           # maná flotante (genérico) de rituales; se vacía por turno
         self.draws_this_turn = 0     # se reinicia cada turno (para efectos "2do robo")
         self.lost = False
         self.policy = policy
@@ -341,8 +342,8 @@ class Player:
                 if p.card.produces is not None and not p.tapped]
 
     def available_mana(self) -> int:
-        """Cota superior: suma de max(opciones) por fuente sin tapear."""
-        total = 0
+        """Cota superior: suma de max(opciones) por fuente sin tapear + pool flotante."""
+        total = self.mana_pool
         for p in self.mana_sources():
             opts = p.card.produces(p, self)
             if opts:
@@ -410,16 +411,24 @@ class Player:
     def can_pay(self, cost: Cost) -> bool:
         if cost is None:
             return True
-        return self._assign(cost) is not None
+        return self._assign(self._pool_reduced(cost)) is not None
+
+    def _pool_reduced(self, cost: Cost) -> Cost:
+        """El maná flotante (genérico) cubre parte del coste genérico."""
+        if self.mana_pool <= 0 or cost is None:
+            return cost
+        return Cost(max(0, cost.generic - self.mana_pool), cost.pips)
 
     def pay(self, cost: Cost) -> bool:
         if cost is None:
             return True
-        plan = self._assign(cost)
+        use = min(self.mana_pool, cost.generic) if self.mana_pool > 0 else 0
+        plan = self._assign(self._pool_reduced(cost))
         if plan is None:
             return False
         for perm, _color, _amt in plan:
             perm.tapped = True
+        self.mana_pool -= use
         return True
 
 
@@ -1701,6 +1710,7 @@ class Game:
             perm.activated_this_turn = False
         p.lands_played = 0
         p.draws_this_turn = 0
+        p.mana_pool = 0              # el maná flotante se vacía al empezar el turno
         self.fog_turn = False        # "prevenir daño de combate este turno" se agota
 
         # UPKEEP

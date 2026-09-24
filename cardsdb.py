@@ -551,12 +551,13 @@ def _parse_activated(oracle: str, name: str = ""):
         tap = any(s.upper() == "T" for s in syms)
         mana = "".join("{%s}" % s for s in syms if s.upper() != "T")
         cost = parse_cost(mana_cost_to_str(mana)) if mana else parse_cost("0")
+        # las habilidades de "agregar maná" ya se cubren con `produces`: no las
+        # dupliquemos como activables (si no, se contaría el maná dos veces).
+        if re.search(r"\badd\b.*\bmana\b", body, re.I) or re.match(
+                r"add(\s*\{[wubrgc0-9/x]+\})+\s*\.?$", body.strip(), re.I):
+            continue
         eff, spec, count = _fragment_effect(body)
         if eff is None:
-            # las habilidades de "agregar maná" ya se cubren con `produces`: no las
-            # dupliquemos como activables.
-            if re.search(r"\badd\b.*\bmana\b", body, re.I):
-                continue
             # efecto no modelado: EXPONER igual la habilidad con un respaldo visible,
             # así el jugador puede activarla (mismo criterio que los modos).
             eff = (lambda g, c, tg=None, _l=_short_label(body):
@@ -1264,12 +1265,156 @@ _KEYWORD_WORDS = [
 ]
 
 
+def _count_fn(phrase: str):
+    """Devuelve una función f(game, ctrl) -> int para expresiones de cantidad
+    variable comunes ('the number of creatures you control', 'cards in your hand',
+    'Elves you control', 'Swamps you control'…) o None si no se reconoce."""
+    p = (phrase or "").lower()
+    if "cards in your hand" in p or "in your hand" in p:
+        return lambda g, c: len(c.hand)
+    if "lands you control" in p:
+        return lambda g, c: len(c.lands())
+    if "artifacts you control" in p:
+        return lambda g, c: sum(1 for pm in c.battlefield if "artifact" in pm.card.types)
+    if "creatures you control" in p:
+        return lambda g, c: len(c.creatures())
+    m = re.search(r"number of ([\w']+?) (?:you control|on the battlefield)", p)
+    if m:
+        w = _singular(m.group(1))
+        if w == "creature":
+            return lambda g, c: len(c.creatures())
+        if w == "land":
+            return lambda g, c: len(c.lands())
+        if w == "artifact":
+            return lambda g, c: sum(1 for pm in c.battlefield if "artifact" in pm.card.types)
+        # subtipo (Elf, Goblin, Swamp, Island…): cuenta permanentes con ese subtipo
+        return lambda g, c, _w=w: sum(
+            1 for pm in c.battlefield if _w in {s.lower() for s in pm.card.subtypes})
+    return None
+
+
+def _singular(w):
+    """Singular aproximado de un sustantivo (para 'Elves'->'elf', 'Allies'->'ally')."""
+    w = (w or "").lower()
+    if w.endswith("ves"):
+        return w[:-3] + "f"
+    if w.endswith("ies"):
+        return w[:-3] + "y"
+    if w.endswith("s"):
+        return w[:-1]
+    return w
+
+
 def _generic_amount_effect(oracle: str):
     """Efecto APROXIMADO con monto, deducido del oracle. Devuelve una función
     eff(game, ctrl, *_) o None. Cubre patrones comunes de creaturas/hechizos que
     la capa por tags (wipe/removal/draw/ramp) no modela. Prioridad: fichas >
     quema a cada rival > ganancia de vida > mill propio."""
     t = re.sub(r"\s+", " ", (oracle or "").lower())
+
+    # ritual de maná: "add {C}{C}{C}", "add {G}{G}", "add N mana of any color" ->
+    # maná flotante (genérico) que sirve para el próximo hechizo del mismo turno.
+    mr = re.match(r"add (.+)", t)
+    if mr and ("mana" in mr.group(1) or re.search(r"\{[wubrgc0-9]\}", mr.group(1))):
+        seg = mr.group(1)
+        syms = len(re.findall(r"\{[wubrgc]\}", seg))
+        if not syms:
+            mn = re.search(r"add (\w+) mana", t)
+            syms = _count_word(mn.group(1)) if mn else 0
+        if syms:
+            def eff(game, ctrl, *_a, _n=syms):
+                ctrl.mana_pool += _n
+                game.log(f"{ctrl.name} agrega {_n} maná (flotante)")
+            return eff
+
+    # cantidad VARIABLE ligada a un conteo ("equal to the number of …" o
+    # "where X is the number of …"):
+    mvar = re.search(r"(?:equal to the|where x is the) (number of [\w' ]+?)"
+                     r"(?:\.|,| that|$)", t)
+    cnt = _count_fn(mvar.group(1)) if mvar else None
+    if cnt is not None:
+        if re.search(r"\bdraws? cards?\b", t) or "draw that many" in t:
+            def eff(game, ctrl, *_a, _c=cnt):
+                ctrl.draw(max(0, _c(game, ctrl)), game)
+            return eff
+        if re.search(r"gains? life", t) or re.search(r"gain that (?:much|many) life", t):
+            def eff(game, ctrl, *_a, _c=cnt):
+                ctrl.life += max(0, _c(game, ctrl))
+            return eff
+        if re.search(r"(?:each opponent|target (?:player|opponent)) loses", t):
+            each = "each opponent" in t
+
+            def eff(game, ctrl, *_a, _c=cnt, _each=each):
+                n = max(0, _c(game, ctrl))
+                opps = game.opponents(ctrl)
+                for o in (opps if _each else opps[:1]):
+                    o.life -= n
+                game.log(f"{ctrl.name}: el rival pierde {n} de vida")
+            return eff
+        if re.search(r"deals? damage", t):
+            def eff(game, ctrl, *_a, _c=cnt):
+                n = max(0, _c(game, ctrl))
+                opps = game.opponents(ctrl)
+                if opps and n:
+                    tgt = min(opps, key=lambda o: o.life)
+                    game.deal_damage(None, tgt, n)
+                    game.log(f"{ctrl.name}: {n} de daño a {tgt.name}")
+            return eff
+        if re.search(r"gets \+x/\+x", t):
+            def eff(game, ctrl, *_a, _c=cnt):
+                n = max(0, _c(game, ctrl))
+                pool = list(ctrl.creatures())
+                if not pool:
+                    return
+                pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+                cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm) for pm in pool]
+
+                def _do(pm, _n=n):
+                    pm.temp_pt[0] += _n
+                    pm.temp_pt[1] += _n
+                    game.sba()
+                _human_target_choice(game, ctrl, "etb_target",
+                                     f"Elegí una criatura (+{n}/+{n})", cands, _do)
+            return eff
+
+    # regenerar una criatura objetivo: aproximado como indestructible hasta fin de turno
+    if re.search(r"regenerate target creature", t):
+        def eff(game, ctrl, *_a):
+            pool = list(ctrl.creatures())
+            if not pool:
+                return
+            pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm) for pm in pool]
+
+            def _do(pm):
+                pm.temp_keywords.add("indestructible")
+                game.log(f"{pm.name} queda protegida (regeneración) este turno")
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí una criatura a regenerar", cands, _do)
+        return eff
+
+    # +1/+1 en masa: "put N +1/+1 counters on each creature you control"
+    m = re.search(r"put (\w+) \+1/\+1 counters? on each creature(?: you control)?", t)
+    if m and (n := _count_word(m.group(1))):
+        yours = "you control" in t
+        def eff(game, ctrl, *_a, _n=n, _yours=yours):
+            pls = [ctrl] if _yours else game.players
+            for pl in pls:
+                for pm in pl.creatures():
+                    game.add_counters(pm, "+1/+1", _n)
+        return eff
+
+    # distribuir N contadores +1/+1 entre criaturas objetivo: aprox -> a la mejor tuya
+    m = re.search(r"distribute (\w+) \+1/\+1 counters? among", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, *_a, _n=n):
+            pool = list(ctrl.creatures())
+            if not pool:
+                return
+            pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+            game.add_counters(pool[0], "+1/+1", _n)
+            game.log(f"{ctrl.name} reparte {_n} contadores +1/+1")
+        return eff
 
     # fin de partida directo
     if "you win the game" in t:
