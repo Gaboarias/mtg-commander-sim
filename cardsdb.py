@@ -2699,6 +2699,31 @@ def build_card_from_data(data: dict) -> Card:
         if mr:
             card.cost_reduction = int(mr.group(1))
 
+    # efectos de REEMPLAZO estáticos (dobladores / muerte->exilio)
+    _rt = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "").lower())
+    if re.search(r"twice that many (?:of those )?tokens", _rt) or \
+            "create twice as many" in _rt:
+        card.token_double = True
+    mch = re.search(r"twice that many (?:of those )?counters", _rt)
+    if mch:
+        only11 = "+1/+1" in _rt
+        card.counter_modifier = (lambda g, perm, kind, n, _o=only11:
+                                 n * 2 if (not _o or kind == "+1/+1") else n)
+        if "token" in _rt:                         # Doubling Season dobla ambos
+            card.token_double = True
+    elif re.search(r"that many (?:of those counters )?plus one", _rt) and "+1/+1" in _rt:
+        card.counter_modifier = (lambda g, perm, kind, n:
+                                 n + 1 if kind == "+1/+1" else n)
+    if re.search(r"deals? double that damage", _rt):
+        card.damage_double = "you" if "source you control" in _rt else "all"
+    if re.search(r"if [^.]*would die, exile (?:it|that creature|them) instead", _rt):
+        if "you control" in _rt:
+            card.die_exile = "you"
+        elif "opponent" in _rt:
+            card.die_exile = "opp"
+        else:
+            card.die_exile = "all"
+
     return cards.attach_generic_effects(card)
 
 

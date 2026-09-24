@@ -82,7 +82,10 @@ def make_token(game, player, name, power, toughness, kw=(), subtypes=()):
         subtypes=set(subtypes),
         tags={"creature"},
     )
-    return game.move_to_battlefield(tok, player, is_token=True)
+    last = None
+    for _ in range(game.token_multiplier(player)):     # dobladores de fichas
+        last = game.move_to_battlefield(_copy.deepcopy(tok), player, is_token=True)
+    return last
 
 
 def make_copy_token(game, player, src_card):
@@ -91,9 +94,11 @@ def make_copy_token(game, player, src_card):
     ganchos de habilidad (ETB, muerte, activadas, disparadas, estáticas, lealtad),
     no solo P/T + keywords. Las funciones se comparten por referencia (deepcopy las
     trata como átomos); los sets se duplican para no compartir estado con el original."""
-    c = _copy.deepcopy(src_card)
     # una copia no es la carta comandante ni conserva historial de zona
-    return game.move_to_battlefield(c, player, is_token=True)
+    last = None
+    for _ in range(game.token_multiplier(player)):     # dobladores de fichas
+        last = game.move_to_battlefield(_copy.deepcopy(src_card), player, is_token=True)
+    return last
 
 
 def make_resource_token(game, player, kind):
@@ -115,7 +120,10 @@ def make_resource_token(game, player, kind):
         tags={"token", k} if k else {"token"},
         produces=produces,
     )
-    return game.move_to_battlefield(tok, player, is_token=True)
+    last = None
+    for _ in range(game.token_multiplier(player)):     # dobladores de fichas
+        last = game.move_to_battlefield(_copy.deepcopy(tok), player, is_token=True)
+    return last
 
 
 # --------------------------------------------------------------------------- #

@@ -3321,6 +3321,69 @@ def test_bot_holds_removal_for_real_threats():
     assert rem not in me.hand                       # bajo presión -> lo usa
 
 
+def test_replacement_token_doubler():
+    import cardsdb, cards
+    g, me, op = _duel()
+    pl = cardsdb.build_card_from_data({
+        "name": "Parallel Lives", "type_line": "Enchantment", "mana_cost": "{3}{G}",
+        "oracle_text": "If an effect would create one or more tokens under your "
+                       "control, it creates twice that many of those tokens instead."})
+    g.move_to_battlefield(pl, me)
+    n0 = len(me.battlefield)
+    cardsdb.build_card_from_data({
+        "name": "Maker", "type_line": "Sorcery", "mana_cost": "{2}",
+        "oracle_text": "Create a 1/1 white Soldier creature token."}).on_cast_resolve(g, me, [])
+    assert len(me.battlefield) - n0 == 2
+
+
+def test_replacement_counter_doublers():
+    import cardsdb, cards
+    g, me, op = _duel()
+    ds = cardsdb.build_card_from_data({
+        "name": "Doubling Season", "type_line": "Enchantment", "mana_cost": "{4}{G}",
+        "oracle_text": "If an effect would put one or more counters on a permanent "
+                       "you control, it puts twice that many of those counters on "
+                       "that permanent instead."})
+    g.move_to_battlefield(ds, me)
+    c = g.move_to_battlefield(cards.creature("K", "1G", 2, 2), me)
+    g.add_counters(c, "+1/+1", 1)
+    assert c.counters.get("+1/+1") == 2
+    g2, me2, op2 = _duel()
+    hs = cardsdb.build_card_from_data({
+        "name": "Hardened Scales", "type_line": "Enchantment", "mana_cost": "{G}",
+        "oracle_text": "If one or more +1/+1 counters would be put on a creature you "
+                       "control, that many plus one +1/+1 counters are put on it instead."})
+    g2.move_to_battlefield(hs, me2)
+    c2 = g2.move_to_battlefield(cards.creature("K", "1G", 2, 2), me2)
+    g2.add_counters(c2, "+1/+1", 1)
+    assert c2.counters.get("+1/+1") == 2
+
+
+def test_replacement_damage_doubler():
+    import cardsdb
+    g, me, op = _duel()
+    fr = cardsdb.build_card_from_data({
+        "name": "Furnace of Rath", "type_line": "Enchantment", "mana_cost": "{3}{R}",
+        "oracle_text": "If a source would deal damage to a permanent or player, it "
+                       "deals double that damage to that permanent or player instead."})
+    g.move_to_battlefield(fr, me)
+    l0 = op.life
+    g.deal_damage(None, op, 3)
+    assert op.life == l0 - 6
+
+
+def test_replacement_die_to_exile():
+    import cardsdb, cards
+    g, me, op = _duel()
+    rip = cardsdb.build_card_from_data({
+        "name": "Exile Field", "type_line": "Enchantment", "mana_cost": "{2}{W}",
+        "oracle_text": "If a creature would die, exile it instead."})
+    g.move_to_battlefield(rip, me)
+    v = g.move_to_battlefield(cards.creature("V", "1B", 2, 2), op)
+    g.to_graveyard(v, "test")
+    assert v.card in op.exile and v.card not in op.graveyard
+
+
 def test_precons_have_even_coverage():
     # los tres precons registrados deben tener cobertura de efectos comparable
     # (no que un mazo esté programado y los otros sean vainilla).

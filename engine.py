@@ -131,6 +131,9 @@ class Card:
     triggers: dict = field(default_factory=dict)   # {evento: (game, perm, **kw)}
     activated: Optional[Callable] = None           # declarado, sin invocar todavia
     counter_modifier: Optional[Callable] = None    # (game, perm, kind, n) -> n' (reemplazo)
+    token_double: bool = False                     # dobla las fichas que creás (Doubling Season)
+    damage_double: Optional[str] = None            # "you"|"all": dobla el daño (Furnace of Rath)
+    die_exile: Optional[str] = None                # "all"|"you"|"opp": muertes van al exilio
     static_mod: Optional[Callable] = None          # (fuente, objetivo) -> (dP, dT) anthem/capas
     loyalty_abilities: tuple = ()                  # planeswalker: ((coste_lealtad, efecto), ...)
     loyalty_texts: tuple = ()                       # texto legible por habilidad de lealtad
@@ -784,6 +787,41 @@ class Game:
             self.sba()
 
     # -- movimiento de cartas -------------------------------------------- #
+    # -- efectos de reemplazo (dobladores / muerte->exilio) -------------- #
+    def token_multiplier(self, player: "Player") -> int:
+        """×2 por cada permanente del jugador que doble sus fichas (Doubling
+        Season, Parallel Lives, Anointed Procession)."""
+        mult = 1
+        for pm in player.battlefield:
+            if getattr(pm.card, "token_double", False):
+                mult *= 2
+        return mult
+
+    def damage_multiplier(self, source) -> int:
+        """×2 por cada doblador de daño en juego cuyo alcance cubra a `source`.
+        'all' cubre cualquier fuente; 'you' solo fuentes del controlador."""
+        mult = 1
+        src_ctrl = source.controller if isinstance(source, Permanent) else None
+        for pl in self.players:
+            for pm in pl.battlefield:
+                scope = getattr(pm.card, "damage_double", None)
+                if scope == "all" or (scope == "you" and src_ctrl is pm.controller):
+                    mult *= 2
+        return mult
+
+    def _dies_to_exile(self, perm: "Permanent") -> bool:
+        """¿Una muerte de `perm` se reemplaza por exilio? (odio de cementerio)."""
+        for pl in self.players:
+            for pm in pl.battlefield:
+                scope = getattr(pm.card, "die_exile", None)
+                if scope == "all":
+                    return True
+                if scope == "you" and perm.controller is pm.controller:
+                    return True
+                if scope == "opp" and perm.controller is not pm.controller:
+                    return True
+        return False
+
     def add_counters(self, perm: Permanent, kind: str, n: int):
         """Pone `n` contadores de tipo `kind` sobre `perm`, aplicando los
         modificadores de reemplazo (doblar, sumar) de los permanentes de su
@@ -864,6 +902,11 @@ class Game:
             ctrl.command.append(perm.card)
             self.log(f"{perm.name} vuelve a la zona de mando")
             return
+        # reemplazo "si moriría, exíliala en su lugar" (odio de cementerio)
+        if perm.card.is_creature() and self._dies_to_exile(perm):
+            ctrl.exile.append(perm.card)
+            self.log(f"{perm.name} es exiliada en vez de ir al cementerio")
+            return
         ctrl.graveyard.append(perm.card)
         self.emit("to_graveyard", player=ctrl, card=perm.card)
 
@@ -927,6 +970,11 @@ class Game:
     def deal_damage(self, source, target, amount: int, combat: bool = False):
         if amount <= 0:
             return
+        # dobladores de daño (Furnace of Rath / Gratuitous Violence) — reemplazo
+        # que se aplica antes de la prevención.
+        mult = self.damage_multiplier(source)
+        if mult > 1:
+            amount *= mult
         # prevención de daño (escudos "hasta el fin del turno")
         if isinstance(target, Player):
             if getattr(target, "prevent_all", False):
