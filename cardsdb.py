@@ -930,6 +930,29 @@ def _wire_aura(card, oracle):
         card.static_mod = (lambda src, target, _d=(dp, dt):
                            _d if target is getattr(src, "enchanting", None) else (0, 0))
 
+    # auras de "cambio de características" (Darksteel Mutation, Kenrith's
+    # Transformation, Lignify, Song of the Dryads, Imprisoned in the Moon…):
+    # fijan P/T base y/o le quitan las habilidades al huésped -> removal blando.
+    ab_off = bool(re.search(r"enchanted (?:creature|permanent).{0,60}?"
+                            r"loses all abilities", t)) or \
+        bool(re.search(r"loses all abilities", t))
+    mset = re.search(r"(?:base power and toughness|base power and toughness are|"
+                     r"has base power and toughness)\s*(\d+)/(\d+)", t)
+    if not mset:
+        mset = re.search(r"is a[n]? [\w ]*?(\d+)/(\d+)[\w ]*?(?:creature|elk|frog|"
+                         r"treefolk|bird)", t)
+    if mset:
+        card.aura_pt_set = (int(mset.group(1)), int(mset.group(2)))
+    # "is a land / isn't a creature": lo neutraliza (0/0 y sin habilidades)
+    if re.search(r"is a[n]? [\w ]*land\b", t) or "isn't a creature" in t or \
+       "is no longer a creature" in t:
+        card.aura_pt_set = card.aura_pt_set or (0, 0)
+        ab_off = True
+    if ab_off:
+        card.aura_abilities_off = True
+    if ab_off or card.aura_pt_set:
+        bad = True                     # es removal: se anexa a criatura rival
+
     def _attach(game, ctrl, perm, _bad=bad):
         if _bad:
             pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield if pm.is_creature()]

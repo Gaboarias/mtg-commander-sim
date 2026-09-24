@@ -159,6 +159,8 @@ class Card:
     x_spell: bool = False                            # el coste tiene {X} (se elige al lanzar)
     etb_counters: dict = field(default_factory=dict)  # "entra con N contadores": {kind: n}
     aura_keywords: set = field(default_factory=set)   # aura: keywords que da al huésped
+    aura_pt_set: tuple = ()                            # aura: fija P/T base del huésped (p,t)
+    aura_abilities_off: bool = False                   # aura: el huésped pierde sus habilidades
     anthem_keywords: set = field(default_factory=set)  # anthem: keyword a tus criaturas
     anthem_others: bool = False                       # el anthem excluye a la fuente
     gy_grant: dict = field(default_factory=dict)     # habilidad ESTÁTICA desde el cementerio
@@ -220,14 +222,32 @@ class Permanent:
         self.activated_this_turn = False  # planeswalker: una activacion por turno
         self.enchanting = None           # si es un aura: el permanente al que anexó
 
+    def _mutation(self):
+        """Auras de 'cambio de características' anexadas a este permanente
+        (Darksteel Mutation, Kenrith's Transformation, Lignify…): devuelve
+        (pt_set|None, abilities_off). La última anexada gana."""
+        pt, off = None, False
+        if self.game is None:
+            return pt, off
+        for src in self.game.all_permanents():
+            if getattr(src, "enchanting", None) is self:
+                if getattr(src.card, "aura_pt_set", ()):
+                    pt = src.card.aura_pt_set
+                if getattr(src.card, "aura_abilities_off", False):
+                    off = True
+        return pt, off
+
+    def abilities_off(self) -> bool:
+        return self._mutation()[1]
+
     def _static_delta(self):
         """Suma (dP, dT) de los modificadores estaticos (anthems/capas) que
-        aplican a este permanente."""
+        aplican a este permanente. Una fuente con habilidades anuladas no aporta."""
         dp = dt = 0
         if self.game is not None and self.is_creature():
             for src in self.game.all_permanents():
                 sm = src.card.static_mod
-                if sm is not None:
+                if sm is not None and not src.abilities_off():
                     d = sm(src, self)
                     if d:
                         dp += d[0]
@@ -239,26 +259,34 @@ class Permanent:
     def name(self) -> str:
         return self.card.name
 
+    def _base_pt(self):
+        pt, _off = self._mutation()
+        return pt if pt else (self.card.power, self.card.toughness)
+
     @property
     def power(self) -> int:
-        return (self.card.power + self.counters.get("+1/+1", 0)
+        return (self._base_pt()[0] + self.counters.get("+1/+1", 0)
                 - self.counters.get("-1/-1", 0)
                 + self._static_delta()[0] + self.temp_pt[0])
 
     @property
     def toughness(self) -> int:
-        return (self.card.toughness + self.counters.get("+1/+1", 0)
+        return (self._base_pt()[1] + self.counters.get("+1/+1", 0)
                 - self.counters.get("-1/-1", 0)
                 + self._static_delta()[1] + self.temp_pt[1])
 
     @property
     def keywords(self) -> set:
+        if self.abilities_off():
+            return set()
         return set(self.card.keywords) | self.temp_keywords
 
     def is_creature(self) -> bool:
         return self.card.is_creature()
 
     def has(self, kw: str) -> bool:
+        if self.abilities_off():
+            return False                 # perdió todas sus habilidades (mutación)
         if kw in self.card.keywords or kw in self.temp_keywords:
             return True
         # keywords otorgadas por efectos estáticos (p. ej. Anger desde el cementerio)

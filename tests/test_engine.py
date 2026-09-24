@@ -3321,6 +3321,43 @@ def test_bot_holds_removal_for_real_threats():
     assert rem not in me.hand                       # bajo presión -> lo usa
 
 
+def test_mutation_aura_neutralizes_creature():
+    import cardsdb, cards
+    g, me, op = _duel()
+    victim = g.move_to_battlefield(
+        cards.creature("Dragon", "4U", 6, 6, kw=("flying", "indestructible")), op)
+    dm = cardsdb.build_card_from_data({
+        "name": "Darksteel Mutation", "type_line": "Enchantment — Aura",
+        "mana_cost": "{1}{W}",
+        "oracle_text": "Enchant creature\nEnchanted creature is an artifact Insect "
+                       "with base power and toughness 0/1 and loses all abilities."})
+    assert dm.aura_pt_set == (0, 1) and dm.aura_abilities_off
+    pm = g.move_to_battlefield(dm, me)
+    assert pm.enchanting is victim
+    assert (victim.power, victim.toughness) == (0, 1)
+    assert not victim.has("flying") and not victim.has("indestructible")
+
+
+def test_mutation_aura_turns_off_anthem_source():
+    import cardsdb, cards
+    g, me, op = _duel()
+    anth = cardsdb.build_card_from_data({
+        "name": "Field Marshal", "type_line": "Creature — Human", "mana_cost": "{3}{W}{W}",
+        "power": "6", "toughness": "6",
+        "oracle_text": "Other creatures you control get +1/+1."})
+    src = g.move_to_battlefield(anth, op)     # es la más grande -> recibe el aura
+    buddy = g.move_to_battlefield(cards.creature("Ally", "1W", 2, 2), op)
+    assert buddy.power == 3
+    kt = cardsdb.build_card_from_data({
+        "name": "Kenrith's Transformation", "type_line": "Enchantment — Aura",
+        "mana_cost": "{1}{G}",
+        "oracle_text": "Enchant creature\nEnchanted creature loses all abilities and "
+                       "has base power and toughness 3/3."})
+    g.move_to_battlefield(kt, me)
+    assert src.abilities_off()
+    assert buddy.power == 2
+
+
 def test_replacement_token_doubler():
     import cardsdb, cards
     g, me, op = _duel()
