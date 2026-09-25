@@ -437,14 +437,18 @@ def MerodeadorDeTumbas():
 
 def SevinnesReclamation():
     def eff(game, ctrl, targets):
-        # devuelve un permanente de coste <=3 del cementerio a la mano
+        from cardsdb import _pick_card_from_zone
+        # devuelve un permanente de coste <=3 del cementerio a la mano (el humano elige)
         opts = [c for c in ctrl.graveyard
                 if c.cost and c.cost.cmc <= 3 and ({"creature", "artifact",
                  "enchantment"} & c.types)]
-        if opts:
-            card = max(opts, key=lambda c: c.cost.cmc)
+        opts.sort(key=lambda c: c.cost.cmc, reverse=True)   # bot: el de mayor CMV
+
+        def _do(card):
             game.leave_graveyard(ctrl, card, dest="hand")
             game.log(f"{ctrl.name}: Sevinne's Reclamation recupera {card.name}")
+        _pick_card_from_zone(game, ctrl, opts, _do,
+                             "Elegí un permanente (CMV≤3) para devolver a tu mano")
     return Card("Sevinne's Reclamation", {"sorcery"}, parse_cost("1W"),
                 on_cast_resolve=eff, tags={"engine", "gy_exile"}, color_id={W})
 
@@ -464,12 +468,16 @@ def UnderworldBreach():
 
 def SunTitan():
     def etb(game, ctrl, perm):
+        from cardsdb import _pick_card_from_zone
         opts = [c for c in ctrl.graveyard
                 if c.cost and c.cost.cmc <= 3 and "creature" in c.types]
-        if opts:
-            card = max(opts, key=lambda c: c.cost.cmc)
+        opts.sort(key=lambda c: c.cost.cmc, reverse=True)
+
+        def _do(card):
             reanimate(game, ctrl, card)
             game.log(f"{ctrl.name}: Sun Titan reanima {card.name}")
+        _pick_card_from_zone(game, ctrl, opts, _do,
+                             "Sun Titan: elegí una criatura (CMV≤3) para reanimar")
     c = creature("Sun Titan", "4WW", 6, 6, kw=("vigilance",),
                  tags=("engine", "gy_exile"), color_id=(W,))
     c.on_etb = etb
@@ -478,11 +486,15 @@ def SunTitan():
 
 def KarmicGuide():
     def etb(game, ctrl, perm):
+        from cardsdb import _pick_card_from_zone
         opts = [c for c in ctrl.graveyard if "creature" in c.types]
-        if opts:
-            card = max(opts, key=lambda c: c.cost.cmc if c.cost else 0)
+        opts.sort(key=lambda c: c.cost.cmc if c.cost else 0, reverse=True)
+
+        def _do(card):
             reanimate(game, ctrl, card)
             game.log(f"{ctrl.name}: Karmic Guide reanima {card.name}")
+        _pick_card_from_zone(game, ctrl, opts, _do,
+                             "Karmic Guide: elegí una criatura para reanimar")
     c = creature("Karmic Guide", "3WW", 2, 2, kw=("flying",),
                  tags=("engine", "gy_exile"), color_id=(W,))
     c.on_etb = etb

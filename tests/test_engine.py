@@ -5239,6 +5239,41 @@ def test_token_with_counters_and_subtype():
     assert t.counters.get("+1/+1") == 2 and t.power == 5 and t.toughness == 5
 
 
+def test_edict_human_chooses_on_own_turn_else_auto():
+    import cards
+    from cardsdb import build_card_from_data
+    def edict():
+        return build_card_from_data({
+            "name": "Edict", "mana_cost": "{1}{B}", "cmc": 2, "type_line": "Sorcery",
+            "oracle_text": "Target player sacrifices a creature.", "keywords": []})
+    # el rival (bot) sacrifica su más débil cuando el humano lanza el edicto
+    g, me, op = _duel(); g.interactive_human = me; g.active_index = 0
+    w = g.move_to_battlefield(cards.creature("Weak", "1G", 1, 1), op)
+    s = g.move_to_battlefield(cards.creature("Strong", "2G", 5, 5), op)
+    e = edict(); e.on_cast_resolve(g, me, e); g.resolve_stack()
+    assert w not in op.battlefield and s in op.battlefield
+    # cuando es el humano quien debe sacrificar EN SU TURNO -> modal
+    from cardsdb import _human_or_auto_sacrifice
+    g2, me2, op2 = _duel(); g2.interactive_human = me2; g2.active_index = 0
+    g2.move_to_battlefield(cards.creature("A", "1G", 2, 2), me2)
+    _human_or_auto_sacrifice(g2, me2, "elegí")
+    assert g2.pending_choice and g2.pending_choice["kind"] == "etb_target"
+    # en el turno de un bot NO se abre modal para el humano (evita que se cuelgue)
+    g3, me3, op3 = _duel(); g3.interactive_human = me3; g3.active_index = 1
+    g3.move_to_battlefield(cards.creature("A", "1G", 2, 2), me3)
+    _human_or_auto_sacrifice(g3, me3, "elegí")
+    assert g3.pending_choice is None
+
+
+def test_forced_discard_human_prompts_on_own_turn():
+    import cards
+    from cardsdb import _human_or_auto_discard
+    g, me, op = _duel(); g.interactive_human = me; g.active_index = 0
+    me.hand = [cards.creature("A", "1G", 1, 1), cards.creature("B", "1G", 2, 2)]
+    _human_or_auto_discard(g, me, 1)
+    assert g.pending_choice and g.pending_choice["kind"] == "discard"
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

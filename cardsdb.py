@@ -405,11 +405,18 @@ def _fight_effect():
         mine = [c for c in ctrl.creatures()]
         if not mine:
             return
-        fighter = max(mine, key=lambda c: c.power)
-        game.log(f"{fighter.name} pelea con {tg.name}")
-        game.deal_damage(fighter, tg, fighter.power, combat=False)
-        game.deal_damage(tg, fighter, tg.power, combat=False)
-        game.sba()
+        mine.sort(key=lambda c: c.power, reverse=True)   # el bot pelea con la más fuerte
+
+        def _do(fighter, _tg=tg):
+            if fighter not in fighter.controller.battlefield or _tg not in _tg.controller.battlefield:
+                return
+            game.log(f"{fighter.name} pelea con {_tg.name}")
+            game.deal_damage(fighter, _tg, fighter.power, combat=False)
+            game.deal_damage(_tg, fighter, _tg.power, combat=False)
+            game.sba()
+        cands = [(f"{c.name} {c.power}/{c.toughness}", c) for c in mine]
+        _human_target_choice(game, ctrl, "etb_target",
+                             f"Elegí tu criatura para pelear con {tg.name}", cands, _do)
     return eff
 
 
@@ -1494,6 +1501,75 @@ def _pick_card_from_zone(game, ctrl, cards_list, apply_one, prompt, kind="reanim
         apply_one(cands[0])
 
 
+def _prompt_safe(game, player):
+    """¿Es seguro pausar con un pending_choice para `player`? Solo si es el humano
+    Y es su propio turno (resolve_stack no pausa en el turno de un bot, así que un
+    modal ahí quedaría colgado). Si no, se auto-resuelve."""
+    hu = getattr(game, "interactive_human", None)
+    if player is not hu or hu is None:
+        return False
+    try:
+        return game.ap() is hu
+    except Exception:
+        return False
+
+
+def _human_or_auto_sacrifice(game, player, prompt="Elegí una criatura para sacrificar",
+                             pool=None):
+    """El jugador `player` sacrifica una criatura: si es el humano en su turno, elige
+    en un modal; si no, se sacrifica la más débil."""
+    cr = list(pool) if pool is not None else list(player.creatures())
+    if not cr:
+        return
+    cr.sort(key=lambda x: (x.power, x.toughness))   # auto: la más débil
+
+    def _do(pm):
+        if pm in pm.controller.battlefield:
+            game.to_graveyard(pm, "sacrificio forzado")
+            game.log(f"{pm.controller.name} sacrifica {pm.name}")
+            game.sba()
+    if _prompt_safe(game, player):
+        cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm) for pm in cr]
+        _human_target_choice(game, player, "etb_target", prompt, cands, _do)
+    else:
+        _do(cr[0])
+
+
+def _human_or_auto_discard(game, player, n):
+    """El jugador `player` descarta N cartas: el humano elige (una a una en modal),
+    el bot usa su heurística (o la última carta)."""
+    n = len(player.hand) if n < 0 else n
+
+    def _one(remaining):
+        if remaining <= 0 or not player.hand:
+            return
+        if _prompt_safe(game, player):
+            def _apply(idx, _r=remaining):
+                if idx is not None and 0 <= idx < len(player.hand):
+                    c = player.hand.pop(idx)
+                    player.graveyard.append(c)
+                    game.emit("to_graveyard", player=player, card=c)
+                    game.log(f"{player.name} descarta {c.name}")
+                _one(_r - 1)                        # encadena la próxima
+            game.pending_choice = {
+                "kind": "discard",
+                "prompt": f"Descartá una carta ({remaining} restante(s)).",
+                "options": [{"i": j, "name": c.name, "is_land": c.is_land()}
+                            for j, c in enumerate(player.hand)],
+                "allow_none": False, "_apply": _apply,
+            }
+        else:
+            if player.policy and hasattr(player.policy, "choose_discard"):
+                c = player.policy.choose_discard(game, player)
+            else:
+                c = player.hand[-1]
+            player.hand.remove(c)
+            player.graveyard.append(c)
+            game.emit("to_graveyard", player=player, card=c)
+            _one(remaining - 1)
+    _one(n)
+
+
 def _count_word(w):
     """Palabra o dígito -> int, o None."""
     w = (w or "").strip().lower()
@@ -2309,11 +2385,10 @@ def _generic_amount_effect(oracle: str):
     if re.search(r"target (?:player|opponent) sacrifices? a creature", t):
         def eff(game, ctrl, *_a):
             for o in game.opponents(ctrl):
-                cr = o.creatures()
-                if cr:
-                    victim = min(cr, key=lambda x: (x.power, x.toughness))
-                    game.to_graveyard(victim, "sacrificio forzado")
-                    game.log(f"{o.name} sacrifica {victim.name}")
+                if o.creatures():
+                    # el DUEÑO elige qué sacrificar (modal si es humano, si no la más débil)
+                    _human_or_auto_sacrifice(
+                        game, o, f"{o.name}: elegí una criatura para sacrificar")
                     break                          # "target player": uno solo
         return eff
 
@@ -2329,18 +2404,8 @@ def _generic_amount_effect(oracle: str):
             opps = game.opponents(ctrl)
             picks = opps if _who == "each opponent" else opps[:1]
             for o in picks:
-                cnt = len(o.hand) if _n < 0 else _n
-                for _ in range(cnt):
-                    if not o.hand:
-                        break
-                    if o.policy and hasattr(o.policy, "choose_discard"):
-                        card = o.policy.choose_discard(game, o)
-                    else:
-                        card = o.hand[-1]
-                    o.hand.remove(card)
-                    o.graveyard.append(card)
-                    game.emit("to_graveyard", player=o, card=card)
-                game.log(f"{o.name} descarta {cnt} carta(s)")
+                # el que descarta elige sus cartas (modal si es humano)
+                _human_or_auto_discard(game, o, _n)
         return eff
 
     # robo para jugadores: "target player/you draws N" (el que lanza) / "each player".
@@ -2554,11 +2619,9 @@ def _generic_amount_effect(oracle: str):
     if re.search(r"each opponent sacrifices? a creature", t):
         def eff(game, ctrl, *_a):
             for o in game.opponents(ctrl):
-                cr = o.creatures()
-                if cr:
-                    victim = min(cr, key=lambda x: (x.power, x.toughness))
-                    game.to_graveyard(victim, "sacrificio forzado")
-                    game.log(f"{o.name} sacrifica {victim.name}")
+                if o.creatures():
+                    _human_or_auto_sacrifice(
+                        game, o, f"{o.name}: elegí una criatura para sacrificar")
         return eff
 
     # evasión: "target creature can't be blocked this turn" -> keyword temporal
