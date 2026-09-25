@@ -879,6 +879,11 @@ class InteractiveGame:
         self.g._resolve_combat(p, chosen)
         self.g.sba()
         self.attacked = True
+        # fase de combate adicional (Aggravated Assault, etc.): permite atacar de nuevo
+        if getattr(self.g, "extra_combats", 0) > 0 and len(self.g.alive()) > 1:
+            self.g.extra_combats -= 1
+            self.attacked = False
+            self.g.log(f"{p.name}: podés atacar otra vez (combate adicional)")
         if len(self.g.alive()) <= 1:
             self._finish()
         return self.state()

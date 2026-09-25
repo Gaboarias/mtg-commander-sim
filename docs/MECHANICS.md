@@ -144,6 +144,13 @@ dispara con muertes rivales).
   desanexa). *Living weapon* crea una ficha Germen 0/0 y se equipa.
 - **Fichas con X variable**: "create X … tokens, where X is the number of …" /
   "for each …" escala la cantidad con el conteo (Krenko, etc.).
+- **Vehículos (Crew N)**: habilidad "Tripular N" que tapea criaturas con poder
+  total ≥ N y convierte el vehículo en criatura hasta fin de turno
+  (`Permanent.temp_creature`); usa su P/T impresa y sus keywords.
+- **Fases de combate adicionales**: "there is an additional combat phase"
+  (Aggravated Assault…) suma a `game.extra_combats`; el turno corre combates
+  extra (headless) o deja al humano atacar de nuevo (interactivo); "untap all
+  creatures" endereza antes.
 
 ## Efectos de reemplazo
 

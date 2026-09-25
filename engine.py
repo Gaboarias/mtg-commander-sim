@@ -216,6 +216,7 @@ class Permanent:
         self.uid = _next_uid()
         self.temp_pt = [0, 0]            # +P/+T "hasta el fin del turno" (prowess, pumps)
         self.temp_keywords = set()       # keywords otorgadas "hasta el fin del turno"
+        self.temp_creature = False       # vehículo tripulado (crew): criatura este turno
         self.perma_keywords = set()      # keywords persistentes (soulbond, etc.)
         self.goaded = False              # goad: debe atacar en su próximo turno
         self.must_attack = False
@@ -284,7 +285,7 @@ class Permanent:
         return set(self.card.keywords) | self.temp_keywords | self.perma_keywords
 
     def is_creature(self) -> bool:
-        return self.card.is_creature()
+        return self.card.is_creature() or self.temp_creature
 
     def has(self, kw: str) -> bool:
         if self.abilities_off():
@@ -535,6 +536,7 @@ class Game:
         self.control_returns: list = []
         # turnos extra pendientes (para el mismo jugador)
         self.extra_turns: list = []
+        self.extra_combats = 0     # fases de combate adicionales este turno (Aggravated Assault…)
         self.spell_x = 0            # X elegido del último hechizo con {X} lanzado
         self.spells_this_turn = 0   # hechizos lanzados este turno (storm)
         self.damaged_players: set = set()   # jugadores dañados este turno (bloodthirst)
@@ -2335,6 +2337,7 @@ class Game:
         p.draws_this_turn = 0
         self.spells_this_turn = 0    # para storm (hechizos lanzados este turno)
         self.damaged_players = set() # para bloodthirst (rivales dañados este turno)
+        self.extra_combats = 0       # fases de combate adicionales se agotan por turno
         p.mana_pool = 0              # el maná flotante se vacía al empezar el turno
         for pl in self.players:      # los escudos de prevención se agotan por turno
             pl.prevent = 0
@@ -2366,6 +2369,7 @@ class Game:
             for perm in pl.battlefield:
                 perm.temp_pt = [0, 0]
                 perm.temp_keywords = set()
+                perm.temp_creature = False       # el vehículo deja de ser criatura
         # el goad/obligación de atacar del jugador activo se agota tras su combate
         for perm in p.battlefield:
             perm.goaded = False
@@ -2449,6 +2453,16 @@ class Game:
             p.policy.main_phase(self, p, second=True)
             self.resolve_stack()
         self.sba()
+
+        # fases de combate adicionales (Aggravated Assault, Combat Celebrant…)
+        guard = 0
+        while self.extra_combats > 0 and not p.lost and self.opponents(p) and guard < 10:
+            self.extra_combats -= 1
+            guard += 1
+            self.log(f"{p.name}: fase de combate adicional")
+            self.combat(p)
+            self.sba()
+        self.extra_combats = 0
 
         self.end_turn(p)
 

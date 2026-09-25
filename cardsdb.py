@@ -2257,6 +2257,19 @@ def _generic_amount_effect(oracle: str):
             game.log(f"{ctrl.name} tomará un turno extra")
         return eff
 
+    # fase de combate adicional (Aggravated Assault, Combat Celebrant, Moraug…);
+    # suele venir con "untap all creatures you control".
+    if re.search(r"additional combat phase", t):
+        untap = "untap all creatures" in t
+
+        def eff(game, ctrl, *_a, _u=untap):
+            if _u:
+                for pm in ctrl.creatures():
+                    pm.tapped = False
+            game.extra_combats = getattr(game, "extra_combats", 0) + 1
+            game.log(f"{ctrl.name}: fase de combate adicional este turno")
+        return eff
+
     # destruir HASTA N permanentes NO-criatura (Terastodon, Decimate-tipo). El humano
     # elige uno por uno (puede parar); por cada uno destruido su controlador crea una
     # ficha 3/3 verde Elefante si el texto lo indica (Terastodon).
@@ -3131,6 +3144,38 @@ def build_card_from_data(data: dict) -> Card:
     # auras: anexar a un huésped y bufearlo (antes de la capa ETB genérica)
     _wire_aura(card, data.get("oracle_text", ""))
     _wire_equipment(card, data.get("oracle_text", ""))
+
+    # Vehículos (crew N): habilidad que lo convierte en criatura este turno tapeando
+    # criaturas cuyo poder total sea >= N.
+    _mcrew = re.search(r"crew (\d+)", re.sub(r"\s+", " ",
+                       (data.get("oracle_text", "") or "").lower()))
+    if _mcrew and "vehicle" in {s.lower() for s in card.subtypes}:
+        _cn = int(_mcrew.group(1))
+
+        def _crew_eff(game, ctrl, perm, targets=None, _n=_cn):
+            if getattr(perm, "temp_creature", False):
+                return                          # ya está tripulado este turno
+            avail = [pm for pm in ctrl.battlefield
+                     if pm.is_creature() and not pm.tapped and pm is not perm]
+            avail.sort(key=lambda c: c.power)   # tapea las de menor poder primero
+            used, total = [], 0
+            for c in avail:
+                if total >= _n:
+                    break
+                used.append(c)
+                total += c.power
+            if total >= _n:
+                for c in used:
+                    c.tapped = True
+                perm.temp_creature = True
+                game.log(f"{ctrl.name} tripula {perm.name}")
+            else:
+                game.log(f"{ctrl.name}: no puede tripular {perm.name} (falta poder)")
+        crew_ab = {"cost": parse_cost("0"), "tap": False, "sacrifice_self": False,
+                   "sacrifice_other": None, "pay_life": 0, "discard": 0,
+                   "label": f"Tripular {_cn}", "effect": _crew_eff, "target_spec": None,
+                   "target_count": 1, "is_copy_ability": False, "sorcery_speed": True}
+        card.activated_abilities = tuple(card.activated_abilities or ()) + (crew_ab,)
 
     # jugar/lanzar desde el CEMENTERIO (flashback / escape / unearth / embalm /
     # disturb / recursión). Descriptor en card.gy_play; interactive lo ofrece.

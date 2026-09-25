@@ -5389,6 +5389,36 @@ def test_x_token_scales_with_count():
     assert len([p for p in me.battlefield if p.is_token]) == 3
 
 
+def test_crew_makes_vehicle_a_creature_until_end_of_turn():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me, op = _duel(); g.interactive_human = me; g.active_index = 0
+    veh = g.move_to_battlefield(build_card_from_data({
+        "name": "Copter", "mana_cost": "{2}", "cmc": 2, "type_line": "Artifact — Vehicle",
+        "power": "3", "toughness": "3", "oracle_text": "Flying\nCrew 1",
+        "keywords": ["Flying"]}), me)
+    pilot = g.move_to_battlefield(cards.creature("Pilot", "1G", 1, 1), me)
+    assert not veh.is_creature()
+    assert [a["label"] for a in veh.card.activated_abilities][-1] == "Tripular 1"
+    g.activate_ability(veh, len(veh.card.activated_abilities) - 1); g.resolve_stack()
+    assert veh.is_creature() and pilot.tapped and veh.has("flying")
+    g.end_turn(me)
+    assert not veh.is_creature()               # deja de ser criatura al fin del turno
+
+
+def test_additional_combat_phase():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me, op = _duel()
+    c = g.move_to_battlefield(cards.creature("Att", "1R", 3, 3), me); c.tapped = True
+    sp = build_card_from_data({
+        "name": "Aggravated", "mana_cost": "{2}{R}", "cmc": 3, "type_line": "Sorcery",
+        "oracle_text": ("Untap all creatures you control. There is an additional "
+                        "combat phase after this one."), "keywords": []})
+    sp.on_cast_resolve(g, me, sp)
+    assert g.extra_combats == 1 and not c.tapped
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
