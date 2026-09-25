@@ -28,7 +28,7 @@ KEYWORDS = {
     "hexproof", "defender", "flash",
     "shroud", "protection", "prowess", "infect", "toxic", "wither",
     "unblockable", "ward",
-    "fear", "intimidate", "shadow", "skulk", "horsemanship",
+    "fear", "intimidate", "shadow", "skulk", "horsemanship", "flanking",
 }
 
 
@@ -1104,8 +1104,9 @@ class Game:
             if src_perm and source.has("infect"):
                 target.poison += amount            # infect: veneno en vez de vida
             elif src_perm and source.has("toxic"):
-                target.life -= amount              # toxic: daño normal + veneno (aprox)
-                target.poison += 1
+                target.life -= amount              # toxic: daño normal
+                if combat:                         # + N veneno SOLO por daño de combate
+                    target.poison += getattr(source.card, "toxic_n", 1)
             else:
                 target.life -= amount
             # dano de comandante
@@ -2080,6 +2081,26 @@ class Game:
             if any(o is not a and o.power > a.power for o in declared):
                 self.add_counters(a, "+1/+1", 1)
                 self.log(f"Entrenamiento: {a.name} recibe un contador +1/+1")
+        # dethrone: al atacar al jugador con MÁS vida, un contador +1/+1.
+        max_life = max((pl.life for pl in self.players if not pl.lost), default=0)
+        for a in declared:
+            if getattr(a.card, "dethrone", False) and isinstance(a.attacking, Player) \
+                    and a.attacking.life >= max_life:
+                self.add_counters(a, "+1/+1", 1)
+                self.log(f"Destronar: {a.name} recibe un contador +1/+1")
+        # annihilator N: el defensor sacrifica N permanentes al ser atacado.
+        for a in declared:
+            n = getattr(a.card, "annihilator", 0)
+            if not n:
+                continue
+            defn = a.attacking if isinstance(a.attacking, Player) else a.attacking.controller
+            victims = self._sacrifice_candidates(defn, "permanent", n)
+            for v in victims:
+                self.to_graveyard(v, "aniquilador")
+            if victims:
+                self.log(f"Aniquilador {n}: {defn.name} sacrifica "
+                         f"{len(victims)} permanente(s)")
+                self.sba()
 
     def _apply_block_pairs(self, incoming: list, pairs: list):
         """pairs: [(atacante, bloqueador), ...] ya como Permanent."""
@@ -2124,6 +2145,52 @@ class Game:
         pairs = defender.policy.declare_blockers(self, defender, incoming)
         self._apply_block_pairs(incoming, pairs)
 
+    def _combat_block_triggers(self, declared: list):
+        """Disparos/estáticas que dependen de los bloqueadores ya asignados:
+        afflict, flanking, rampage, bushido."""
+        for a in declared:
+            blockers = list(a.blocked_by)
+            if not blockers:
+                continue
+            # afflict N: al ser bloqueada, el defensor pierde N vida.
+            n = getattr(a.card, "afflict", 0)
+            if n:
+                defn = (a.attacking if isinstance(a.attacking, Player)
+                        else a.attacking.controller)
+                defn.life -= n
+                self.log(f"Aflicción {n}: {defn.name} pierde {n} vida")
+            # flanking: cada bloqueador SIN flanking recibe -1/-1 hasta fin de turno.
+            if a.has("flanking"):
+                for b in blockers:
+                    if not b.has("flanking"):
+                        b.temp_pt[0] -= 1
+                        b.temp_pt[1] -= 1
+                self.log(f"Flanqueo: los bloqueadores de {a.name} reciben -1/-1")
+            # rampage N: +N/+N por cada bloqueador MÁS ALLÁ del primero.
+            r = getattr(a.card, "rampage", 0)
+            if r and len(blockers) > 1:
+                bonus = r * (len(blockers) - 1)
+                a.temp_pt[0] += bonus
+                a.temp_pt[1] += bonus
+                self.log(f"Arrasar {r}: {a.name} recibe +{bonus}/+{bonus}")
+            # bushido N: al ser bloqueada, +N/+N hasta fin de turno.
+            bu = getattr(a.card, "bushido", 0)
+            if bu:
+                a.temp_pt[0] += bu
+                a.temp_pt[1] += bu
+                self.log(f"Bushido {bu}: {a.name} recibe +{bu}/+{bu}")
+        # bushido también aplica al BLOQUEADOR que bloquea (una vez por combate).
+        seen = set()
+        for a in declared:
+            for b in a.blocked_by:
+                bu = getattr(b.card, "bushido", 0)
+                if bu and id(b) not in seen:
+                    seen.add(id(b))
+                    b.temp_pt[0] += bu
+                    b.temp_pt[1] += bu
+                    self.log(f"Bushido {bu}: {b.name} recibe +{bu}/+{bu}")
+        self.sba()
+
     def _finish_combat(self, declared: list):
         """Valida amenaza, aplica daño (primer golpe + normal) y limpia."""
         for a in declared:
@@ -2135,6 +2202,7 @@ class Game:
                 for b in a.blocked_by:
                     b.blocking.remove(a)
                 a.blocked_by = []
+        self._combat_block_triggers(declared)
         self._combat_damage(declared, first_strike=True)
         self.sba()
         self._combat_damage(declared, first_strike=False)

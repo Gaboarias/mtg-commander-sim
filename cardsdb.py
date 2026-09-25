@@ -413,6 +413,29 @@ def _fight_effect():
     return eff
 
 
+def _do_connive(game, perm, n=1):
+    """Connive N: roba N, descarta N (la política elige), y pone un +1/+1 en `perm`
+    por cada carta NO-tierra descartada."""
+    ctrl = perm.controller
+    ctrl.draw(n, game)
+    added = 0
+    for _ in range(n):
+        if not ctrl.hand:
+            break
+        if ctrl.policy and hasattr(ctrl.policy, "choose_discard"):
+            c = ctrl.policy.choose_discard(game, ctrl)
+        else:
+            c = ctrl.hand[-1]
+        ctrl.hand.remove(c)
+        ctrl.graveyard.append(c)
+        game.emit("to_graveyard", player=ctrl, card=c)
+        if not c.is_land():
+            added += 1
+    if added:
+        game.add_counters(perm, "+1/+1", added)
+    game.log(f"{perm.name} connive {n} (+{added}/+{added})")
+
+
 def _goad_effect():
     """'Goad target creature': la criatura queda obligada a atacar en su turno."""
     def eff(game, ctrl, targets):
@@ -514,6 +537,65 @@ def _fragment_effect(seg: str):
                 if hasattr(tg, "counters"):
                     game.add_counters(tg, "+1/+1", _n)
         return putc, "own_creature", 1
+    # Investigate (N): crea N fichas Pista (Clue).
+    minv = re.search(r"\binvestigate(?: (\w+))?\b", seg, re.I)
+    if minv:
+        ninv = _count_word(minv.group(1)) if minv.group(1) else 1
+
+        def investigate(game, ctrl, targets, _n=ninv or 1):
+            for _ in range(_n):
+                cards.make_resource_token(game, ctrl, "Clue")
+            game.log(f"{ctrl.name} investiga: {_n} ficha(s) Pista")
+        return investigate, None, 1
+    # Bolster N: N contadores +1/+1 en la criatura propia de MENOR resistencia.
+    mbo = re.search(r"bolster (\w+)", seg, re.I)
+    if mbo and _count_word(mbo.group(1)):
+        nbo = _count_word(mbo.group(1))
+
+        def bolster(game, ctrl, targets, _n=nbo):
+            mine = list(ctrl.creatures())
+            if mine:
+                game.add_counters(min(mine, key=lambda c: c.toughness), "+1/+1", _n)
+                game.log(f"Reforzar (bolster) {_n}")
+        return bolster, None, 1
+    # Support N: +1/+1 en cada una de hasta N criaturas objetivo (bot: propias).
+    msu = re.search(r"support (\w+)", seg, re.I)
+    if msu and _count_word(msu.group(1)):
+        nsu = _count_word(msu.group(1))
+
+        def support(game, ctrl, targets, _n=nsu):
+            tgs = list(targets or [])
+            if not tgs:
+                tgs = sorted(ctrl.creatures(), key=lambda c: -(c.power + c.toughness))[:_n]
+            for tg in tgs[:_n]:
+                if hasattr(tg, "counters"):
+                    game.add_counters(tg, "+1/+1", 1)
+        return support, "own_creature", nsu
+    # Amass N (Orcs/Zombies): pon N +1/+1 en un Ejército; si no hay, crea uno 0/0.
+    mam = re.search(r"amass (?:\w+ )?(\w+)", seg, re.I)
+    if mam and _count_word(mam.group(1)):
+        nam = _count_word(mam.group(1))
+
+        def amass(game, ctrl, targets, _n=nam):
+            army = next((pm for pm in ctrl.battlefield
+                         if "Army" in getattr(pm.card, "subtypes", set())), None)
+            if army is None:
+                army = cards.make_token(game, ctrl, "Army", 0, 0, subtypes=("Army",))
+            if army is not None:
+                game.add_counters(army, "+1/+1", _n)
+                game.log(f"Amasar {_n}: el Ejército crece")
+        return amass, None, 1
+    # Incubate N: crea una ficha Incubadora con N +1/+1 (aprox: 0/0 con N contadores).
+    minc = re.search(r"incubate (\w+)", seg, re.I)
+    if minc and _count_word(minc.group(1)):
+        ninc = _count_word(minc.group(1))
+
+        def incubate(game, ctrl, targets, _n=ninc):
+            tok = cards.make_token(game, ctrl, "Phyrexian", 0, 0, subtypes=("Phyrexian",))
+            if tok is not None:
+                game.add_counters(tok, "+1/+1", _n)
+                game.log(f"Incubar {_n}")
+        return incubate, None, 1
     # girar una criatura objetivo
     if re.search(r"\btap target creature", seg, re.I) and "untap" not in seg.lower():
         def tapc(game, ctrl, targets):
@@ -747,6 +829,14 @@ def _attack_trigger_effect(oracle: str):
             perm.temp_pt[1] += _t
             game.sba()
         return trig_pump
+    # connive (N): al atacar, la criatura connive.
+    mcon = re.search(r"connives?(?: (\w+))?", body, re.I)
+    if mcon:
+        ncon = _count_word(mcon.group(1)) if mcon.group(1) else 1
+
+        def trig_connive(game, perm, _n=ncon or 1, **_kw):
+            _do_connive(game, perm, _n)
+        return trig_connive
     eff, _spec, _count = _fragment_effect(body)
     if eff is None:
         return None
@@ -2559,6 +2649,21 @@ def _generic_amount_effect(oracle: str):
                 _do(game, ctrl)
         return eff
 
+    # acciones-palabra clave sin objetivo (investigate/bolster/amass/incubate):
+    # se delega en _fragment_effect por oración, encadenando las reconocidas.
+    if re.search(r"\b(investigate|bolster|amass|incubate)\b", t):
+        effs = []
+        for frag in re.split(r"[.;]", oracle or ""):
+            if re.search(r"\b(investigate|bolster|amass|incubate)\b", frag, re.I):
+                keff, _spec, _cnt = _fragment_effect(frag)
+                if keff is not None and _spec is None:
+                    effs.append(keff)
+        if effs:
+            def eff(game, ctrl, *_a, _e=effs):
+                for f in _e:
+                    f(game, ctrl, [])
+            return eff
+
     return None
 
 
@@ -2988,6 +3093,71 @@ def build_card_from_data(data: dict) -> Card:
                     g.log(f"Sed de sangre: {perm.name} entra con +{_n}/+{_n}")
             _prev_bt = card.on_etb
             card.on_etb = (lambda g, ctrl, perm, _d=_bloodthirst, _p=_prev_bt:
+                           (_d(g, ctrl, perm), _p(g, ctrl, perm) if _p else None))
+        # Dethrone: keyword/estática al atacar (lo resuelve el motor).
+        if "dethrone" in _kws_lc or re.search(r"\bdethrone\b", _lt):
+            card.dethrone = True
+        # Aniquilador N: al atacar, el defensor sacrifica N permanentes.
+        man = re.search(r"annihilator (\d+)", _lt)
+        if man:
+            card.annihilator = int(man.group(1))
+        # Aflicción N: al ser bloqueada, el defensor pierde N vida.
+        maf = re.search(r"afflict (\d+)", _lt)
+        if maf:
+            card.afflict = int(maf.group(1))
+        # Arrasar N (rampage): +N/+N por cada bloqueador extra.
+        mrp = re.search(r"rampage (\d+)", _lt)
+        if mrp:
+            card.rampage = int(mrp.group(1))
+        # Bushido N: +N/+N al bloquear o ser bloqueada.
+        mbu = re.search(r"bushido (\d+)", _lt)
+        if mbu:
+            card.bushido = int(mbu.group(1))
+        # Toxic N: N contadores de veneno por daño de combate.
+        mtx = re.search(r"toxic (\d+)", _lt)
+        if mtx:
+            card.toxic_n = int(mtx.group(1))
+            card.keywords = set(card.keywords) | {"toxic"}   # asegura has("toxic")
+        # Modular N: entra con N contadores +1/+1; al morir, los mueve a otro
+        # artefacto-criatura.
+        mmo = re.search(r"modular (\d+)", _lt)
+        if mmo:
+            _mn = int(mmo.group(1))
+            card.etb_counters = dict(getattr(card, "etb_counters", None) or {})
+            card.etb_counters["+1/+1"] = card.etb_counters.get("+1/+1", 0) + _mn
+
+            def _modular_death(g, ctrl, perm):
+                moved = perm.counters.get("+1/+1", 0)
+                if moved:
+                    dests = [pm for pm in ctrl.battlefield
+                             if pm is not perm and pm.is_creature()
+                             and "artifact" in pm.card.types]
+                    if dests:
+                        g.add_counters(max(dests, key=lambda p: p.power), "+1/+1", moved)
+                        g.log(f"Modular: {perm.name} mueve {moved} contador(es) +1/+1")
+                return False
+            if card.on_death is None:
+                card.on_death = _modular_death
+        # Afterlife N: al morir, N fichas 1/1 blanca y negra Espíritu con vuelo.
+        mal = re.search(r"afterlife (\d+)", _lt)
+        if mal:
+            _an = int(mal.group(1))
+
+            def _afterlife_death(g, ctrl, perm, _n=_an):
+                for _ in range(_n):
+                    cards.make_token(g, ctrl, "Spirit", 1, 1, kw=("flying",),
+                                     subtypes=("Spirit",))
+                g.log(f"Vida después de la muerte: {_n} ficha(s) Espíritu 1/1 volador")
+                return False
+            if card.on_death is None:
+                card.on_death = _afterlife_death
+        # Riot: entra con prisa O un contador +1/+1 (el bot elige +1/+1).
+        if "riot" in _kws_lc or re.search(r"\briot\b", _lt):
+            def _riot_etb(g, ctrl, perm):
+                g.add_counters(perm, "+1/+1", 1)   # bot: +1/+1 por defecto
+                g.log(f"Motín (riot): {perm.name} entra con un +1/+1")
+            _prev_ri = card.on_etb
+            card.on_etb = (lambda g, ctrl, perm, _d=_riot_etb, _p=_prev_ri:
                            (_d(g, ctrl, perm), _p(g, ctrl, perm) if _p else None))
 
     # reducción de coste ESTÁTICA a tus hechizos: "<tipo> spells you cast cost {N}

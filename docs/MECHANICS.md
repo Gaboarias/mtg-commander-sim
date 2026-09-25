@@ -54,7 +54,17 @@ en un atacante de menor poder), melé (+1/+1 por jugador atacado), entrenamiento
 si ataca junto a una criatura de mayor poder). **Renombre N**: al pegar daño de combate
 a un jugador, si no está renombrada, gana N contadores +1/+1. **Sed de sangre N**
 (bloodthirst): entra con N contadores +1/+1 si un rival fue dañado este turno
-(`Game.damaged_players`).
+(`Game.damaged_players`). **Destronar** (dethrone): +1/+1 al atacar al de más vida.
+**Aniquilador N**: el defensor sacrifica N permanentes al ser atacado.
+
+**Estáticas/disparos por bloqueo** (`_combat_block_triggers`): **aflicción N** (al ser
+bloqueada, el defensor pierde N vida), **flanqueo** (los bloqueadores sin flanqueo reciben
+-1/-1), **arrasar N** (rampage: +N/+N por cada bloqueador extra), **bushido N** (+N/+N al
+bloquear o ser bloqueada). **Toxic N**: N contadores de veneno por daño de combate.
+
+**Disparos ETB/muerte**: **vida tras la muerte N** (afterlife: N fichas Espíritu 1/1
+voladoras al morir), **modular N** (entra con N +1/+1; al morir los mueve a otro
+artefacto-criatura), **motín** (riot: entra con prisa o un +1/+1 — el bot elige +1/+1).
 
 ## Efectos continuos / capas
 

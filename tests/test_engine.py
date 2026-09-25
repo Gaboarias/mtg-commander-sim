@@ -4933,6 +4933,149 @@ def test_bloodthirst_etb_with_damaged_opponent():
     assert b2.counters.get("+1/+1", 0) == 0
 
 
+# -- tanda 2: annihilator, afflict, flanking, rampage, bushido, dethrone,
+#            afterlife, modular, riot, toxic N, connive, acciones-palabra --- #
+def test_annihilator_defender_sacrifices():
+    import cards
+    g, me, op = _duel()
+    atk = g.move_to_battlefield(_bcreature("Ann", "6", 5, 5, oracle="Annihilator 2"), me)
+    atk.summoning_sick = False
+    for i in range(3):
+        g.move_to_battlefield(cards.creature(f"Chump{i}", "1G", 1, 1), op)
+    before = len([p for p in op.battlefield])
+    g._begin_combat(me)
+    g._declare_attackers(me, [(atk, op)])
+    assert len(op.battlefield) == before - 2          # sacrifica 2 permanentes
+
+
+def test_afflict_drains_defender_when_blocked():
+    import cards
+    g, me, op = _duel()
+    atk = g.move_to_battlefield(_bcreature("Af", "2B", 2, 2, oracle="Afflict 3"), me)
+    atk.summoning_sick = False
+    blk = g.move_to_battlefield(cards.creature("Wall", "1G", 0, 4), op)
+    l0 = op.life
+    g._begin_combat(me)
+    g._declare_attackers(me, [(atk, op)])
+    g._apply_block_pairs([atk], [(atk, blk)])
+    g._finish_combat([atk])
+    assert op.life == l0 - 3                            # pierde 3 al ser bloqueada
+
+
+def test_flanking_weakens_nonflanking_blocker():
+    import cards
+    g, me, op = _duel()
+    atk = g.move_to_battlefield(_bcreature("Knight", "1W", 2, 2, keywords=["Flanking"]), me)
+    atk.summoning_sick = False
+    blk = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), op)
+    g._begin_combat(me)
+    g._declare_attackers(me, [(atk, op)])
+    g._apply_block_pairs([atk], [(atk, blk)])
+    g._finish_combat([atk])
+    assert blk not in op.battlefield                    # -1/-1 lo deja en 1/1 y muere
+
+
+def test_rampage_and_bushido_pump_when_blocked():
+    import cards
+    g, me, op = _duel()
+    r = g.move_to_battlefield(_bcreature("Ramp", "3G", 3, 3, oracle="Rampage 2"), me)
+    r.summoning_sick = False
+    b1 = g.move_to_battlefield(cards.creature("B1", "1G", 1, 1), op)
+    b2 = g.move_to_battlefield(cards.creature("B2", "1G", 1, 1), op)
+    g._begin_combat(me)
+    g._declare_attackers(me, [(r, op)])
+    g._apply_block_pairs([r], [(r, b1), (r, b2)])
+    g._combat_block_triggers([r])
+    assert r.power == 5                                 # +2/+2 por el 2º bloqueador
+
+
+def test_dethrone_counter_on_attacking_highest_life():
+    import cards
+    g, me, op = _duel()
+    d = g.move_to_battlefield(_bcreature("Usurp", "1B", 1, 1, oracle="Dethrone"), me)
+    d.summoning_sick = False
+    g._begin_combat(me)
+    g._declare_attackers(me, [(d, op)])                 # op tiene 40 (más vida)
+    assert d.counters.get("+1/+1", 0) == 1
+
+
+def test_afterlife_makes_spirits():
+    import cards
+    g, me, op = _duel()
+    c = g.move_to_battlefield(_bcreature("Cleric", "1W", 1, 1, oracle="Afterlife 2"), me)
+    g.to_graveyard(c, "muere")
+    spirits = [p for p in me.battlefield if p.name == "Spirit"]
+    assert len(spirits) == 2 and all(s.has("flying") for s in spirits)
+
+
+def test_modular_moves_counters_on_death():
+    import cards
+    g, me, op = _duel()
+    src = g.move_to_battlefield(_bcreature("Sphere", "2", 0, 0, oracle="Modular 3"), me)
+    assert src.counters.get("+1/+1", 0) == 3            # entra con 3
+    dest = g.move_to_battlefield(_bcreature("Golem", "3", 2, 2,
+                                            oracle="", keywords=[]), me)
+    dest.card.types = set(dest.card.types) | {"artifact"}
+    g.to_graveyard(src, "muere")
+    assert dest.counters.get("+1/+1", 0) == 3           # los mueve al artefacto-criatura
+
+
+def test_riot_enters_with_counter():
+    g, me, op = _duel()
+    c = g.move_to_battlefield(_bcreature("Rioter", "2R", 2, 2, oracle="Riot"), me)
+    assert c.counters.get("+1/+1", 0) == 1
+
+
+def test_toxic_n_adds_poison_on_combat_only():
+    g, me, op = _duel()
+    t = g.move_to_battlefield(_bcreature("Snake", "1G", 2, 2, oracle="Toxic 2"), me)
+    g.deal_damage(t, op, 2, combat=True)
+    assert op.poison == 2 and op.life == 40 - 2
+    g.deal_damage(t, op, 2, combat=False)               # no-combate: sin veneno
+    assert op.poison == 2
+
+
+def test_connive_on_attack():
+    import cards
+    g, me, op = _duel()
+    me.hand.append(cards.creature("Spare", "1G", 2, 2))   # no-tierra para descartar
+    c = g.move_to_battlefield(
+        _bcreature("Rogue", "1U", 2, 2,
+                   oracle="Whenever Rogue attacks, it connives."), me)
+    c.summoning_sick = False
+    g._begin_combat(me)
+    g._declare_attackers(me, [(c, op)])
+    assert c.counters.get("+1/+1", 0) >= 0                # corre sin romper
+
+
+def test_investigate_and_bolster_actions():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me, op = _duel()
+    g.move_to_battlefield(cards.creature("Small", "1G", 1, 1), me)
+    g.move_to_battlefield(cards.creature("Big", "3G", 4, 4), me)
+    spell = build_card_from_data({
+        "name": "Inv", "mana_cost": "{1}{G}", "cmc": 2, "type_line": "Sorcery",
+        "oracle_text": "Investigate. Bolster 2."})
+    assert spell.on_cast_resolve is not None
+    spell.on_cast_resolve(g, me, spell)
+    clues = [p for p in me.battlefield if p.name.lower() == "clue"]
+    assert len(clues) == 1
+    small = next(p for p in me.battlefield if p.name.startswith("Small"))
+    assert small.counters.get("+1/+1", 0) == 2            # al de menor resistencia
+
+
+def test_amass_creates_and_grows_army():
+    from cardsdb import build_card_from_data
+    g, me, op = _duel()
+    spell = build_card_from_data({
+        "name": "Am", "mana_cost": "{1}{B}", "cmc": 2, "type_line": "Sorcery",
+        "oracle_text": "Amass Orcs 3."})
+    spell.on_cast_resolve(g, me, spell)
+    army = next((p for p in me.battlefield if "Army" in p.card.subtypes), None)
+    assert army is not None and army.counters.get("+1/+1", 0) == 3
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
