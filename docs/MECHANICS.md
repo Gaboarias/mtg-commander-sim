@@ -159,10 +159,20 @@ dispara con muertes rivales).
   (`spell_tax`, aplicado en `cast` vía `_static_cost_increase`): Thalia, Vryn
   Wingmare, Sphere of Resistance, la mitad de impuesto de Grand Arbiter.
 - **Doble cara (DFC)**: se construye la cara trasera como `card.back_face` y
-  `card.dfc` ("transform"/"modal"). `game.transform(perm)` intercambia caras
-  (P/T, tipos, keywords) conservando contadores; las DFC de transformar exponen
-  una habilidad manual "Transformar". *(Día/noche automático de werewolves y jugar
-  la cara trasera de un modal DFC aún no están modelados.)*
+  `card.dfc` ("transform"/"modal"). Es "transform" si la carta se da vuelta en
+  juego (día/noche, o el oracle dice "transform"); si no, es "modal" (MDFC:
+  ambas caras se juegan desde la mano — Pathways, DFC modal tierra/hechizo).
+  `game.transform(perm)` intercambia caras (P/T, tipos, keywords) conservando
+  contadores; las DFC de transformar exponen una habilidad manual "Transformar".
+- **Modal DFC — cara trasera**: `game.play_dfc_back(player, front, …)` juega la
+  cara trasera desde la mano (canjea frente↔dorso y delega en `play_land`/`cast`).
+  En `/play` aparece como opción "Alternativas → Lanzar <dorso>" (zona `back`).
+- **Día / noche (daybound / nightbound)**: `game.day_night` (None/"day"/"night").
+  `set_day_night(v)` cambia el estado y transforma las cartas daybound (frente=día)
+  y nightbound (dorso=noche) a la cara correcta. Al entrar una carta daybound sin
+  que sea día ni noche, se vuelve de día. En cada inicio de turno se evalúa la
+  regla simplificada (`_update_day_night`): si el jugador activo no lanzó hechizos
+  el turno anterior → noche; si lanzó 2+ → día.
 
 ## Efectos de reemplazo
 

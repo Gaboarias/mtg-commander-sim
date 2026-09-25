@@ -550,6 +550,7 @@ class Game:
         # turnos extra pendientes (para el mismo jugador)
         self.extra_turns: list = []
         self.extra_combats = 0     # fases de combate adicionales este turno (Aggravated Assault…)
+        self.day_night = None      # None / "day" / "night" (daybound/nightbound)
         self.spell_x = 0            # X elegido del último hechizo con {X} lanzado
         self.spells_this_turn = 0   # hechizos lanzados este turno (storm)
         self.damaged_players: set = set()   # jugadores dañados este turno (bloodthirst)
@@ -958,6 +959,11 @@ class Game:
             self.note_ability(card, "entra al campo", controller=player)
             card.on_etb(self, player, perm)
         self.emit("etb", player=player, perm=perm)
+        # daybound/nightbound: si entra una carta así y no es ni de día ni de noche,
+        # se vuelve de día (regla 502/711).
+        if self.day_night is None and (getattr(card, "daybound", False)
+                                       or getattr(card, "nightbound", False)):
+            self.set_day_night("day")
         # disparadores "cuando entra una criatura (que controlás)": necesitan la
         # criatura que entró, así que se despachan aparte (emit no la pasa).
         if card.is_creature():
@@ -1751,6 +1757,44 @@ class Game:
                 total += amt
         return total
 
+    def set_day_night(self, value: str):
+        """Cambia a 'day'/'night' y transforma las cartas daybound/nightbound a la
+        cara correcta (daybound: frente=día, dorso=noche; nightbound al revés)."""
+        if value == self.day_night:
+            return
+        self.day_night = value
+        self.log(f"Ahora es de {'día' if value == 'day' else 'noche'}")
+        for pl in self.players:
+            for perm in list(pl.battlefield):
+                faces = getattr(perm, "_dfc_faces", None)
+                if faces:
+                    front = faces[0]
+                else:
+                    # aún no transformado: la cara actual es el frente
+                    if getattr(perm.card, "back_face", None) is None:
+                        continue
+                    front = perm.card
+                # sólo las cartas daybound/nightbound se transforman con el día/noche
+                if not (getattr(front, "daybound", False)
+                        or getattr(front, "nightbound", False)):
+                    continue
+                # frente = cara de día; dorso = cara de noche
+                want_front = (value == "day")
+                idx = getattr(perm, "_dfc_idx", 0)
+                if (idx == 0) != want_front:
+                    self.transform(perm)
+
+    def _update_day_night(self, active: "Player"):
+        """Regla simplificada: si el jugador activo no lanzó hechizos este turno,
+        se hace de noche; si alguien lanzó 2+ hechizos, se hace de día."""
+        if self.day_night is None:
+            return
+        casts = getattr(self, "spells_this_turn", 0)
+        if self.day_night == "day" and casts == 0:
+            self.set_day_night("night")
+        elif self.day_night == "night" and casts >= 2:
+            self.set_day_night("day")
+
     def transform(self, perm: "Permanent") -> bool:
         """Da vuelta un permanente de doble cara (transform): intercambia su carta
         actual con la cara trasera, conservando contadores/estado. Devuelve True si
@@ -1767,6 +1811,27 @@ class Game:
         self.log(f"{perm.name} se transforma")
         self.sba()
         return True
+
+    def play_dfc_back(self, player: "Player", front: Card, targets=None,
+                      chosen_modes=None, x_value=None):
+        """Juega la cara TRASERA de un DFC modal desde la mano (Pathway, DFC modal
+        tierra/hechizo). Sólo modal: la trasera tiene su propio coste."""
+        back = getattr(front, "back_face", None)
+        if back is None or getattr(front, "dfc", None) != "modal":
+            return False
+        if front not in player.hand:
+            return False
+        # canjeamos el frente por el dorso en la mano y jugamos el dorso
+        idx = player.hand.index(front)
+        player.hand[idx] = back
+        if back.is_land():
+            ok = self.play_land(player, back)
+        else:
+            ok = self.cast(player, back, targets=targets,
+                           chosen_modes=chosen_modes, x_value=x_value)
+        if ok is False and back in player.hand:      # revertir si no se pudo
+            player.hand[player.hand.index(back)] = front
+        return ok
 
     def land_limit(self, player: "Player") -> int:
         """Cuántas tierras puede jugar este turno: 1 + las 'additional land' que
@@ -2388,6 +2453,9 @@ class Game:
             perm.activated_this_turn = False
         p.lands_played = 0
         p.draws_this_turn = 0
+        # día/noche: la regla mira los hechizos del turno ANTERIOR, así que se
+        # evalúa antes de reiniciar el contador de hechizos.
+        self._update_day_night(p)
         self.spells_this_turn = 0    # para storm (hechizos lanzados este turno)
         self.damaged_players = set() # para bloodthirst (rivales dañados este turno)
         self.extra_combats = 0       # fases de combate adicionales se agotan por turno

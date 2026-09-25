@@ -723,6 +723,23 @@ class InteractiveGame:
                 tgts = self._chosen_targets(c, target_uids, spec=spec) if spec else None
                 self.g.cast_adventure(p, c, targets=tgts)
             return self.state()
+        if zone == "back":        # jugar la cara TRASERA de un DFC modal (mano)
+            if i is not None and 0 <= i < len(p.hand):
+                c = p.hand[i]
+                bf = getattr(c, "back_face", None)
+                spec = getattr(bf, "target_spec", None) if bf is not None else None
+                chosen = None
+                if bf is not None and getattr(bf, "modes", ()) and mode is not None:
+                    idxs = mode if isinstance(mode, list) else [mode]
+                    chosen = [m for m in idxs if 0 <= m < len(bf.modes)]
+                    for m in chosen:
+                        if bf.modes[m].get("target_spec"):
+                            spec = bf.modes[m].get("target_spec")
+                            break
+                tgts = self._chosen_targets(bf, target_uids, spec=spec) if spec else None
+                self.g.play_dfc_back(p, c, targets=tgts, chosen_modes=chosen)
+                self.g.sba()
+            return self.state()
         if zone == "graveyard":   # jugar/lanzar desde el CEMENTERIO (flashback, etc.)
             self._play_from_graveyard(p, i, target_uids, mode)
             return self.state()
@@ -1066,6 +1083,26 @@ class InteractiveGame:
                         "target_spec": aspec, "target_count": adv.get("target_count", 1),
                         "targets": self._targets_for_spec(aspec), "modes": [],
                         "mode_pick": 1})
+                # Modal DFC: jugar la cara TRASERA desde la mano (tierra o hechizo
+                # con su propio coste, p.ej. una Pathway o un DFC modal).
+                bf = getattr(c, "back_face", None)
+                if bf is not None and getattr(c, "dfc", None) == "modal":
+                    if bf.is_land():
+                        if p.lands_played < self.g.land_limit(p):
+                            casts.append({
+                                "i": i, "name": f"{bf.name} (dorso)", "zone": "back",
+                                "cost": "tierra", "is_land": True, "target_spec": None,
+                                "target_count": 1, "targets": [], "modes": [],
+                                "mode_pick": 1})
+                    elif bf.cost is not None and p.can_pay(bf.cost):
+                        bspec = getattr(bf, "target_spec", None)
+                        casts.append({
+                            "i": i, "name": f"{bf.name} (dorso)", "zone": "back",
+                            "cost": _cost_str(bf), "target_spec": bspec,
+                            "target_count": getattr(bf, "target_count", 1),
+                            "targets": self._targets_for(bf),
+                            "modes": self._modes_for(bf),
+                            "mode_pick": getattr(bf, "mode_pick", 1)})
             for c in p.command:
                 pay = None if c.cost is None else Cost(c.cost.generic + p.cmdr_tax,
                                                        c.cost.pips)

@@ -3865,9 +3865,23 @@ def build_card_from_data(data: dict) -> Card:
             _back = None
         if _back is not None:
             card.back_face = _back
-            # modal DFC: la cara trasera tiene su propio coste -> jugable desde la mano.
-            # transform: sin coste propio -> se da vuelta en juego.
-            card.dfc = "modal" if (_back_raw.get("mana_cost") or "").strip() else "transform"
+            # daybound / nightbound (día-noche): el frente es daybound, el dorso
+            # nightbound. Detección por keywords u oracle de cada cara.
+            _f0_txt = ((_faces[0].get("oracle_text", "") or "") + " "
+                       + " ".join(_faces[0].get("keywords", []) or [])).lower()
+            _f1_txt = ((_back_raw.get("oracle_text", "") or "") + " "
+                       + " ".join(_back_raw.get("keywords", []) or [])).lower()
+            _day = any(k in _f0_txt + _f1_txt for k in ("daybound", "nightbound"))
+            # transform vs modal (MDFC): es "transform" si se da vuelta en juego
+            # (día/noche, o el texto dice "transform"); si no, es modal -> ambas
+            # caras se juegan desde la mano (Pathways, DFC modal tierra/hechizo).
+            _is_transform = _day or bool(re.search(r"\btransform\b", _f0_txt + _f1_txt))
+            card.dfc = "transform" if _is_transform else "modal"
+            if _day:
+                card.daybound = "daybound" in _f0_txt
+                card.nightbound = "nightbound" in _f0_txt
+                _back.daybound = "daybound" in _f1_txt
+                _back.nightbound = "nightbound" in _f1_txt
             # habilidad manual "Transformar" si el texto la usa (aprox. de werewolves/
             # DFC que se dan vuelta; sin modelar día/noche automático).
             if card.dfc == "transform" and re.search(r"\btransform\b", _lt):

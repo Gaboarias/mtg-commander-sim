@@ -5492,6 +5492,108 @@ def test_transform_dfc_swaps_faces():
     assert p.power == 1
 
 
+# -- día / noche (daybound / nightbound) ----------------------------------- #
+def _daybound_card():
+    import cardsdb
+    return cardsdb.build_card_from_data({
+        "name": "Lupine // Lupo",
+        "type_line": "Creature — Human Werewolf // Creature — Werewolf",
+        "card_faces": [
+            {"name": "Lupine", "mana_cost": "{1}{G}", "type_line": "Creature — Human Werewolf",
+             "power": "2", "toughness": "2", "oracle_text": "Daybound"},
+            {"name": "Lupo", "type_line": "Creature — Werewolf",
+             "power": "3", "toughness": "3", "oracle_text": "Nightbound"},
+        ],
+    })
+
+
+def test_daybound_parse_and_day_night_transform():
+    g, me, op = _duel()
+    c = _daybound_card()
+    assert getattr(c, "daybound", False) and not getattr(c, "nightbound", False)
+    assert getattr(c.back_face, "nightbound", False)
+    assert c.dfc == "transform"
+    # al entrar una carta daybound y no ser ni día ni noche -> se vuelve de día
+    assert g.day_night is None
+    perm = g.move_to_battlefield(c, me)
+    assert g.day_night == "day"
+    assert perm.card is c                        # frente = cara de día
+    # se hace de noche -> transforma al dorso
+    g.set_day_night("night")
+    assert perm.card.name == "Lupo"
+    assert perm.power == 3
+    # vuelve el día -> vuelve al frente
+    g.set_day_night("day")
+    assert perm.card is c
+
+
+def test_day_night_flips_on_turn_spell_count():
+    g, me, op = _duel()
+    g.move_to_battlefield(_daybound_card(), me)
+    assert g.day_night == "day"
+    g.spells_this_turn = 0                       # el activo no lanzó hechizos
+    g.begin_turn(op)                             # -> se hace de noche
+    assert g.day_night == "night"
+    g.spells_this_turn = 2                        # 2+ hechizos
+    g.begin_turn(me)                             # -> vuelve el día
+    assert g.day_night == "day"
+
+
+# -- DFC modal: jugar la cara trasera desde la mano ------------------------ #
+def test_modal_dfc_back_face_land_played_from_hand():
+    import cardsdb
+    from engine import Cost
+    c = cardsdb.build_card_from_data({
+        "name": "Grove // Hollow",
+        "type_line": "Creature — Bear // Land",
+        "card_faces": [
+            {"name": "Grove", "mana_cost": "{1}{G}", "type_line": "Creature — Bear",
+             "power": "2", "toughness": "2", "oracle_text": ""},
+            {"name": "Hollow", "type_line": "Land",
+             "oracle_text": "{T}: Add {G}."},
+        ],
+    })
+    assert c.dfc == "modal"                      # ninguna cara se transforma en juego
+    assert c.back_face.is_land()
+    g, me, op = _duel()
+    me.hand.append(c)
+    lp0 = me.lands_played
+    ok = g.play_dfc_back(me, c)
+    assert ok is not False
+    assert me.lands_played == lp0 + 1
+    assert any(pm.card.name == "Hollow" for pm in me.battlefield)
+    assert c not in me.hand
+
+
+def test_modal_dfc_back_face_spell_cast_from_hand():
+    import cardsdb
+    c = cardsdb.build_card_from_data({
+        "name": "Front // Bolt",
+        "type_line": "Creature — Bear // Instant",
+        "card_faces": [
+            {"name": "Front", "mana_cost": "{1}{G}", "type_line": "Creature — Bear",
+             "power": "2", "toughness": "2"},
+            {"name": "Bolt", "mana_cost": "{R}", "type_line": "Instant",
+             "oracle_text": "Bolt deals 3 damage to any target."},
+        ],
+    })
+    assert c.dfc == "modal"
+    g, me, op = _duel()
+    for _ in range(3):
+        g.move_to_battlefield(cards_land_r(), me)
+    me.hand.append(c)
+    l0 = op.life
+    ok = g.play_dfc_back(me, c, targets=[op])
+    g.resolve_stack()
+    assert ok is not False and c not in me.hand
+    assert op.life == l0 - 3
+
+
+def cards_land_r():
+    import cards
+    return cards.land("Mountain", ["R"], basic=True)
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

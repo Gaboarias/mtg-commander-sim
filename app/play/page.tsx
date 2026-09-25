@@ -764,6 +764,8 @@ export default function Play() {
             const landIdx = new Set((legal?.lands || []).map((l) => l.i));
             const castMap = new Map((legal?.casts || []).filter((c) => c.zone === "hand").map((c) => [c.i, c]));
             const commandCasts = (legal?.casts || []).filter((c) => c.zone === "command");
+            // casts alternativos (dorso de DFC modal, aventura, evoke, dash, ciclar…)
+            const altCasts = (legal?.casts || []).filter((c) => c.zone !== "hand" && c.zone !== "command");
             const hand = state.players[meIdx]?.hand_cards || [];
             return (
               <div className="card">
@@ -793,6 +795,20 @@ export default function Play() {
                   })}
                   {hand.length === 0 && <span className="muted">mano vacía</span>}
                 </div>
+
+                {altCasts.length > 0 && (
+                  <div className="act-block">
+                    <span className="act-label">Alternativas:</span>
+                    {altCasts.map((c, k) => (
+                      <button key={"alt" + k} className="ghost" onClick={() => castCard(c)}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        <Icon name={c.zone === "back" ? "cards" : "cards"} size={12} />
+                        Lanzar {c.name}{c.target_spec ? <Icon name="target" size={12} /> : null}{" "}
+                        <span className="muted">{c.cost}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {commandCasts.length > 0 && (
                   <div className="act-block">
