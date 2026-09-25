@@ -1654,7 +1654,8 @@ def _generic_amount_effect(oracle: str):
                     game.add_counters(pm, "+1/+1", _n)
         return eff
 
-    # distribuir N contadores +1/+1 entre criaturas objetivo: aprox -> a la mejor tuya
+    # distribuir N contadores +1/+1 entre criaturas objetivo: el humano elige la
+    # criatura que los recibe (aprox: todos a una); el bot toma su mejor criatura.
     m = re.search(r"distribute (\w+) \+1/\+1 counters? among", t)
     if m and (n := _count_word(m.group(1))):
         def eff(game, ctrl, *_a, _n=n):
@@ -1662,8 +1663,14 @@ def _generic_amount_effect(oracle: str):
             if not pool:
                 return
             pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
-            game.add_counters(pool[0], "+1/+1", _n)
-            game.log(f"{ctrl.name} reparte {_n} contadores +1/+1")
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm) for pm in pool]
+
+            def _do(pm, _n=_n):
+                game.add_counters(pm, "+1/+1", _n)
+                game.log(f"{ctrl.name} reparte {_n} contadores +1/+1 en {pm.name}")
+            _human_target_choice(game, ctrl, "etb_target",
+                                 f"Elegí una criatura ({_n} contadores +1/+1)",
+                                 cands, _do)
         return eff
 
     # fin de partida directo

@@ -4028,6 +4028,34 @@ def test_exile_recover_human_chooses():
     assert "Goblin" not in [c.name for c in me.exile]
 
 
+def test_distribute_counters_human_chooses():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    g.interactive_human = me
+    g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    g.move_to_battlefield(cards.creature("Wolf", "1G", 3, 3), me)
+    spell = build_card_from_data({
+        "name": "Distr", "mana_cost": "{2}{G}", "cmc": 3,
+        "type_line": "Sorcery",
+        "oracle_text": "Distribute three +1/+1 counters among creatures "
+                       "you control."})
+    spell.on_cast_resolve(g, me, spell)
+    pc = g.pending_choice
+    assert pc and pc["kind"] == "etb_target"
+    assert {o["name"] for o in pc["options"]} == {"Bear 2/2", "Wolf 3/3"}
+    # el bot resuelve solo (sin modal)
+    g2, bot = _reco_players()
+    g2.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), bot)
+    spell2 = build_card_from_data({
+        "name": "Distr", "mana_cost": "{2}{G}", "cmc": 3,
+        "type_line": "Sorcery",
+        "oracle_text": "Distribute three +1/+1 counters among creatures "
+                       "you control."})
+    spell2.on_cast_resolve(g2, bot, spell2)
+    assert g2.pending_choice is None
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
