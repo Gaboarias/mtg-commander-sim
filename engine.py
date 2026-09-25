@@ -532,6 +532,8 @@ class Game:
         self.extra_turns: list = []
         self.spell_x = 0            # X elegido del último hechizo con {X} lanzado
         self.spells_this_turn = 0   # hechizos lanzados este turno (storm)
+        self.no_prevention_turn = False   # "el daño no se puede prevenir este turno"
+        self.no_block_turn = False        # "las criaturas no pueden bloquear este turno"
         # última habilidad activada resuelta (para copiarla: Strionic Resonator):
         # (perm, ability_dict, targets)
         self.last_activated = None
@@ -854,9 +856,16 @@ class Game:
 
     def gain_life(self, player: "Player", n: int, reason: str = ""):
         """Suma vida y dispara 'gain_life' (soul sisters, Ajani's Pridemate,
-        Heliod…). Sólo cuenta ganancia real (n > 0)."""
+        Heliod…). Sólo cuenta ganancia real (n > 0). Respeta la prohibición de
+        ganar vida (Erebos, Archfiend of Despair, Sulfuric Vortex…)."""
         if n <= 0:
             return
+        for pl in self.players:
+            for pm in pl.battlefield:
+                stop = getattr(pm.card, "stops_lifegain", None)
+                if stop == "all" or (stop == "opponents" and pl is not player):
+                    self.log(f"{player.name} no puede ganar vida ({pm.name})")
+                    return
         player.life += n
         self.emit("gain_life", player=player, amount=n)
 
@@ -1018,8 +1027,11 @@ class Game:
         mult = self.damage_multiplier(source)
         if mult > 1:
             amount *= mult
+        # "el daño no se puede prevenir este turno" (Skullcrack, Flames of the Blood
+        # Hand…): ignora todos los escudos de prevención.
+        no_prev = getattr(self, "no_prevention_turn", False)
         # prevención de daño (escudos "hasta el fin del turno")
-        if isinstance(target, Player):
+        if not no_prev and isinstance(target, Player):
             if getattr(target, "prevent_all", False):
                 self.log(f"se previene el daño a {target.name}")
                 return
@@ -1030,7 +1042,7 @@ class Game:
                 amount -= blocked
                 if amount <= 0:
                     return
-        elif isinstance(target, Permanent):
+        elif not no_prev and isinstance(target, Permanent):
             pv = getattr(target, "prevent", 0)
             if pv > 0:
                 blocked = min(pv, amount)
@@ -1223,6 +1235,16 @@ class Game:
             if player.can_pay(bb_cost):
                 pay_cost = bb_cost
                 card._buyback_used = True
+        # Replicate {N}: se paga cuantas veces se pueda (auto); cada pago copia el
+        # hechizo. Se suma al genérico y se anota el número de copias.
+        card._replicate_copies = 0
+        rep = getattr(card, "_replicate_cost", 0) or 0
+        if rep and pay_cost is not None:
+            remaining = player.available_mana() - pay_cost.cmc
+            copies = max(0, remaining // rep) if rep else 0
+            if copies:
+                pay_cost = Cost(generic=pay_cost.generic + rep * copies, pips=pay_cost.pips)
+                card._replicate_copies = copies
         if not player.can_pay(pay_cost):
             return False
         # coste adicional al lanzar (pagar vida / descartar / sacrificar)
@@ -1269,8 +1291,10 @@ class Game:
             if card is player.commander_card and st["commander_turn"] is None:
                 st["commander_turn"] = self.turn
         # Storm: copias = hechizos ya lanzados este turno ANTES de este.
+        # Replicate: copias = pagos extra ya calculados arriba. Ambas repiten efecto.
         storm_copies = self.spells_this_turn if (getattr(card, "tags", set())
                                                  and "storm" in card.tags) else 0
+        storm_copies += getattr(card, "_replicate_copies", 0) or 0
         self.spells_this_turn += 1
         # Buyback: si se pagó el coste adicional de buyback, la carta vuelve a la mano.
         buyback_used = bool(getattr(card, "_buyback_used", False))
@@ -1800,6 +1824,8 @@ class Game:
 
     def _apply_block_pairs(self, incoming: list, pairs: list):
         """pairs: [(atacante, bloqueador), ...] ya como Permanent."""
+        if getattr(self, "no_block_turn", False):     # "las criaturas no pueden bloquear"
+            return
         for attacker, blocker in pairs:
             if attacker not in incoming:
                 continue
@@ -1914,6 +1940,8 @@ class Game:
             pl.prevent = 0
             pl.prevent_all = False
         self.fog_turn = False        # "prevenir daño de combate este turno" se agota
+        self.no_prevention_turn = False   # "el daño no se puede prevenir" se agota
+        self.no_block_turn = False        # "las criaturas no pueden bloquear" se agota
 
         # UPKEEP
         self.emit("upkeep", player=p)

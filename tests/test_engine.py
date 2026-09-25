@@ -4207,6 +4207,75 @@ def test_extort_drains_on_cast():
     assert op.life == l0 - 1 and me.life == my0 + 1
 
 
+def test_replicate_copies_by_payment():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1R", 1, 1) for _ in range(12)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(12)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.begin_turn(me)
+    for _ in range(6):
+        g.move_to_battlefield(cards.land("Mountain", ["R"]), me)
+    rep = build_card_from_data({
+        "name": "Chatter", "mana_cost": "{R}", "cmc": 1, "type_line": "Sorcery",
+        "oracle_text": "Chatter deals 1 damage to any target. Replicate {R}"})
+    assert getattr(rep, "_replicate_cost", 0) == 1
+    me.hand = [rep]
+    l0 = op.life
+    g.cast(me, rep)
+    g.resolve_stack()
+    assert op.life == l0 - 6      # base + 5 copias con 6 maná
+
+
+def test_lifegain_hate_blocks_gain():
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    op = g.opponents(me)[0]
+    hate = build_card_from_data({
+        "name": "Erebos", "mana_cost": "{2}{B}", "cmc": 3,
+        "type_line": "Enchantment Creature", "power": "5", "toughness": "7",
+        "oracle_text": "Players can't gain life."})
+    assert getattr(hate, "stops_lifegain", None) == "all"
+    g.move_to_battlefield(hate, op)
+    before = me.life
+    g.gain_life(me, 5)
+    assert me.life == before
+
+
+def test_damage_cant_be_prevented():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    op = g.opponents(me)[0]
+    op.prevent_all = True
+    noprev = build_card_from_data({
+        "name": "Skullcrack", "mana_cost": "{1}{R}", "cmc": 2, "type_line": "Instant",
+        "oracle_text": "Damage can't be prevented this turn."})
+    noprev.on_cast_resolve(g, me, [])
+    l0 = op.life
+    g.deal_damage(None, op, 3)
+    assert op.life == l0 - 3       # el escudo prevent_all se ignora
+
+
+def test_creatures_cant_block():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    op = g.opponents(me)[0]
+    falter = build_card_from_data({
+        "name": "Falter", "mana_cost": "{1}{R}", "cmc": 2, "type_line": "Sorcery",
+        "oracle_text": "Creatures can't block this turn."})
+    falter.on_cast_resolve(g, me, [])
+    atk = g.move_to_battlefield(cards.creature("A", "1R", 3, 3), me)
+    atk.summoning_sick = False
+    blk = g.move_to_battlefield(cards.creature("B", "1B", 2, 2), op)
+    g._apply_block_pairs([atk], [(atk, blk)])
+    assert not atk.blocked_by
+
+
 def test_exalted_pumps_lone_attacker():
     import cards
     from cardsdb import build_card_from_data

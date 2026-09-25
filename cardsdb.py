@@ -2195,6 +2195,22 @@ def _generic_amount_effect(oracle: str):
                                  lambda pm: setattr(pm, "tapped", True))
         return eff
 
+    # "el daño no se puede prevenir este turno" (Skullcrack, Flames of the Blood Hand):
+    # se combina con el efecto principal (quema) — acá sólo activa el flag del turno.
+    if re.search(r"damage can'?t be prevented this turn", t):
+        def eff(game, ctrl, *_a):
+            game.no_prevention_turn = True
+            game.log(f"{ctrl.name}: el daño no se puede prevenir este turno")
+        return eff
+
+    # "las criaturas no pueden bloquear este turno" (Falter/Nature's Will): permite
+    # un golpe sin bloqueos.
+    if re.search(r"creatures can'?t block this turn", t):
+        def eff(game, ctrl, *_a):
+            game.no_block_turn = True
+            game.log(f"{ctrl.name}: las criaturas no pueden bloquear este turno")
+        return eff
+
     # ganar el control de TODAS las criaturas (Insurrection/Mass Mutiny-style),
     # normalmente hasta el fin del turno + destrabar + prisa (finisher de robo).
     # Va ANTES de "untap all" porque suele incluir "untap all creatures" primero.
@@ -2948,6 +2964,22 @@ def build_card_from_data(data: dict) -> Card:
     mbb = re.search(r"buyback \{(\d+)\}", _lt)
     if mbb and {"instant", "sorcery"} & types:
         card._buyback_cost = int(mbb.group(1))
+
+    # Replicate <coste>: coste que se paga varias veces; cada pago copia el hechizo.
+    # Aprox: coste convertido a CMV entero; el motor paga cuanto se pueda.
+    mrep = re.search(r"replicate ((?:\{[wubrgc0-9/x]+\})+)", _lt)
+    if mrep and {"instant", "sorcery"} & types:
+        cmv = 0
+        for sym in re.findall(r"\{([wubrgc0-9/x]+)\}", mrep.group(1)):
+            cmv += int(sym) if sym.isdigit() else 1
+        if cmv > 0:
+            card._replicate_cost = cmv
+
+    # Prohibición de ganar vida (Erebos, Archfiend of Despair, Sulfuric Vortex…).
+    if re.search(r"players can'?t gain life", _lt):
+        card.stops_lifegain = "all"
+    elif re.search(r"(?:your opponents|each opponent|opponents) can'?t gain life", _lt):
+        card.stops_lifegain = "opponents"
 
     # Devour N: al entrar, devora tus FICHAS de criatura (forraje) y entra con N
     # contadores +1/+1 por cada una (aprox: sólo come fichas, no cartas reales).
