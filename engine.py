@@ -27,7 +27,7 @@ KEYWORDS = {
     "haste", "first_strike", "double_strike", "menace", "indestructible",
     "hexproof", "defender", "flash",
     "shroud", "protection", "prowess", "infect", "toxic", "wither",
-    "unblockable",
+    "unblockable", "ward",
 }
 
 
@@ -534,6 +534,8 @@ class Game:
         self.spell_x = 0            # X elegido del último hechizo con {X} lanzado
         self.spells_this_turn = 0   # hechizos lanzados este turno (storm)
         self.suspended: list = []   # cartas suspendidas: {card, player, n}
+        self.dash_return: list = [] # criaturas jugadas por dash a devolver al fin de turno
+        self.blitz_sac: list = []   # criaturas jugadas por blitz a sacrificar al fin de turno
         self.no_prevention_turn = False   # "el daño no se puede prevenir este turno"
         self.no_block_turn = False        # "las criaturas no pueden bloquear este turno"
         # última habilidad activada resuelta (para copiarla: Strionic Resonator):
@@ -729,19 +731,41 @@ class Game:
 
     # -- objetivos (P2.2) ------------------------------------------------- #
     def can_target(self, caster: "Player", perm: "Permanent") -> bool:
-        """Reglas de objetivo. hexproof: no puede ser objetivo de hechizos/
-        habilidades que controla un OPONENTE. ward: aqui se modela como
-        'intargeteable por rivales' salvo que el atacante pague (simplificado:
-        no lo puede pagar la IA, asi que protege)."""
+        """Reglas de objetivo. hexproof/protección: no puede ser objetivo de un
+        OPONENTE. shroud: nadie. ward NO bloquea el objetivo (es un impuesto que se
+        cobra al resolver, ver `ward_ok`)."""
         if perm.has("shroud"):            # ni su propio controlador lo apunta
             return False
         if perm.controller is caster:
             return True
         if perm.has("hexproof") or perm.has("protection"):
             return False
-        if "ward" in perm.card.subtypes:  # ward simplificado
-            return False
         return True
+
+    def ward_ok(self, caster: "Player", perm: "Permanent") -> bool:
+        """Ward: al RESOLVER un efecto de un rival sobre `perm`, se cobra el coste de
+        ward. Si el rival no puede pagarlo, el efecto se contrarresta sobre ese
+        objetivo (devuelve False). El propio controlador no paga ward."""
+        if perm.controller is caster:
+            return True
+        w = getattr(perm.card, "ward", None)
+        if not w or not perm.has("ward"):
+            return True
+        if w.get("life"):
+            n = w["life"]
+            if caster.life > n:           # no puede quedar en 0 o menos por ward
+                caster.life -= n
+                self.log(f"{caster.name} paga {n} de vida (ward de {perm.name})")
+                return True
+            self.log(f"{perm.name}: ward no pagado — el efecto falla")
+            return False
+        cost = w.get("mana")
+        if cost is not None and caster.can_pay(cost):
+            caster.pay(cost)
+            self.log(f"{caster.name} paga el ward de {perm.name}")
+            return True
+        self.log(f"{perm.name}: ward no pagado — el efecto falla")
+        return False
 
     def legal_creature_targets(self, caster: "Player",
                                opponents_only: bool = True) -> list:
@@ -941,6 +965,9 @@ class Game:
         if perm not in ctrl.battlefield:
             return
         ctrl.battlefield.remove(perm)
+        if getattr(perm, "_blitz", False):    # blitz: su muerte roba una carta
+            ctrl.draw(1, self)
+            self.log(f"{ctrl.name} roba una carta (blitz de {perm.name})")
         relocated = False
         if perm.card.on_death:
             # on_death puede devolver True (persist/undying) para indicar que la
@@ -1240,7 +1267,7 @@ class Game:
         # delve (exiliar del cementerio). Bajan el genérico y consumen recursos.
         convoke_tap, delve_n = [], 0
         tags = getattr(card, "tags", set()) or set()
-        if pay_cost is not None and (tags & {"affinity_art", "convoke", "delve"}):
+        if pay_cost is not None and (tags & {"affinity_art", "convoke", "delve", "improvise"}):
             gen = pay_cost.generic
             if "affinity_art" in tags:
                 arts = sum(1 for pm in player.battlefield if "artifact" in pm.card.types)
@@ -1249,6 +1276,13 @@ class Game:
                 creqs = [pm for pm in player.battlefield if pm.is_creature() and not pm.tapped]
                 use = min(gen, len(creqs))
                 convoke_tap = creqs[:use]
+                gen -= use
+            if "improvise" in tags:      # como convoke pero girando ARTEFACTOS
+                arts = [pm for pm in player.battlefield
+                        if "artifact" in pm.card.types and not pm.tapped
+                        and pm not in convoke_tap]
+                use = min(gen, len(arts))
+                convoke_tap += arts[:use]
                 gen -= use
             if "delve" in tags:
                 delve_n = min(gen, len(player.graveyard))
@@ -1824,6 +1858,44 @@ class Game:
                 if pm.card is card:
                     pm.summoning_sick = False
 
+    def cycle_card(self, p: "Player", card: Card) -> bool:
+        """Cycling: paga el coste de cycling, descarta esta carta (madness aplica) y
+        roba una. Es una habilidad de la MANO."""
+        cost = getattr(card, "cycling", None)
+        if cost is None or card not in p.hand or not p.can_pay(cost):
+            return False
+        p.pay(cost)
+        p.hand.remove(card)
+        self.log(f"{p.name} cicla {card.name}")
+        self.discard_card(p, card)     # respeta madness
+        p.draw(1, self)
+        return True
+
+    def cast_alt_haste(self, p: "Player", card: Card, mode: str) -> bool:
+        """Lanza una criatura por un coste alternativo con PRISA. `mode`:
+        - 'dash': vuelve a la mano al fin del turno.
+        - 'blitz': se sacrifica al fin del turno; su muerte roba una carta.
+        - 'ninjutsu': entra con prisa (aprox: sin el intercambio con un atacante)."""
+        attr = {"dash": "dash_cost", "blitz": "blitz_cost",
+                "ninjutsu": "ninjutsu_cost"}.get(mode)
+        cost = getattr(card, attr, None) if attr else None
+        if cost is None or card not in p.hand or not p.can_pay(cost):
+            return False
+        p.pay(cost)
+        p.hand.remove(card)
+        self.log(f"{p.name} lanza {card.name} por {mode}")
+        perm = self.move_to_battlefield(card, p)
+        if perm is None:
+            return False
+        perm.summoning_sick = False          # prisa
+        if mode == "dash":
+            self.dash_return.append((p, card))
+        elif mode == "blitz":
+            perm._blitz = True
+            self.blitz_sac.append((p, card))
+        self.sba()
+        return True
+
     def cast_evoke(self, p: "Player", card: Card) -> bool:
         """Lanza una criatura por su coste de evoke: entra (dispara su ETB) y se
         sacrifica de inmediato."""
@@ -2126,6 +2198,26 @@ class Game:
                         self.log(f"{card.name} se exilia (unearth)")
                         break
             pend.clear()
+        # Dash: las criaturas jugadas por dash vuelven a la mano al fin del turno.
+        dret = getattr(self, "dash_return", None)
+        if dret:
+            for owner, card in list(dret):
+                for perm in list(owner.battlefield):
+                    if perm.card is card:
+                        owner.battlefield.remove(perm)
+                        owner.hand.append(card)
+                        self.log(f"{card.name} vuelve a la mano (dash)")
+                        break
+            dret.clear()
+        # Blitz: se sacrifican al fin del turno (y su muerte roba una carta).
+        bsac = getattr(self, "blitz_sac", None)
+        if bsac:
+            for owner, card in list(bsac):
+                for perm in list(owner.battlefield):
+                    if perm.card is card:
+                        self.to_graveyard(perm, "blitz (fin de turno)")
+                        break
+            bsac.clear()
         # control temporal (Threaten): devolver los permanentes a su dueño original
         if self.control_returns:
             for perm in list(self.control_returns):

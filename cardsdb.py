@@ -2602,6 +2602,24 @@ def build_card_from_data(data: dict) -> Card:
         card.tags = card.tags | {"delve"}
     if "affinity for artifacts" in _ktext:
         card.tags = card.tags | {"affinity_art"}
+    if "improvise" in _ktext:      # como convoke pero girando artefactos
+        card.tags = card.tags | {"improvise"}
+
+    # Ward: impuesto al ser objetivo de un rival (maná o pagar vida). Se guarda el
+    # coste; el motor lo cobra al resolver (ver Game.ward_ok). "ward" ya está en las
+    # keywords (whitelist) para que has('ward') sea True.
+    _wl = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "").lower())
+    mwl = re.search(r"ward[—-]\s*pay (\w+) life", _wl)
+    mwm = re.search(r"ward\s*((?:\{[wubrgc0-9/x]+\})+)", _wl)
+    if mwl and _count_word(mwl.group(1)):
+        card.ward = {"life": _count_word(mwl.group(1))}
+        card.keywords = set(card.keywords) | {"ward"}
+    elif mwm:
+        card.ward = {"mana": parse_cost(mana_cost_to_str(
+            "".join(re.findall(r"\{[wubrgc0-9/x]+\}", mwm.group(1)))))}
+        card.keywords = set(card.keywords) | {"ward"}
+    elif re.search(r"\bward\b", _wl):     # "Ward" sin coste explícito (raro)
+        card.keywords = set(card.keywords) | {"ward"}
     # auras: anexar a un huésped y bufearlo (antes de la capa ETB genérica)
     _wire_aura(card, data.get("oracle_text", ""))
 
@@ -3028,6 +3046,23 @@ def build_card_from_data(data: dict) -> Card:
     if mev and "creature" in types:
         card.evoke_cost = parse_cost(mana_cost_to_str(
             "".join(re.findall(r"\{[wubrgc0-9/x]+\}", mev.group(1)))))
+
+    # Dash / Blitz / Ninjutsu: cast alternativo con prisa (comportamiento a fin de
+    # turno según la mecánica; ver Game.cast_alt_haste).
+    for _kw, _attr in (("dash", "dash_cost"), ("blitz", "blitz_cost"),
+                       ("ninjutsu", "ninjutsu_cost")):
+        _m = re.search(_kw + r"\s*((?:\{[wubrgc0-9/x]+\})+)", _lt)
+        if _m and "creature" in types:
+            setattr(card, _attr, parse_cost(mana_cost_to_str(
+                "".join(re.findall(r"\{[wubrgc0-9/x]+\}", _m.group(1))))))
+
+    # Cycling {coste}: {coste}, descartar esta carta: robar una. Habilidad DESDE LA
+    # MANO (ver Game.cycle_card). También ciclos tipográficos ("typecycling") se
+    # aproximan como robar 1.
+    mcy = re.search(r"(?:\w+)?cycling\s*((?:\{[wubrgc0-9/x]+\})+)", _lt)
+    if mcy:
+        card.cycling = parse_cost(mana_cost_to_str(
+            "".join(re.findall(r"\{[wubrgc0-9/x]+\}", mcy.group(1)))))
 
     # Entwine {coste}: en una carta modal, pagás el coste de entwine para elegir
     # TODOS los modos en vez de uno.

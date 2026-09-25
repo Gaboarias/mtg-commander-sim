@@ -4207,6 +4207,114 @@ def test_extort_drains_on_cast():
     assert op.life == l0 - 1 and me.life == my0 + 1
 
 
+def test_ward_taxes_opponent_removal():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    op = g.opponents(me)[0]
+    ward = build_card_from_data({
+        "name": "Warded", "mana_cost": "{2}{G}", "cmc": 3, "type_line": "Creature",
+        "power": "3", "toughness": "3", "keywords": ["Ward"], "oracle_text": "Ward {2}"})
+    assert getattr(ward, "ward", None) and "ward" in ward.keywords
+    wperm = g.move_to_battlefield(ward, op)
+    rem = cards.remove_targets("destroy")
+    # sin maná: el ward no se paga y el efecto falla
+    rem(g, me, [wperm])
+    assert wperm in op.battlefield
+    # con maná: se paga el ward y se destruye
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Forest", ["G"]), me)
+    rem(g, me, [wperm])
+    assert wperm not in op.battlefield
+
+
+def test_improvise_taps_artifacts():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1U", 1, 1) for _ in range(12)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(12)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Island", ["U"]), me)
+    for _ in range(3):
+        g.move_to_battlefield(build_card_from_data({
+            "name": "Rock", "mana_cost": "{1}", "cmc": 1, "type_line": "Artifact",
+            "oracle_text": ""}), me)
+    imp = build_card_from_data({
+        "name": "Improviser", "mana_cost": "{4}{U}", "cmc": 5, "type_line": "Sorcery",
+        "oracle_text": "Improvise\nDraw 3 cards.", "keywords": ["Improvise"]})
+    assert "improvise" in imp.tags
+    me.hand = [imp]
+    h0 = len(me.hand)
+    assert g.cast(me, imp) is not False       # {4} pagado con 2 islas + 3 artefactos
+    g.resolve_stack()
+    assert len(me.hand) == (h0 - 1) + 3
+
+
+def test_dash_returns_blitz_sacrifices():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+
+    def mk(nl=4):
+        me = Player("yo", [cards.creature("C", "1R", 1, 1) for _ in range(12)],
+                    cards.creature("Cmd", "2R", 3, 3, legendary=True))
+        op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(12)],
+                    cards.creature("O", "2B", 1, 1, legendary=True))
+        g = Game([me, op], seed=1)
+        for _ in range(nl):
+            g.move_to_battlefield(cards.land("Mountain", ["R"]), me)
+        return g, me, op
+
+    dash = build_card_from_data({
+        "name": "Dasher", "mana_cost": "{3}{R}", "cmc": 4, "type_line": "Creature",
+        "power": "3", "toughness": "2", "keywords": ["Dash"], "oracle_text": "Dash {1}{R}"})
+    assert dash.dash_cost.cmc == 2
+    g, me, op = mk()
+    me.hand = [dash]
+    g.cast_alt_haste(me, dash, "dash")
+    assert any(pm.card.name == "Dasher" and not pm.summoning_sick for pm in me.battlefield)
+    g.end_turn(me)
+    assert any(c.name == "Dasher" for c in me.hand)   # dash: vuelve a la mano
+
+    blitz = build_card_from_data({
+        "name": "Blitzer", "mana_cost": "{4}{R}", "cmc": 5, "type_line": "Creature",
+        "power": "4", "toughness": "2", "keywords": ["Blitz"], "oracle_text": "Blitz {1}{R}"})
+    g, me, op = mk()
+    me.hand = [blitz]
+    g.cast_alt_haste(me, blitz, "blitz")
+    h_before = len(me.hand)
+    g.end_turn(me)
+    g.resolve_stack()
+    assert not any(pm.card.name == "Blitzer" for pm in me.battlefield)  # sacrificada
+    assert len(me.hand) == h_before + 1        # blitz: robó al morir
+
+
+def test_cycling_draws():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1B", 1, 1) for _ in range(12)],
+                cards.creature("Cmd", "2B", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(12)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(3):
+        g.move_to_battlefield(cards.land("Swamp", ["B"]), me)
+    cyc = build_card_from_data({
+        "name": "Barren Moor", "mana_cost": "", "cmc": 0, "type_line": "Land",
+        "oracle_text": "Cycling {B}", "keywords": ["Cycling"]})
+    assert cyc.cycling.cmc == 1
+    me.hand = [cyc]
+    h0 = len(me.hand)
+    g.cycle_card(me, cyc)
+    assert len(me.hand) == h0 - 1 + 1
+    assert any(c.name == "Barren Moor" for c in me.graveyard)
+
+
 def test_cipher_recasts_on_combat_damage():
     import cards
     from cardsdb import build_card_from_data

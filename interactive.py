@@ -668,6 +668,14 @@ class InteractiveGame:
             if i is not None and 0 <= i < len(p.hand):
                 self.g.suspend_card(p, p.hand[i])
             return self.state()
+        if zone in ("dash", "blitz", "ninjutsu"):   # cast alternativo con prisa
+            if i is not None and 0 <= i < len(p.hand):
+                self.g.cast_alt_haste(p, p.hand[i], zone)
+            return self.state()
+        if zone == "cycle":       # ciclar una carta de la mano
+            if i is not None and 0 <= i < len(p.hand):
+                self.g.cycle_card(p, p.hand[i])
+            return self.state()
         if zone == "adventure":   # lanzar la cara de aventura de una carta de la mano
             if i is not None and 0 <= i < len(p.hand):
                 c = p.hand[i]
@@ -985,6 +993,22 @@ class InteractiveGame:
                     casts.append({
                         "i": i, "name": f"{c.name} (evoke)", "zone": "evoke",
                         "cost": _cost_str_cost(ev), "target_spec": None,
+                        "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
+                # Dash / Blitz / Ninjutsu: cast alternativo con prisa.
+                for _kw, _attr in (("dash", "dash_cost"), ("blitz", "blitz_cost"),
+                                   ("ninjutsu", "ninjutsu_cost")):
+                    _co = getattr(c, _attr, None)
+                    if _co and p.can_pay(_co):
+                        casts.append({
+                            "i": i, "name": f"{c.name} ({_kw})", "zone": _kw,
+                            "cost": _cost_str_cost(_co), "target_spec": None,
+                            "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
+                # Cycling: descartar por robar una carta.
+                _cy = getattr(c, "cycling", None)
+                if _cy and p.can_pay(_cy):
+                    casts.append({
+                        "i": i, "name": f"{c.name} (ciclar)", "zone": "cycle",
+                        "cost": _cost_str_cost(_cy), "target_spec": None,
                         "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
                 # Adventure: opción extra para lanzar la cara de aventura.
                 adv = getattr(c, "adventure", None)

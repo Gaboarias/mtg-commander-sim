@@ -187,6 +187,8 @@ def remove_targets(mode="destroy"):
                 continue
             if not game.can_target(ctrl, perm):
                 continue
+            if not game.ward_ok(ctrl, perm):    # ward: se cobra al resolver
+                continue
             owner = perm.controller
             if mode == "destroy":
                 game.destroy(perm, "removal")

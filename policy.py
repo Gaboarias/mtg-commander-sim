@@ -122,7 +122,16 @@ class Policy:
             # el novato no siempre juega la mejor secuencia
             game.rng.shuffle(castables)
         for card in castables:
-            if card not in me.hand or card.is_land():
+            if card not in me.hand:
+                continue
+            # Cycling: si estoy inundado (>=6 tierras en juego) y la carta ciclable es
+            # una tierra, la ciclo por una carta nueva (sin riesgo de tirar algo bueno).
+            cy = getattr(card, "cycling", None)
+            if (not nov and cy and card.is_land() and me.can_pay(cy)
+                    and sum(1 for pm in me.battlefield if pm.card.is_land()) >= 6):
+                game.cycle_card(me, card)
+                continue
+            if card.is_land():
                 continue
             # Suspend: si puedo pagar el coste de suspend pero no el cuerpo completo,
             # la suspendo (se lanzará gratis en unos turnos).
@@ -130,6 +139,17 @@ class Policy:
             if (not nov and sus and me.can_pay(sus["cost"])
                     and not (card.cost and me.can_pay(card.cost))):
                 game.suspend_card(me, card)
+                continue
+            # Dash / Ninjutsu / Blitz: si no puedo pagar el cuerpo completo pero sí un
+            # coste alternativo, entro con prisa para presionar.
+            for _mode, _at in (("dash", "dash_cost"), ("ninjutsu", "ninjutsu_cost"),
+                               ("blitz", "blitz_cost")):
+                _co = getattr(card, _at, None)
+                if (not nov and _co and me.can_pay(_co)
+                        and not (card.cost and me.can_pay(card.cost))):
+                    game.cast_alt_haste(me, card, _mode)
+                    break
+            if card not in me.hand:
                 continue
             # Evoke: si tiene ETB valioso y no puedo (o no quiero) pagar el cuerpo
             # completo pero sí el coste de evoke, la lanzo por evoke (ETB + sacrificio).
