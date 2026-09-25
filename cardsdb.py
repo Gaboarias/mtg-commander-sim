@@ -1910,6 +1910,57 @@ def _generic_amount_effect(oracle: str):
             game.log(f"{ctrl.name} tomará un turno extra")
         return eff
 
+    # destruir HASTA N permanentes NO-criatura (Terastodon, Decimate-tipo). El humano
+    # elige uno por uno (puede parar); por cada uno destruido su controlador crea una
+    # ficha 3/3 verde Elefante si el texto lo indica (Terastodon).
+    mnc = re.search(r"destroy (?:up to )?(\w+ )?target noncreature permanents?", t)
+    if mnc:
+        n_nc = _count_word((mnc.group(1) or "").strip()) or 1
+        make_ele = "elephant" in t and "3/3" in t
+
+        def eff(game, ctrl, *_a, _n=n_nc, _ele=make_ele):
+            def _pool():
+                return [pm for pl in game.players for pm in pl.battlefield
+                        if not pm.is_creature()]
+
+            def _destroy_one(victim):
+                if victim not in victim.controller.battlefield:
+                    return
+                owner = victim.controller
+                game.destroy(victim, "Terastodon")
+                game.log(f"{ctrl.name} destruye {victim.name} de {owner.name}")
+                if _ele:
+                    cards.make_token(game, owner, "Elephant", 3, 3, subtypes=("Elephant",))
+
+            if ctrl is getattr(game, "interactive_human", None):
+                st = {"left": _n}
+
+                def _prompt():
+                    if st["left"] <= 0:
+                        return
+                    pool = _pool()
+                    if not pool:
+                        return
+                    cands = [(f"{pm.name} · {pm.controller.name}", pm) for pm in pool]
+
+                    def _do(victim):
+                        _destroy_one(victim)
+                        st["left"] -= 1
+                        _prompt()                      # encadena la siguiente elección
+                    _human_target_choice(
+                        game, ctrl, "etb_target",
+                        f"Elegí un permanente no-criatura para destruir "
+                        f"({st['left']} restante(s), o ninguno)",
+                        cands, _do, allow_none=True)
+                _prompt()
+            else:
+                opp = [pm for o in game.opponents(ctrl) for pm in o.battlefield
+                       if not pm.is_creature()]
+                opp.sort(key=lambda pm: pm.card.is_land())   # no-tierras primero
+                for pm in opp[:_n]:
+                    _destroy_one(pm)
+        return eff
+
     # destruir una tierra NO básica (p. ej. White Orchid Phantom). El humano ELIGE
     # cuál; su dueño puede buscar una básica tapeada (compensación).
     if re.search(r"destroy (?:up to )?(?:one |a )?target nonbasic land", t):
@@ -3159,6 +3210,32 @@ def build_card_from_data(data: dict) -> Card:
             _prev_ri = card.on_etb
             card.on_etb = (lambda g, ctrl, perm, _d=_riot_etb, _p=_prev_ri:
                            (_d(g, ctrl, perm), _p(g, ctrl, perm) if _p else None))
+
+    # Fading N / Vanishing N: entran con N contadores; el motor los va quitando en el
+    # mantenimiento y sacrifica al agotarse (_tick_upkeep_counters).
+    mfa = re.search(r"fading (\d+)", _lt)
+    if mfa:
+        card.fading = int(mfa.group(1))
+        card.etb_counters = dict(getattr(card, "etb_counters", None) or {})
+        card.etb_counters["fade"] = card.fading
+    mva = re.search(r"vanishing (\d+)", _lt)
+    if mva:
+        card.vanishing = int(mva.group(1))
+        card.etb_counters = dict(getattr(card, "etb_counters", None) or {})
+        card.etb_counters["time"] = card.vanishing
+    # Cumulative upkeep: coste creciente cada mantenimiento (maná o vida).
+    if "cumulative upkeep" in _lt:
+        ml = re.search(r"cumulative upkeep[—\-\s]*pay (\d+) life", _lt)
+        if ml:
+            card.cumulative_upkeep = {"kind": "life", "amount": int(ml.group(1))}
+        else:
+            mg = re.search(r"cumulative upkeep[—\-\s]*\{(\d+)\}", _lt)
+            if mg:
+                amt = int(mg.group(1))
+            else:  # coste de color: contar símbolos {W}{U}… tras "cumulative upkeep"
+                mc2 = re.search(r"cumulative upkeep[—\-\s]*((?:\{[wubrgc]\})+)", _lt)
+                amt = len(re.findall(r"\{[wubrgc]\}", mc2.group(1))) if mc2 else 1
+            card.cumulative_upkeep = {"kind": "mana", "amount": amt or 1}
 
     # reducción de coste ESTÁTICA a tus hechizos: "<tipo> spells you cast cost {N}
     # less to cast" (Goblin Electromancer, Medallion, etc.).

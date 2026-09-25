@@ -65,6 +65,13 @@ bloquear o ser bloqueada). **Toxic N**: N contadores de veneno por daño de comb
 **Disparos ETB/muerte**: **vida tras la muerte N** (afterlife: N fichas Espíritu 1/1
 voladoras al morir), **modular N** (entra con N +1/+1; al morir los mueve a otro
 artefacto-criatura), **motín** (riot: entra con prisa o un +1/+1 — el bot elige +1/+1).
+**Destruir hasta N no-criaturas** (Terastodon): el humano elige de a uno (o ninguno);
+por cada uno destruido su controlador crea un Elefante 3/3 verde.
+
+**Mantenimiento** (`_tick_upkeep_counters`): **fading N** (entra con N contadores fade;
+quita uno por upkeep, se sacrifica al no poder), **vanishing N** (contadores time; se
+sacrifica al quitar el último), **cumulative upkeep** (contador de edad creciente; paga
+maná/vida × edad o se sacrifica).
 
 ## Efectos continuos / capas
 

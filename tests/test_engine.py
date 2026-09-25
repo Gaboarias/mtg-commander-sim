@@ -5076,6 +5076,92 @@ def test_amass_creates_and_grows_army():
     assert army is not None and army.counters.get("+1/+1", 0) == 3
 
 
+# -- tanda 3: ETB destruir no-criaturas (Terastodon) + upkeep --------------- #
+def _terastodon():
+    from cardsdb import build_card_from_data
+    return build_card_from_data({
+        "name": "Terastodon", "mana_cost": "{6}{G}{G}", "cmc": 8,
+        "type_line": "Creature — Elephant", "power": "9", "toughness": "9",
+        "oracle_text": ("When Terastodon enters, you may destroy up to three "
+                        "target noncreature permanents. For each permanent put "
+                        "into a graveyard this way, its controller creates a 3/3 "
+                        "green Elephant creature token."), "keywords": []})
+
+
+def test_terastodon_etb_human_destroys_and_makes_elephant():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me, op = _duel()
+    g.interactive_human = me
+    art = build_card_from_data({"name": "Signet", "mana_cost": "{2}", "cmc": 2,
+                                "type_line": "Artifact", "oracle_text": "",
+                                "keywords": []})
+    g.move_to_battlefield(art, op)
+    t = g.move_to_battlefield(_terastodon(), me)
+    assert t in me.battlefield                          # entra y NO desaparece
+    pc = g.pending_choice
+    assert pc and pc["kind"] == "etb_target"
+    pc["_apply"](0)                                     # destruir el Signet
+    assert art not in op.battlefield
+    eles = [p for p in op.battlefield if p.name == "Elephant"]
+    assert len(eles) == 1 and eles[0].power == 3         # su dueño (op) hace un 3/3
+    assert t in me.battlefield                           # sigue en el campo
+
+
+def test_terastodon_bot_autodestroys_opponent_noncreature():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me, op = _duel()                                  # sin interactive_human -> bot
+    art = build_card_from_data({"name": "Signet", "mana_cost": "{2}", "cmc": 2,
+                                "type_line": "Artifact", "oracle_text": "",
+                                "keywords": []})
+    g.move_to_battlefield(art, op)
+    g.move_to_battlefield(_terastodon(), me)
+    assert art not in op.battlefield                     # el bot lo destruye solo
+
+
+def test_vanishing_sacrifices_after_n_upkeeps():
+    from cardsdb import build_card_from_data
+    g, me, op = _duel()
+    v = g.move_to_battlefield(build_card_from_data({
+        "name": "Vanish", "mana_cost": "{2}{U}", "cmc": 3,
+        "type_line": "Creature — Illusion", "power": "3", "toughness": "3",
+        "oracle_text": "Vanishing 2.", "keywords": []}), me)
+    assert v.counters.get("time") == 2
+    g._tick_upkeep_counters(me)
+    assert v in me.battlefield
+    g._tick_upkeep_counters(me)
+    assert v not in me.battlefield                       # muere al quitar el último
+
+
+def test_fading_sacrifices_when_cannot_remove():
+    from cardsdb import build_card_from_data
+    g, me, op = _duel()
+    f = g.move_to_battlefield(build_card_from_data({
+        "name": "Fade", "mana_cost": "{2}", "cmc": 2, "type_line": "Creature — Ally",
+        "power": "2", "toughness": "2", "oracle_text": "Fading 1.", "keywords": []}), me)
+    assert f.counters.get("fade") == 1
+    g._tick_upkeep_counters(me)                          # quita el único contador
+    assert f in me.battlefield
+    g._tick_upkeep_counters(me)                          # no puede quitar -> sacrificio
+    assert f not in me.battlefield
+
+
+def test_cumulative_upkeep_life_sacrifices_when_unaffordable():
+    from cardsdb import build_card_from_data
+    g, me, op = _duel()
+    c = g.move_to_battlefield(build_card_from_data({
+        "name": "CU", "mana_cost": "{1}", "cmc": 1, "type_line": "Enchantment",
+        "power": None, "toughness": None,
+        "oracle_text": "Cumulative upkeep—Pay 3 life.", "keywords": []}), me)
+    l0 = me.life
+    g._tick_upkeep_counters(me)                          # edad 1: paga 3 vida
+    assert c in me.battlefield and me.life == l0 - 3
+    me.life = 2                                          # no puede pagar 6
+    g._tick_upkeep_counters(me)
+    assert c not in me.battlefield                       # se sacrifica
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

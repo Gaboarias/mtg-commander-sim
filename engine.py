@@ -1873,6 +1873,45 @@ class Game:
                 if pm.card is card:
                     pm.summoning_sick = False
 
+    def _tick_upkeep_counters(self, p: "Player"):
+        """Fading, vanishing y cumulative upkeep en el mantenimiento de `p`."""
+        for perm in list(p.battlefield):
+            if perm not in p.battlefield:
+                continue
+            # Fading N: quita un contador fade; si no puede (0), se sacrifica.
+            if getattr(perm.card, "fading", 0):
+                if perm.counters.get("fade", 0) > 0:
+                    perm.counters["fade"] -= 1
+                else:
+                    self.log(f"Fading: {perm.name} se sacrifica")
+                    self.to_graveyard(perm, "fading")
+                continue
+            # Vanishing N: quita un contador de tiempo; al quitar el último, sacrificio.
+            if getattr(perm.card, "vanishing", 0):
+                if perm.counters.get("time", 0) > 0:
+                    perm.counters["time"] -= 1
+                    if perm.counters["time"] <= 0:
+                        self.log(f"Vanishing: {perm.name} se sacrifica")
+                        self.to_graveyard(perm, "vanishing")
+                continue
+            # Cumulative upkeep: +1 contador de edad; pagar coste × edad o sacrificar.
+            cu = getattr(perm.card, "cumulative_upkeep", None)
+            if cu:
+                perm.counters["age"] = perm.counters.get("age", 0) + 1
+                age = perm.counters["age"]
+                paid = False
+                need = cu["amount"] * age
+                if cu.get("kind") == "life":
+                    if p.life > need:               # no se suicida
+                        p.life -= need
+                        paid = True
+                else:                               # maná genérico (aprox, sin tapear)
+                    paid = p.available_mana() >= need
+                if not paid:
+                    self.log(f"Cumulative upkeep: {perm.name} se sacrifica")
+                    self.to_graveyard(perm, "cumulative upkeep")
+        self.sba()
+
     def cycle_card(self, p: "Player", card: Card) -> bool:
         """Cycling: paga el coste de cycling, descarta esta carta (madness aplica) y
         roba una. Es una habilidad de la MANO."""
@@ -2293,6 +2332,7 @@ class Game:
 
         # UPKEEP
         self._tick_suspended(p)          # quita contadores de tiempo (suspend)
+        self._tick_upkeep_counters(p)    # fading / vanishing / cumulative upkeep
         self.emit("upkeep", player=p)
         self.resolve_stack()
 
