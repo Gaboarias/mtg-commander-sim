@@ -124,6 +124,16 @@ class Policy:
         for card in castables:
             if card not in me.hand or card.is_land():
                 continue
+            # Adventure: si puedo pagar la aventura pero aún no la criatura, lanzo la
+            # aventura por su valor (la criatura queda jugable desde el exilio).
+            adv = getattr(card, "adventure", None)
+            if (not nov and adv and me.can_pay(adv["cost"])
+                    and not (card.cost and me.can_pay(card.cost))):
+                atg = self._spec_targets(game, me, adv.get("target_spec"),
+                                         adv.get("target_count", 1)) if adv.get("target_spec") else []
+                if not (adv.get("target_spec") and not atg):
+                    game.cast_adventure(me, card, targets=atg)
+                    continue
             sc = self.score(game, me, card)
             if not second and sc <= 0 and not nov:
                 continue

@@ -660,6 +660,13 @@ class InteractiveGame:
                     p.impulse.remove(c)
                 self.g.sba()
             return self.state()
+        if zone == "adventure":   # lanzar la cara de aventura de una carta de la mano
+            if i is not None and 0 <= i < len(p.hand):
+                c = p.hand[i]
+                spec = getattr(c, "adventure", {}).get("target_spec")
+                tgts = self._chosen_targets(c, target_uids, spec=spec) if spec else None
+                self.g.cast_adventure(p, c, targets=tgts)
+            return self.state()
         if zone == "graveyard":   # jugar/lanzar desde el CEMENTERIO (flashback, etc.)
             self._play_from_graveyard(p, i, target_uids, mode)
             return self.state()
@@ -957,6 +964,16 @@ class InteractiveGame:
                         entry["castable"] = False
                         entry["reason"] = "Sin objetivos legales"
                     casts.append(entry)
+                # Adventure: opción extra para lanzar la cara de aventura.
+                adv = getattr(c, "adventure", None)
+                if adv and p.can_pay(adv["cost"]):
+                    aspec = adv.get("target_spec")
+                    casts.append({
+                        "i": i, "name": f"{c.name} — {adv['label']} (aventura)",
+                        "zone": "adventure", "cost": _cost_str_cost(adv["cost"]),
+                        "target_spec": aspec, "target_count": adv.get("target_count", 1),
+                        "targets": self._targets_for_spec(aspec), "modes": [],
+                        "mode_pick": 1})
             for c in p.command:
                 pay = None if c.cost is None else Cost(c.cost.generic + p.cmdr_tax,
                                                        c.cost.pips)

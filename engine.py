@@ -990,6 +990,23 @@ class Game:
         pool.sort(key=worth)
         return pool[:n]
 
+    def discard_card(self, ctrl, card):
+        """Descarta una carta ya quitada de la mano. Madness: si la carta tiene
+        coste de madness y el jugador puede pagarlo, la lanza en vez de mandarla al
+        cementerio (auto)."""
+        mad = getattr(card, "madness", None)
+        if mad is not None and ctrl.can_pay(mad):
+            orig = card.cost
+            try:
+                card.cost = mad
+                self.log(f"{ctrl.name} lanza {card.name} por madness")
+                self.cast(ctrl, card)
+            finally:
+                card.cost = orig
+            return
+        ctrl.graveyard.append(card)
+        self.emit("to_graveyard", player=ctrl, card=card)
+
     def _pay_discard(self, ctrl, n):
         """Descarta `n` cartas (o toda la mano si n<0) como coste. Usa la política
         del jugador si expone choose_discard; si no, descarta las últimas."""
@@ -1002,8 +1019,7 @@ class Game:
             else:
                 card = ctrl.hand[-1]
             ctrl.hand.remove(card)
-            ctrl.graveyard.append(card)
-            self.emit("to_graveyard", player=ctrl, card=card)
+            self.discard_card(ctrl, card)
         self.log(f"{ctrl.name} descarta {count} carta(s) (coste)")
 
     def leave_graveyard(self, player: "Player", card: Card, dest: str = "exile") -> bool:
@@ -1723,6 +1739,27 @@ class Game:
             card.cost = orig
         if ok is not False and card in p.exile_play:
             p.exile_play.remove(card)
+        self.sba()
+        return True
+
+    def cast_adventure(self, p: "Player", card: Card, targets=None) -> bool:
+        """Lanza la cara de Aventura de una carta: paga su coste, resuelve el efecto
+        y exilia la carta como jugable después (la criatura queda disponible)."""
+        adv = getattr(card, "adventure", None)
+        if not adv or card not in p.hand:
+            return False
+        cost = adv["cost"]
+        if cost is not None and not p.can_pay(cost):
+            return False
+        if cost is not None:
+            p.pay(cost)
+        p.hand.remove(card)
+        self.log(f"{p.name} lanza la aventura {adv['label']} de {card.name}")
+        eff = adv.get("effect")
+        if eff:
+            eff(self, p, targets or [])
+        # la carta va al exilio, jugable después como criatura por su coste normal
+        p.exile_play.append(card)
         self.sba()
         return True
 

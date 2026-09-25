@@ -4207,6 +4207,74 @@ def test_extort_drains_on_cast():
     assert op.life == l0 - 1 and me.life == my0 + 1
 
 
+def test_level_up_grows_creature():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    lu = build_card_from_data({
+        "name": "Student", "mana_cost": "{W}", "cmc": 1, "type_line": "Creature",
+        "power": "1", "toughness": "1",
+        "oracle_text": "Level up {W} ({W}: Put a level counter on this.)"})
+    assert any(a["label"] == "Level up" for a in lu.activated_abilities)
+    perm = g.move_to_battlefield(lu, me)
+    ab = [a for a in lu.activated_abilities if a["label"] == "Level up"][0]
+    ab["effect"](g, me, perm, [])
+    assert perm.counters.get("+1/+1") == 1 and perm.counters.get("level") == 1
+
+
+def test_madness_cast_on_discard():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1R", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(10)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(3):
+        g.move_to_battlefield(cards.land("Mountain", ["R"]), me)
+    mad = build_card_from_data({
+        "name": "Fiery Temper", "mana_cost": "{2}{R}", "cmc": 3, "type_line": "Instant",
+        "oracle_text": "Fiery Temper deals 3 damage to any target.\nMadness {R}"})
+    assert mad.madness.cmc == 1
+    me.hand = [mad]
+    l0 = op.life
+    g._pay_discard(me, 1)          # descartar como coste dispara madness
+    g.resolve_stack()
+    assert op.life == l0 - 3
+
+
+def test_adventure_cast_then_creature():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1R", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(10)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(6):
+        g.move_to_battlefield(cards.land("Mountain", ["R"]), me)
+    adv = build_card_from_data({
+        "name": "Bonecrusher Giant", "mana_cost": "{2}{R}", "cmc": 3,
+        "type_line": "Creature — Giant", "power": "4", "toughness": "3",
+        "oracle_text": "...",
+        "card_faces": [
+            {"name": "Bonecrusher Giant", "type_line": "Creature — Giant",
+             "mana_cost": "{2}{R}", "oracle_text": "...", "power": "4", "toughness": "3"},
+            {"name": "Stomp", "type_line": "Instant — Adventure", "mana_cost": "{1}{R}",
+             "oracle_text": "Stomp deals 2 damage to any target."}]})
+    assert getattr(adv, "adventure", None) and adv.adventure["cost"].cmc == 2
+    me.hand = [adv]
+    l0 = op.life
+    g.cast_adventure(me, adv)
+    g.resolve_stack()
+    assert op.life == l0 - 2
+    assert any(c.name == "Bonecrusher Giant" for c in me.exile_play)
+    g.play_from_exile(me, me.exile_play[0])
+    assert any(pm.card.name == "Bonecrusher Giant" for pm in me.battlefield)
+
+
 def test_echo_pay_or_sacrifice():
     import cards
     from cardsdb import build_card_from_data

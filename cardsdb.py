@@ -2965,6 +2965,29 @@ def build_card_from_data(data: dict) -> Card:
     if mbb and {"instant", "sorcery"} & types:
         card._buyback_cost = int(mbb.group(1))
 
+    # Adventure: carta de criatura con una cara de hechizo (Adventure). Se puede
+    # lanzar la aventura (efecto) y luego la criatura queda jugable desde el exilio.
+    _faces = data.get("card_faces") or []
+    if (len(_faces) == 2 and "creature" in types
+            and "adventure" in (_faces[1].get("type_line", "") or "").lower()):
+        adv = _faces[1]
+        adv_cost = parse_cost(mana_cost_to_str(adv.get("mana_cost", "") or "0"))
+        aeff, aspec, acount = _fragment_effect(adv.get("oracle_text", "") or "")
+        if aeff is None:
+            aeff2 = _generic_amount_effect(adv.get("oracle_text", "") or "")
+            aeff = (lambda g, c, tg=None, _e=aeff2: _e(g, c)) if aeff2 else None
+            aspec, acount = None, 1
+        if aeff is not None:
+            card.adventure = {"cost": adv_cost, "effect": aeff, "label": adv.get("name", "Aventura"),
+                              "target_spec": aspec, "target_count": acount}
+
+    # Madness <coste>: si se descarta, se puede lanzar por el coste de madness en
+    # vez de ir al cementerio (el motor lo hace automático si hay maná).
+    mmad = re.search(r"madness ((?:\{[wubrgc0-9/x]+\})+)", _lt)
+    if mmad:
+        card.madness = parse_cost(mana_cost_to_str(
+            "".join(re.findall(r"\{[wubrgc0-9/x]+\}", mmad.group(1)))))
+
     # Replicate <coste>: coste que se paga varias veces; cada pago copia el hechizo.
     # Aprox: coste convertido a CMV entero; el motor paga cuanto se pueda.
     mrep = re.search(r"replicate ((?:\{[wubrgc0-9/x]+\})+)", _lt)
@@ -3005,6 +3028,24 @@ def build_card_from_data(data: dict) -> Card:
                 g.to_graveyard(perm, "echo impago")
         card.triggers = dict(card.triggers)
         card.triggers.setdefault("upkeep", _echo_upkeep)
+
+    # Level up {coste}: habilidad activada que sube de nivel. Aprox: cada nivel
+    # suma un contador +1/+1 (la criatura crece; sumidero de maná).
+    mlvl = re.search(r"level up ((?:\{[wubrgc0-9/x]+\})+)", _lt)
+    if mlvl and "creature" in types:
+        lvl_cost = parse_cost(mana_cost_to_str(
+            "".join(re.findall(r"\{[wubrgc0-9/x]+\}", mlvl.group(1)))))
+
+        def _level_up(g, c, perm, tg, *_a):
+            if perm is not None:
+                g.add_counters(perm, "+1/+1", 1)
+                perm.counters["level"] = perm.counters.get("level", 0) + 1
+                g.log(f"{perm.name} sube de nivel ({perm.counters['level']})")
+        card.activated_abilities = tuple(card.activated_abilities) + ({
+            "cost": lvl_cost, "tap": False, "sacrifice_self": False,
+            "sacrifice_other": None, "pay_life": 0, "discard": 0,
+            "label": "Level up", "effect": _level_up,
+            "target_spec": None, "target_count": 1, "is_copy_ability": False},)
 
     # Prohibición de ganar vida (Erebos, Archfiend of Despair, Sulfuric Vortex…).
     if re.search(r"players can'?t gain life", _lt):
