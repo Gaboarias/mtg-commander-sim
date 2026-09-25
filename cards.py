@@ -71,7 +71,7 @@ def planeswalker(name, cost, loyalty, abilities, color_id, tags=("engine",)):
     )
 
 
-def make_token(game, player, name, power, toughness, kw=(), subtypes=()):
+def make_token(game, player, name, power, toughness, kw=(), subtypes=(), counters=0):
     tok = Card(
         name=name,
         types={"creature"},
@@ -85,6 +85,8 @@ def make_token(game, player, name, power, toughness, kw=(), subtypes=()):
     last = None
     for _ in range(game.token_multiplier(player)):     # dobladores de fichas
         last = game.move_to_battlefield(_copy.deepcopy(tok), player, is_token=True)
+        if last is not None and counters:              # ficha "con N contadores +1/+1"
+            game.add_counters(last, "+1/+1", counters)
     return last
 
 

@@ -1440,7 +1440,8 @@ def test_generic_amount_effects_from_oracle():
     tok = mk("Tokener", "Creature — Elf", "1G",
              "When Tokener enters, create two 1/1 green Elf creature tokens.")
     g.move_to_battlefield(tok, me)
-    assert sum(1 for p in me.creatures() if p.name == "Token") == 2
+    # las fichas ahora se nombran por su subtipo (Elf) en vez de "Token" genérico
+    assert sum(1 for p in me.creatures() if p.is_token and p.name == "Elf") == 2
 
     burn = mk("Burner", "Sorcery", "2R", "Burner deals 3 damage to each opponent.")
     burn.on_cast_resolve(g, me, [])
@@ -5186,6 +5187,56 @@ def test_final_act_modal_five_modes_all_resolve():
     assert mc not in me.battlefield and oc not in op.battlefield   # destruir criaturas
     assert len(op.graveyard) == 0                                  # exiliar cementerios
     assert op.poison == 0                                          # perder contadores
+
+
+def test_class_enchantment_levels_and_gated_trigger():
+    import cards
+    from cardsdb import build_card_from_data
+    oracle = ("(Gain the next level as a sorcery to add its ability.)\n"
+              "At the beginning of your first main phase, mill a card.\n"
+              "{1}{R}: Level 2\n"
+              "Whenever one or more cards leave your graveyard, this Class deals 2 "
+              "damage to each opponent.\n"
+              "{1}{R}: Level 3\n"
+              "Spells you cast from anywhere other than your hand cost {2} less.")
+    def AR():
+        return build_card_from_data({
+            "name": "Advanced Reconstruction", "mana_cost": "{3}{R}", "cmc": 4,
+            "type_line": "Enchantment — Class", "oracle_text": oracle, "keywords": []})
+    card = AR()
+    assert card.class_max == 3
+    assert [a["label"] for a in card.activated_abilities] == ["Subir a nivel 2", "Subir a nivel 3"]
+    g, me, op = _duel()
+    for _ in range(3):
+        g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), me)
+    perm = g.move_to_battlefield(AR(), me)
+    assert perm.counters.get("level") == 1                 # entra en nivel 1
+    # en nivel 1 el disparo de nivel 2 NO debe dañar
+    me.graveyard.append(cards.creature("X", "1R", 1, 1))
+    g.emit("leaves_graveyard", player=me, card=me.graveyard.pop()); g.resolve_stack()
+    assert op.life == 40
+    # subir a nivel 2 y comprobar que ahora sí dispara
+    g.activate_ability(perm, 0); g.resolve_stack()
+    assert perm.counters.get("level") == 2
+    me.graveyard.append(cards.creature("Y", "1R", 1, 1))
+    g.emit("leaves_graveyard", player=me, card=me.graveyard.pop()); g.resolve_stack()
+    assert op.life == 38                                    # 2 de daño en nivel 2
+
+
+def test_token_with_counters_and_subtype():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me, op = _duel()
+    sp = build_card_from_data({
+        "name": "Dino Maker", "mana_cost": "{3}{G}", "cmc": 4, "type_line": "Sorcery",
+        "oracle_text": ("Create a 3/3 green Dinosaur creature token with two "
+                        "+1/+1 counters on it."), "keywords": []})
+    sp.on_cast_resolve(g, me, sp)
+    toks = [p for p in me.battlefield if p.is_token]
+    assert len(toks) == 1
+    t = toks[0]
+    assert t.name == "Dinosaur" and "Dinosaur" in t.card.subtypes
+    assert t.counters.get("+1/+1") == 2 and t.power == 5 and t.toughness == 5
 
 
 # -- partida completa corre sin excepciones -------------------------------- #

@@ -1041,6 +1041,81 @@ def _recurring_trigger_effects(oracle: str):
     return out
 
 
+_CLASS_MARK = re.compile(r"^\s*((?:\{[^}]+\})+)\s*:\s*level\s+(\d+)\s*$", re.I)
+
+
+def _parse_class(card, oracle):
+    """Encantamiento — Clase: niveles que se suben pagando un coste; cada nivel
+    agrega una habilidad. Modela el contador 'level', las habilidades de subir de
+    nivel y cablea (aprox.) las habilidades de cada nivel con verificación de nivel."""
+    lines = [ln.strip() for ln in (oracle or "").split("\n") if ln.strip()]
+    lines = [ln for ln in lines if not ln.lower().startswith("(gain the next level")]
+    segments = {1: []}
+    levelup = {}
+    cur = 1
+    for ln in lines:
+        m = _CLASS_MARK.match(ln)
+        if m:
+            cur = int(m.group(2))
+            segments.setdefault(cur, [])
+            levelup[cur] = parse_cost(re.sub(r"[{}]", "", m.group(1)))
+        else:
+            segments.setdefault(cur, []).append(ln)
+    card.class_max = max(segments) if segments else 1
+
+    def _class_etb(g, ctrl, perm):
+        perm.counters["level"] = max(1, perm.counters.get("level", 0))
+    card.on_etb = _class_etb
+
+    # habilidades de subir de nivel (reemplazan el mal-parseo de _parse_activated)
+    abils = []
+    for n in range(2, card.class_max + 1):
+        cost = levelup.get(n)
+        if cost is None:
+            continue
+
+        def _lvl(g, ctrl, perm, targets=None, _n=n):
+            lv = perm.counters.get("level", 1)
+            if lv == _n - 1:
+                perm.counters["level"] = _n
+                g.log(f"{perm.name} sube a nivel {_n}")
+            else:
+                g.log(f"{perm.name}: no puede subir a nivel {_n} (nivel actual {lv})")
+        abils.append({"cost": cost, "tap": False, "sacrifice_self": False,
+                      "sacrifice_other": None, "pay_life": 0, "discard": 0,
+                      "label": f"Subir a nivel {n}", "effect": _lvl,
+                      "target_spec": None, "target_count": 1,
+                      "is_copy_ability": False})
+    card.activated_abilities = tuple(abils)
+
+    # habilidades por nivel (disparos), con verificación de nivel
+    triggers = dict(card.triggers)
+    for n, body_lines in segments.items():
+        body = " ".join(body_lines)
+        if not body:
+            continue
+        # disparo recurrente: "at the beginning of your (first) main phase/upkeep"
+        body_up = re.sub(r"(?:first |precombat |postcombat |post-combat )?main phase",
+                         "upkeep", body, flags=re.I)
+        for ev, cb in _recurring_trigger_effects(body_up).items():
+            def gated(g, perm, _cb=cb, _n=n, **kw):
+                if perm.counters.get("level", 1) >= _n:
+                    _cb(g, perm, **kw)
+            triggers[ev] = gated
+        # "whenever one or more cards leave your graveyard, <efecto>"
+        mlg = re.search(r"whenever one or more cards? leave your graveyard,?\s*"
+                        r"(.{0,160})", body, re.I)
+        if mlg:
+            eff = _generic_amount_effect(mlg.group(1))
+            if eff:
+                def cb_lg(g, perm, player=None, _e=eff, _n=n, **kw):
+                    if perm.counters.get("level", 1) >= _n and player is perm.controller:
+                        _e(g, perm.controller)
+                triggers["leaves_graveyard"] = cb_lg
+    card.triggers = triggers
+    card.tags = card.tags | {"class"}
+
+
 def _death_self_effect(oracle: str, name: str = ""):
     """'When(ever) this creature/<nombre> dies, <efecto>' -> callback on_death
     (game, ctrl, perm). Usa la capa genérica. Antes esto se cableaba mal como ETB."""
@@ -2082,14 +2157,24 @@ def _generic_amount_effect(oracle: str):
             game.log(f"{ctrl.name} crea {_n} ficha(s) {_k.capitalize()}")
         return eff
 
-    m = re.search(r"create (\w+) .{0,40}?(\d+)/(\d+).{0,40}?token", t)
+    m = re.search(r"create (\w+) .{0,40}?(\d+)/(\d+)\s*([\w' ]*?)(?:creature )?tokens?", t)
     if m:
         n = _count_word(m.group(1)) or 1
         pw, tf = int(m.group(2)), int(m.group(3))
+        # subtipo(s) de la ficha: última palabra descriptiva (p. ej. "green Dinosaur")
+        words = [w for w in (m.group(4) or "").split()
+                 if w not in ("green", "white", "blue", "black", "red", "colorless",
+                              "and", "or", "artifact", "enchantment", "legendary", "tapped")]
+        sub = words[-1].capitalize() if words else "Token"
+        # "with N +1/+1 counters on it" (contadores de entrada de la ficha)
+        mc = re.search(r"with (\w+) \+1/\+1 counters?", t)
+        cn = _count_word(mc.group(1)) if mc else 0
+        kw = ("trample",) if re.search(r"\bwith trample\b|has trample", t) else ()
 
-        def eff(game, ctrl, *_a, _n=min(n, 8), _p=pw, _t=tf):
+        def eff(game, ctrl, *_a, _n=min(n, 8), _p=pw, _t=tf, _s=sub, _c=cn or 0, _kw=kw):
             for _ in range(_n):
-                cards.make_token(game, ctrl, "Token", _p, _t)
+                cards.make_token(game, ctrl, _s, _p, _t, kw=_kw,
+                                 subtypes=(_s,), counters=_c)
         return eff
 
     m = re.search(r"deals? (\w+) damage to each opponent", t)
@@ -3122,6 +3207,11 @@ def build_card_from_data(data: dict) -> Card:
         ab = _parse_activated(data.get("oracle_text", ""), data.get("name", ""))
         if ab:
             card.activated_abilities = ab
+
+    # Encantamiento — Clase (level up por coste, habilidad por nivel). Se cablea
+    # DESPUÉS de _parse_activated para reemplazar el mal-parseo de "{coste}: Level N".
+    if "class" in {s.lower() for s in getattr(card, "subtypes", set())}:
+        _parse_class(card, data.get("oracle_text", ""))
 
     # disparo "al atacar" (whenever ~ attacks, ...): p. ej. Laelia (exiliar el tope
     # y poder jugarla). Se cablea como trigger de "attacks".
