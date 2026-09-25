@@ -1520,8 +1520,15 @@ class Game:
         la["run"](self)
         self.sba()
 
+    def land_limit(self, player: "Player") -> int:
+        """Cuántas tierras puede jugar este turno: 1 + las 'additional land' que
+        le den sus permanentes en juego (Exploration, Azusa, etc.)."""
+        extra = sum(getattr(pm.card, "extra_land", 0) or 0
+                    for pm in player.battlefield)
+        return 1 + extra
+
     def play_land(self, player: "Player", card: Card) -> bool:
-        if player.lands_played >= 1:
+        if player.lands_played >= self.land_limit(player):
             return False
         if card in player.hand:
             player.hand.remove(card)
@@ -1615,7 +1622,7 @@ class Game:
         if cost is not None and not p.can_pay(cost):
             return False
         if card.is_land():
-            if p.lands_played >= 1:
+            if p.lands_played >= self.land_limit(p):
                 return False
             p.exile_play.remove(card)
             self.play_land(p, card)

@@ -752,8 +752,6 @@ def _event_trigger_effect(oracle: str):
          r"(.{0,160})", "death"),
         (r"whenever [\w' ,]{0,40}? deals combat damage to a player,?\s*(.{0,160})",
          "combat_damage_to_player"),
-        (r"whenever you cast (?:an instant or sorcery|a noncreature|your first "
-         r"[\w ]*?) spell,?\s*(.{0,160})", "cast"),
     ]
     for pat, ev in specs:
         if ev in out:
@@ -764,14 +762,41 @@ def _event_trigger_effect(oracle: str):
         eff = _generic_amount_effect(m.group(1))
         if eff is None:
             continue
-        if ev == "cast":
-            def cb(game, perm, card=None, _e=eff, **_kw):
-                if card is not None and ({"instant", "sorcery"} & card.types):
-                    _e(game, perm.controller)
-        else:
-            def cb(game, perm, _e=eff, *_a, **_kw):
-                _e(game, perm.controller)
+
+        def cb(game, perm, _e=eff, *_a, **_kw):
+            _e(game, perm.controller)
         out[ev] = cb
+
+    # "whenever you cast a(n) <tipo> spell, <efecto>" (magecraft, Young Pyromancer,
+    # Talrand, disparos de fichas al lanzar criaturas, etc.). Filtra por el TIPO
+    # de hechizo declarado; "your first ... each turn" se aproxima sin el límite.
+    mc = re.search(r"whenever you cast (?:your first )?"
+                   r"(an instant or sorcery|a noncreature|a creature|an artifact|"
+                   r"an enchantment|a spell)"
+                   r"[\w ]*? spell,?\s*(.{0,160})", t, re.I)
+    if mc and "cast" not in out:
+        qual = mc.group(1).lower()
+        eff = _generic_amount_effect(mc.group(2))
+        if eff is not None:
+            if "instant or sorcery" in qual:
+                need = {"instant", "sorcery"}
+            elif "noncreature" in qual:
+                need = None      # cualquier no-criatura (se filtra abajo)
+            elif "a spell" in qual:
+                need = set()     # cualquier hechizo
+            else:
+                need = {qual.split()[-1]}   # creature / artifact / enchantment
+
+            def cbc(game, perm, card=None, _e=eff, _need=need, **_kw):
+                if card is None:
+                    return
+                if _need is None:                        # noncreature
+                    if "creature" in card.types:
+                        return
+                elif _need and not (_need & card.types):
+                    return
+                _e(game, perm.controller)
+            out["cast"] = cbc
 
     # "whenever another creature (you control) dies, put N +1/+1 counters on this
     # creature" (aristócratas que crecen). El efecto va al permanente que observa.
@@ -2089,6 +2114,32 @@ def _generic_amount_effect(oracle: str):
                                  lambda pm: setattr(pm, "tapped", True))
         return eff
 
+    # ganar el control de TODAS las criaturas (Insurrection/Mass Mutiny-style),
+    # normalmente hasta el fin del turno + destrabar + prisa (finisher de robo).
+    # Va ANTES de "untap all" porque suele incluir "untap all creatures" primero.
+    if re.search(r"gain control of all creatures", t):
+        temp = "until end of turn" in t or "end of turn" in t
+        untap = "untap" in t
+        haste = "haste" in t or temp
+
+        def eff(game, ctrl, *_a, _temp=temp, _un=untap, _h=haste):
+            for o in game.opponents(ctrl):
+                for perm in list(o.battlefield):
+                    if not perm.is_creature():
+                        continue
+                    o.battlefield.remove(perm)
+                    perm.controller = ctrl
+                    ctrl.battlefield.append(perm)
+                    if _un:
+                        perm.tapped = False
+                    if _h:
+                        perm.summoning_sick = False
+                    if _temp:
+                        perm.return_to = o
+                        game.control_returns.append(perm)
+            game.log(f"{ctrl.name} toma el control de todas las criaturas")
+        return eff
+
     # enderezar: "untap all creatures/lands/permanents you control" o "untap target …"
     m = re.search(r"untap all (creatures|lands|permanents)", t)
     if m:
@@ -2277,12 +2328,15 @@ def _generic_amount_effect(oracle: str):
                          f"y puede jugarla(s) este turno")
         return eff
 
-    # reanimar desde el cementerio al campo (elección automática, visible en el log)
-    if re.search(r"return .{0,70}?from your graveyard to the battlefield", t):
+    # reanimar al campo desde el cementerio (el TUYO, o CUALQUIERA con "from a
+    # graveyard ... under your control"). El humano elige; el bot toma la mejor.
+    if re.search(r"(?:return|put) .{0,70}?from (?:your|a) graveyard (?:on)?to the "
+                 r"battlefield", t):
         lim = int(mvm.group(1)) if (mvm := re.search(r"mana value (\d+) or less", t)) else None
         cre = "creature card" in t
+        any_gy = "from a graveyard" in t     # reanimación de cualquier cementerio
 
-        def eff(game, ctrl, *_a, _lim=lim, _cre=cre):
+        def eff(game, ctrl, *_a, _lim=lim, _cre=cre, _any=any_gy):
             def ok(c):
                 if not _is_permanent_card(c):        # instantáneos/conjuros NO al campo
                     return False
@@ -2291,18 +2345,23 @@ def _generic_amount_effect(oracle: str):
                 if _lim is not None and c.cost and c.cost.cmc > _lim:
                     return False
                 return True
-            cands = [c for c in ctrl.graveyard if ok(c)]
+            zones = ([(pl, pl.graveyard) for pl in game.players] if _any
+                     else [(ctrl, ctrl.graveyard)])
+            cands = [(owner, c) for owner, gy in zones for c in gy if ok(c)]
             if not cands:
                 game.log(f"{ctrl.name}: sin carta válida en el cementerio para revivir")
                 return
-            cands.sort(key=lambda c: (c.cost.cmc if c.cost else 0), reverse=True)
+            cands.sort(key=lambda oc: (oc[1].cost.cmc if oc[1].cost else 0), reverse=True)
+            picks = [c for _o, c in cands]
+            owner_of = {id(c): o for o, c in cands}
 
             def _do(pick):
-                if pick in ctrl.graveyard:
-                    ctrl.graveyard.remove(pick)
-                    game.move_to_battlefield(pick, ctrl)
+                owner = owner_of.get(id(pick))
+                if owner and pick in owner.graveyard:
+                    owner.graveyard.remove(pick)
+                    game.move_to_battlefield(pick, ctrl)   # bajo control del que reanima
                     game.log(f"{ctrl.name} revive {pick.name} del cementerio")
-            _pick_card_from_zone(game, ctrl, cands, _do,
+            _pick_card_from_zone(game, ctrl, picks, _do,
                                  "Elegí una carta del cementerio para revivir")
         return eff
 
@@ -2383,17 +2442,22 @@ def _generic_amount_effect(oracle: str):
     if ml and (ln := _count_word(ml.group(1))):
         return _scry_surveil_effect(ln, False)
 
-    # "(you may) draw a card": si es OPCIONAL ('you may'), el humano decide; si es
-    # obligatorio, roba directo.
-    if re.search(r"(?:you may )?draw a card", t):
-        optional = bool(re.search(r"you may draw a card", t))
+    # (populate ya se cablea aparte vía _populate_effect en build_card_from_data)
 
-        def eff(game, ctrl, *_a, _opt=optional):
+    # "(you may) draw [N|an additional] card(s)": el controlador roba. Si es
+    # OPCIONAL ('you may'), el humano decide; si es obligatorio, roba directo.
+    md = re.search(r"(?:you may )?draw (a|an|one|two|three|four|five|\d+)"
+                   r"(?: additional)? cards?", t)
+    if md:
+        n = _count_word(md.group(1)) or 1
+        optional = bool(re.search(r"you may draw", t))
+
+        def eff(game, ctrl, *_a, _opt=optional, _n=n):
             def _do(g, c):
-                c.draw(1, g)
-                g.log(f"{c.name} roba una carta")
+                c.draw(_n, g)
+                g.log(f"{c.name} roba {_n} carta(s)")
             if _opt:
-                game.may(ctrl, "¿Robar una carta?", _do)
+                game.may(ctrl, f"¿Robar {n} carta(s)?", _do)
             else:
                 _do(game, ctrl)
         return eff
@@ -2764,6 +2828,16 @@ def build_card_from_data(data: dict) -> Card:
             card.anthem_keywords = set(akw)
             card.anthem_others = "other creatures" in (
                 data.get("oracle_text", "") or "").lower()
+
+    # "play an additional land / X additional lands on each of your turns"
+    # (Exploration, Azusa, Dryad…): sube el límite de tierras del controlador.
+    _lt = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "").lower())
+    ml = re.search(r"play (\w+) additional lands?(?: on each)?(?: of your)? turn", _lt)
+    if ml:
+        w = ml.group(1)
+        card.extra_land = (1 if w in ("a", "an", "one")
+                           else 99 if w == "any"
+                           else (_count_word(w) or 1))
 
     # disparo de MUERTE propia ("when this creature dies, <efecto>"). Antes el
     # efecto se cableaba mal como ETB (se disparaba al entrar en vez de al morir).

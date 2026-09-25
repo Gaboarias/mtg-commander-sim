@@ -905,13 +905,13 @@ class InteractiveGame:
         exile_play, foretell_hand, gy_abilities = [], [], []
         if self._my_turn():
             for i, c in enumerate(p.impulse):   # exiliadas por impulse, jugables hoy
-                playable = (c.is_land() and p.lands_played < 1) or \
+                playable = (c.is_land() and p.lands_played < self.g.land_limit(p)) or \
                            (not c.is_land() and c.cost is not None and p.can_pay(c.cost))
                 impulse.append({"i": i, "name": c.name, "cost": _cost_str(c),
                                 "is_land": c.is_land(), "playable": playable})
             for i, c in enumerate(p.exile_play):   # exilio persistente (foretell, etc.)
                 pc = getattr(c, "_play_cost", None) or c.cost
-                playable = (c.is_land() and p.lands_played < 1) or \
+                playable = (c.is_land() and p.lands_played < self.g.land_limit(p)) or \
                            (not c.is_land() and (pc is None or p.can_pay(pc)))
                 exile_play.append({"i": i, "name": c.name,
                                    "cost": _cost_str_cost(pc) if pc else "0",
@@ -942,7 +942,7 @@ class InteractiveGame:
                                   "mode": gp.get("mode"), "playable": playable})
             for i, c in enumerate(p.hand):
                 if c.is_land():
-                    if p.lands_played < 1:
+                    if p.lands_played < self.g.land_limit(p):
                         lands.append({"i": i, "name": c.name})
                 elif c.cost is not None and p.can_pay(c.cost):
                     tgts = self._targets_for(c)

@@ -4082,6 +4082,85 @@ def test_destroy_artifact_interactive_choice_and_legality():
     assert any(pm.name == "Aura X" for pm in opp.battlefield)
 
 
+def test_extra_land_per_turn():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    assert g.land_limit(me) == 1
+    expl = build_card_from_data({
+        "name": "Exploration", "mana_cost": "{G}", "cmc": 1,
+        "type_line": "Enchantment",
+        "oracle_text": "You may play an additional land on each of your turns."})
+    assert getattr(expl, "extra_land", 0) == 1
+    g.move_to_battlefield(expl, me)
+    assert g.land_limit(me) == 2
+    # se pueden jugar dos tierras
+    me.hand.append(cards.land("Forest", ["G"]))
+    me.hand.append(cards.land("Island", ["U"]))
+    assert g.play_land(me, me.hand[-1]) is True
+    assert g.play_land(me, me.hand[-1]) is True
+    assert g.play_land(me, cards.land("Plains", ["W"])) is False   # ya jugó 2
+
+
+def test_cast_creature_spell_trigger():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    g.interactive_human = None
+    src = build_card_from_data({
+        "name": "Token Maker", "mana_cost": "{2}{W}", "cmc": 3,
+        "type_line": "Enchantment",
+        "oracle_text": "Whenever you cast a creature spell, create a 1/1 white "
+                       "Soldier creature token."})
+    assert src.triggers and "cast" in src.triggers
+    perm = g.move_to_battlefield(src, me)
+    before = len(me.battlefield)
+    # lanzar un hechizo de criatura dispara; uno no-criatura no
+    creature = cards.creature("Bear", "1G", 2, 2)
+    src.triggers["cast"](g, perm, card=creature)
+    assert len(me.battlefield) == before + 1
+    noncreature = build_card_from_data({
+        "name": "Bolt", "mana_cost": "{R}", "cmc": 1, "type_line": "Instant",
+        "oracle_text": "Deal 3 damage to any target."})
+    mid = len(me.battlefield)
+    src.triggers["cast"](g, perm, card=noncreature)
+    assert len(me.battlefield) == mid           # no dispara con no-criatura
+
+
+def test_gain_control_of_all_creatures():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    op = g.opponents(me)[0]
+    a = g.move_to_battlefield(cards.creature("A", "1B", 2, 2), op)
+    b = g.move_to_battlefield(cards.creature("B", "2B", 3, 3), op)
+    spell = build_card_from_data({
+        "name": "Insurrection", "mana_cost": "{5}{R}{R}{R}", "cmc": 8,
+        "type_line": "Sorcery",
+        "oracle_text": "Untap all creatures. Gain control of all creatures "
+                       "until end of turn. They gain haste until end of turn."})
+    spell.on_cast_resolve(g, me, [])
+    assert a.controller is me and b.controller is me
+    assert a in me.battlefield and b in me.battlefield
+
+
+def test_reanimate_from_any_graveyard():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    op = g.opponents(me)[0]
+    op.graveyard.append(cards.creature("Dragon", "4RR", 5, 5))
+    spell = build_card_from_data({
+        "name": "Reanimate Any", "mana_cost": "{3}{B}", "cmc": 4,
+        "type_line": "Sorcery",
+        "oracle_text": "Put target creature card from a graveyard onto the "
+                       "battlefield under your control."})
+    spell.on_cast_resolve(g, me, [])
+    assert any(pm.card.name == "Dragon" and pm.controller is me
+               for pm in me.battlefield)
+    assert not any(c.name == "Dragon" for c in op.graveyard)
+
+
 def test_local_combos_detect():
     import combos
     deck = ["Sanguine Bond", "Exquisite Blood", "Walking Ballista",

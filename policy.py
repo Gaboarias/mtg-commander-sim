@@ -366,24 +366,27 @@ class Policy:
             return set()
 
     def _play_land(self, game, me):
-        lands = [c for c in me.hand if c.is_land()]
-        if not lands:
-            return
-        if self.level == "novato":
-            game.play_land(me, lands[0])
-            return
-        # colores que ya puedo producir
-        have = set()
-        for p in me.mana_sources():
-            opts = p.card.produces(p, me) if p.card.produces else {}
-            have |= set(opts or {})
-        # preferir: agrega color nuevo, y entra sin tapear
-        def key(c):
-            adds_new = 1 if (self._land_colors(c, me) - have) else 0
-            untapped = 0 if c.enters_tapped else 1
-            return (adds_new, untapped)
-        lands.sort(key=key, reverse=True)
-        game.play_land(me, lands[0])
+        # jugar hasta el límite del turno (1 + 'additional land' de Exploration/Azusa…)
+        while me.lands_played < game.land_limit(me):
+            lands = [c for c in me.hand if c.is_land()]
+            if not lands:
+                return
+            if self.level == "novato":
+                game.play_land(me, lands[0])
+                continue
+            # colores que ya puedo producir
+            have = set()
+            for p in me.mana_sources():
+                opts = p.card.produces(p, me) if p.card.produces else {}
+                have |= set(opts or {})
+            # preferir: agrega color nuevo, y entra sin tapear
+            def key(c):
+                adds_new = 1 if (self._land_colors(c, me) - have) else 0
+                untapped = 0 if c.enters_tapped else 1
+                return (adds_new, untapped)
+            lands.sort(key=key, reverse=True)
+            if game.play_land(me, lands[0]) is False:
+                return
 
     def _cast_ramp_first(self, game, me):
         ramp = [c for c in me.hand
