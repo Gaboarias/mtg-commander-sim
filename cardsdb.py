@@ -2975,6 +2975,37 @@ def build_card_from_data(data: dict) -> Card:
         if cmv > 0:
             card._replicate_cost = cmv
 
+    # Echo {coste}: al entrar queda pendiente; en tu PRÓXIMO mantenimiento pagás el
+    # coste de echo o la sacrificás. Auto: el bot paga si puede, si no la sacrifica.
+    mecho = re.search(r"echo ((?:\{[wubrgc0-9/x]+\})+)", _lt)
+    if mecho and "creature" in types:
+        echo_cost = parse_cost(mana_cost_to_str(
+            "".join(re.findall(r"\{[wubrgc0-9/x]+\}", mecho.group(1)))))
+        card.echo = echo_cost
+
+        def _echo_etb(g, ctrl, perm, _prev=card.on_etb):
+            perm._echo_pending = True
+            perm._echo_turn = g.turn
+            if _prev:
+                _prev(g, ctrl, perm)
+        card.on_etb = _echo_etb
+
+        def _echo_upkeep(g, perm, _cost=echo_cost, **_kw):
+            if not getattr(perm, "_echo_pending", False):
+                return
+            if getattr(perm, "_echo_turn", g.turn) >= g.turn:
+                return                     # aún no llegó tu próximo mantenimiento
+            ctrl = perm.controller
+            perm._echo_pending = False
+            if ctrl.can_pay(_cost):
+                ctrl.pay(_cost)
+                g.log(f"{ctrl.name} paga el echo de {perm.name}")
+            else:
+                g.log(f"{ctrl.name} no paga el echo: sacrifica {perm.name}")
+                g.to_graveyard(perm, "echo impago")
+        card.triggers = dict(card.triggers)
+        card.triggers.setdefault("upkeep", _echo_upkeep)
+
     # Prohibición de ganar vida (Erebos, Archfiend of Despair, Sulfuric Vortex…).
     if re.search(r"players can'?t gain life", _lt):
         card.stops_lifegain = "all"

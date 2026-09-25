@@ -4207,6 +4207,41 @@ def test_extort_drains_on_cast():
     assert op.life == l0 - 1 and me.life == my0 + 1
 
 
+def test_echo_pay_or_sacrifice():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+
+    def mkg(nlands):
+        me = Player("yo", [cards.creature("C", "1G", 1, 1) for _ in range(10)],
+                    cards.creature("Cmd", "2G", 3, 3, legendary=True))
+        op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(10)],
+                    cards.creature("O", "2B", 1, 1, legendary=True))
+        g = Game([me, op], seed=1)
+        for _ in range(nlands):
+            g.move_to_battlefield(cards.land("Forest", ["G"]), me)
+        return g, me, op
+
+    echo = build_card_from_data({
+        "name": "Mulldrifter", "mana_cost": "{3}{G}", "cmc": 4,
+        "type_line": "Creature", "power": "4", "toughness": "4",
+        "oracle_text": "Echo {3}{G} (At the beginning of your upkeep, if this came "
+                       "under your control since your last upkeep, sacrifice it "
+                       "unless you pay its echo cost.)"})
+    assert echo.echo.cmc == 4 and "upkeep" in echo.triggers
+    g, me, op = mkg(6)
+    perm = g.move_to_battlefield(echo, me)
+    g.turn = 1
+    echo.triggers["upkeep"](g, perm)
+    assert perm in me.battlefield
+    g, me, op = mkg(0)
+    perm = g.move_to_battlefield(echo, me)
+    g.turn = 1
+    echo.triggers["upkeep"](g, perm)
+    assert perm not in me.battlefield
+    assert any(c.name == "Mulldrifter" for c in me.graveyard)
+
+
 def test_replicate_copies_by_payment():
     import cards
     from cardsdb import build_card_from_data
