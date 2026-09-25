@@ -592,7 +592,7 @@ def _kang_draw(game, perm, **kw):
     for o in game.opponents(ctrl):
         game.deal_damage(perm, o, 1)
         drained += 1
-    ctrl.life += drained
+    game.gain_life(ctrl, drained)
     if drained:
         game.log(f"{ctrl.name}: Kang drena {drained} (2da carta del turno)")
 
@@ -610,7 +610,7 @@ def GrayMerchant():
                        if p.card.cost and B in p.card.cost.pips)
         for o in game.opponents(ctrl):
             game.deal_damage(None, o, devocion)
-        ctrl.life += devocion * len(game.opponents(ctrl))
+        game.gain_life(ctrl, devocion * len(game.opponents(ctrl)))
         game.log(f"{ctrl.name}: Gray Merchant drena {devocion}")
     c = creature("Gray Merchant of Asphodel", "3BB", 2, 4, tags=("creature",),
                  color_id=(B,))

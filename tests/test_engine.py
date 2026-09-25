@@ -4207,6 +4207,157 @@ def test_extort_drains_on_cast():
     assert op.life == l0 - 1 and me.life == my0 + 1
 
 
+def test_exalted_pumps_lone_attacker():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    op = g.opponents(me)[0]
+    ex = build_card_from_data({
+        "name": "Exalter", "mana_cost": "{2}{W}", "cmc": 3, "type_line": "Creature",
+        "power": "1", "toughness": "1",
+        "oracle_text": "Exalted (Whenever a creature you control attacks alone, "
+                       "that creature gets +1/+1 until end of turn.)"})
+    assert getattr(ex, "exalted", 0) == 1
+    g.move_to_battlefield(ex, me)
+    atk = g.move_to_battlefield(cards.creature("Knight", "1W", 2, 2), me)
+    atk.summoning_sick = False
+    g._declare_attackers(me, [(atk, op)])
+    assert atk.power == 3 and atk.toughness == 3
+
+
+def test_static_cost_reduction():
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    el = build_card_from_data({
+        "name": "Electromancer", "mana_cost": "{U}{R}", "cmc": 2,
+        "type_line": "Creature", "power": "2", "toughness": "2",
+        "oracle_text": "Instant and sorcery spells you cast cost {1} less to cast."})
+    assert el.spell_discount == (1, "instant_sorcery")
+    g.move_to_battlefield(el, me)
+    bolt = build_card_from_data({
+        "name": "Bolt", "mana_cost": "{2}{R}", "cmc": 3, "type_line": "Instant",
+        "oracle_text": "Deal 3 damage to any target."})
+    assert g._static_cost_reduction(me, bolt) == 1
+    bear = build_card_from_data({
+        "name": "Bear", "mana_cost": "{1}{G}", "cmc": 2, "type_line": "Creature",
+        "power": "2", "toughness": "2", "oracle_text": ""})
+    assert g._static_cost_reduction(me, bear) == 0
+
+
+def test_monstrosity_adds_counters_to_self():
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    ot = ("{2}{G}{W}: Monstrosity 3. If this creature isn't monstrous, put three "
+          "+1/+1 counters on it and it becomes monstrous.")
+    c = build_card_from_data({
+        "name": "Fleecemane", "mana_cost": "{2}", "cmc": 2, "type_line": "Creature",
+        "power": "3", "toughness": "3", "oracle_text": ot})
+    perm = g.move_to_battlefield(c, me)
+    c.activated_abilities[0]["effect"](g, me, perm, [])
+    assert perm.counters.get("+1/+1") == 3 and getattr(perm, "monstrous", False)
+
+
+def test_devour_eats_tokens():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    cards.make_token(g, me, "Sap", 1, 1)
+    cards.make_token(g, me, "Sap", 1, 1)
+    dev = build_card_from_data({
+        "name": "Skullmulcher", "mana_cost": "{4}{G}", "cmc": 5,
+        "type_line": "Creature", "power": "2", "toughness": "2",
+        "oracle_text": "Devour 1 (As this enters, you may sacrifice any number of "
+                       "creatures. It enters with twice that many +1/+1 counters.)"})
+    dp = g.move_to_battlefield(dev, me)
+    assert dp.counters.get("+1/+1") == 2
+
+
+def test_gain_life_trigger():
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    pm = build_card_from_data({
+        "name": "Pridemate", "mana_cost": "{1}{W}", "cmc": 2, "type_line": "Creature",
+        "power": "2", "toughness": "2",
+        "oracle_text": "Whenever you gain life, put a +1/+1 counter on Pridemate."})
+    assert "gain_life" in pm.triggers
+    perm = g.move_to_battlefield(pm, me)
+    g.gain_life(me, 3)
+    g.resolve_stack()
+    assert perm.counters.get("+1/+1") == 1     # un disparo por evento, no por vida
+
+
+def test_opponent_casts_trigger():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    op = g.opponents(me)[0]
+    watch = build_card_from_data({
+        "name": "Watcher", "mana_cost": "{2}{U}", "cmc": 3, "type_line": "Enchantment",
+        "oracle_text": "Whenever an opponent casts a spell, you draw a card."})
+    assert "opp_cast" in watch.triggers and watch.on_etb is None
+    g.move_to_battlefield(watch, me)
+    h0 = len(me.hand)
+    g.emit("opp_cast", caster=op, card=cards.creature("Z", "1B", 1, 1))
+    g.resolve_stack()
+    assert len(me.hand) == h0 + 1
+    h1 = len(me.hand)
+    g.emit("opp_cast", caster=me, card=cards.creature("Y", "1U", 1, 1))
+    g.resolve_stack()
+    assert len(me.hand) == h1
+
+
+def test_storm_copies_effect():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1R", 1, 1) for _ in range(12)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(12)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.begin_turn(me)
+    for _ in range(12):
+        g.move_to_battlefield(cards.land("Mountain", ["R"]), me)
+    s1 = build_card_from_data({"name": "Shock1", "mana_cost": "{R}", "cmc": 1,
+                               "type_line": "Instant", "oracle_text": "Draw a card."})
+    s2 = build_card_from_data({"name": "Shock2", "mana_cost": "{R}", "cmc": 1,
+                               "type_line": "Instant", "oracle_text": "Draw a card."})
+    me.hand = [s1, s2]
+    g.cast(me, s1)
+    g.cast(me, s2)
+    grape = build_card_from_data({
+        "name": "Grapeshot", "mana_cost": "{1}{R}", "cmc": 2, "type_line": "Sorcery",
+        "oracle_text": "Grapeshot deals 1 damage to any target. Storm"})
+    me.hand = [grape]
+    l0 = op.life
+    g.cast(me, grape)
+    g.resolve_stack()
+    assert op.life == l0 - 3          # 1 + 2 copias (dos hechizos antes)
+
+
+def test_buyback_returns_to_hand():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1U", 1, 1) for _ in range(12)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(12)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    g.begin_turn(me)
+    for _ in range(12):
+        g.move_to_battlefield(cards.land("Island", ["U"]), me)
+    bb = build_card_from_data({
+        "name": "Whim", "mana_cost": "{1}{U}", "cmc": 2, "type_line": "Instant",
+        "oracle_text": "Buyback {3}. Draw a card."})
+    assert getattr(bb, "_buyback_cost", 0) == 3
+    me.hand = [bb]
+    g.cast(me, bb)
+    g.resolve_stack()
+    assert any(c.name == "Whim" for c in me.hand)
+    assert not any(c.name == "Whim" for c in me.graveyard)
+
+
 def test_local_combos_detect():
     import combos
     deck = ["Sanguine Bond", "Exquisite Blood", "Walking Ballista",

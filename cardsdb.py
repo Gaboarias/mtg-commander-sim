@@ -693,6 +693,22 @@ def _parse_activated(oracle: str, name: str = ""):
                         "target_spec": None, "target_count": 1,
                         "is_copy_ability": False})
             continue
+        # self-buff: "Monstrosity N" o "put N +1/+1 counters on it/this creature"
+        # (usa el PERMANENTE fuente, que el wrapper genérico no pasa al efecto).
+        msc = re.search(r"monstrosity (\w+)", body, re.I) or re.search(
+            r"put (\w+) \+1/\+1 counters? on (?:it|itself|this creature|this permanent)",
+            body, re.I)
+        if msc and (scn := _count_word(msc.group(1))):
+            def eff_self(g, c, perm, tg, _n=scn):
+                if perm is not None:
+                    g.add_counters(perm, "+1/+1", _n)
+                    perm.monstrous = True
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                        "sacrifice_other": sac_other, "pay_life": pay_life,
+                        "discard": discard, "label": _short_label(body),
+                        "effect": eff_self, "target_spec": None,
+                        "target_count": 1, "is_copy_ability": False})
+            continue
         eff, spec, count = _fragment_effect(body)
         if eff is None:
             # efecto no modelado: EXPONER igual la habilidad con un respaldo visible,
@@ -766,6 +782,38 @@ def _event_trigger_effect(oracle: str):
         def cb(game, perm, _e=eff, *_a, **_kw):
             _e(game, perm.controller)
         out[ev] = cb
+
+    # "whenever an opponent casts a spell, <efecto>" (evento opp_cast sin scope; el
+    # callback sólo actúa si el que lanzó es rival del permanente que observa).
+    moc = re.search(r"whenever an opponent casts (?:a|an|another)? ?[\w' ]*?spell,?\s*"
+                    r"(.{0,140})", t, re.I)
+    if moc:
+        effo = _generic_amount_effect(moc.group(1))
+        if effo is not None:
+            def cboc(game, perm, caster=None, **_kw):
+                if caster is not None and caster is not perm.controller:
+                    effo(game, perm.controller)
+            out["opp_cast"] = cboc
+
+    # "whenever you gain life, <efecto>" (soul sisters, Ajani's Pridemate, Heliod…).
+    if "gain_life" not in out:
+        mg = re.search(r"whenever you gain life,?\s*(.{0,140})", t, re.I)
+        if mg:
+            body = mg.group(1)
+            # caso muy común: "put a/one +1/+1 counter on ~" sobre el propio permanente
+            mcnt = re.search(r"put (a|an|one|\w+) \+1/\+1 counters? on", body, re.I)
+            if mcnt:
+                cn = _count_word(mcnt.group(1)) or 1
+
+                def cbg(game, perm, _n=cn, **_kw):
+                    game.add_counters(perm, "+1/+1", _n)
+                out["gain_life"] = cbg
+            else:
+                effg = _generic_amount_effect(body)
+                if effg is not None:
+                    def cbg(game, perm, _e=effg, **_kw):
+                        _e(game, perm.controller)
+                    out["gain_life"] = cbg
 
     # "whenever you cast a(n) <tipo> spell, <efecto>" (magecraft, Young Pyromancer,
     # Talrand, disparos de fichas al lanzar criaturas, etc.). Filtra por el TIPO
@@ -1282,7 +1330,7 @@ def _loyalty_effect(text: str):
     m = re.search(r"gain (\w+) life", t)
     if m and (n := _count_word(m.group(1))):
         def eff(game, ctrl, perm, _n=n):
-            ctrl.life += _n
+            game.gain_life(ctrl, _n)
         return eff
 
     m = re.search(r"(\d+)/(\d+).{0,60}?token", t)
@@ -1669,7 +1717,7 @@ def _generic_amount_effect(oracle: str):
             return eff
         if re.search(r"gains? life", t) or re.search(r"gain that (?:much|many) life", t):
             def eff(game, ctrl, *_a, _c=cnt):
-                ctrl.life += max(0, _c(game, ctrl))
+                game.gain_life(ctrl, max(0, _c(game, ctrl)))
             return eff
         if re.search(r"(?:each opponent|target (?:player|opponent)) loses", t):
             each = "each opponent" in t
@@ -1877,7 +1925,7 @@ def _generic_amount_effect(oracle: str):
             for o in opps:
                 o.life -= _n
             if _gain:
-                ctrl.life += _n * max(1, len(opps))
+                game.gain_life(ctrl, _n * max(1, len(opps)))
             game.log(f"{ctrl.name}: cada rival pierde {_n} de vida"
                      + (" y él gana vida" if _gain else ""))
         return eff
@@ -1915,7 +1963,7 @@ def _generic_amount_effect(oracle: str):
     m = re.search(r"(?:you )?gain (\w+) life", t)
     if m and (n := _count_word(m.group(1))):
         def eff(game, ctrl, *_a, _n=n):
-            ctrl.life += _n
+            game.gain_life(ctrl, _n)
         return eff
 
     # duplicar contadores +1/+1 (en cada criatura tuya, o en una objetivo)
@@ -2872,6 +2920,54 @@ def build_card_from_data(data: dict) -> Card:
                            else 99 if w == "any"
                            else (_count_word(w) or 1))
 
+    # Exalted: "whenever a creature you control attacks alone, that creature gets
+    # +1/+1" (o la keyword "exalted"). Cada instancia suma +1/+1 al atacante solo.
+    if "exalted" in _lt or re.search(r"attacks alone.{0,40}gets \+1/\+1", _lt):
+        card.exalted = getattr(card, "exalted", 0) + 1
+
+    # reducción de coste ESTÁTICA a tus hechizos: "<tipo> spells you cast cost {N}
+    # less to cast" (Goblin Electromancer, Medallion, etc.).
+    mred = re.search(r"(creature|artifact|instant and sorcery|instant or sorcery|"
+                     r"noncreature)?\s*spells? you cast cost \{(\d+)\} less", _lt)
+    if mred:
+        amt = int(mred.group(2))
+        w = (mred.group(1) or "").strip()
+        filt = ("creature" if w == "creature"
+                else "artifact" if w == "artifact"
+                else "noncreature" if "noncreature" in w
+                else "instant_sorcery" if "instant" in w
+                else "any")
+        card.spell_discount = (amt, filt)
+
+    # Storm: al lanzarse, se copia por cada hechizo lanzado antes este turno (el
+    # motor repite el efecto). Marcamos con un tag; sólo aplica a instant/sorcery.
+    if re.search(r"\bstorm\b", _lt) and {"instant", "sorcery"} & types:
+        card.tags = card.tags | {"storm"}
+
+    # Buyback {N}: coste adicional de maná; si se paga, la carta vuelve a la mano.
+    mbb = re.search(r"buyback \{(\d+)\}", _lt)
+    if mbb and {"instant", "sorcery"} & types:
+        card._buyback_cost = int(mbb.group(1))
+
+    # Devour N: al entrar, devora tus FICHAS de criatura (forraje) y entra con N
+    # contadores +1/+1 por cada una (aprox: sólo come fichas, no cartas reales).
+    mdev = re.search(r"devour (\d+)", _lt)
+    if mdev and "creature" in types:
+        mult = int(mdev.group(1))
+
+        def _devour(g, ctrl, perm, _m=mult):
+            fodder = [pm for pm in list(ctrl.battlefield)
+                      if pm.is_creature() and pm.is_token and pm is not perm]
+            for pm in fodder:
+                g.to_graveyard(pm, "devorada")
+            if fodder:
+                g.add_counters(perm, "+1/+1", _m * len(fodder))
+                g.log(f"{perm.name} devora {len(fodder)} ficha(s): "
+                      f"+{_m * len(fodder)}/+{_m * len(fodder)}")
+        _prev_dev = card.on_etb
+        card.on_etb = (lambda g, ctrl, perm, _d=_devour, _p=_prev_dev:
+                       (_d(g, ctrl, perm), _p(g, ctrl, perm) if _p else None))
+
     # Persist / Undying: recursión al morir con contador (tiene prioridad sobre
     # un disparo de muerte genérico, porque DEFINE qué pasa al morir).
     if card.on_death is None and "creature" in types:
@@ -2897,7 +2993,7 @@ def build_card_from_data(data: dict) -> Card:
                 o.life -= 1
                 drained += 1
             if drained:
-                perm.controller.life += drained
+                game.gain_life(perm.controller, drained)
                 game.log(f"{perm.controller.name} extorsiona: drena {drained}")
         card.triggers = dict(card.triggers)
         card.triggers.setdefault("cast", _extort)

@@ -493,7 +493,8 @@ class StackObject:
 # --------------------------------------------------------------------------- #
 
 class Game:
-    SELF_SCOPED = {"upkeep", "end_step", "draw", "landfall", "cast", "begin_combat"}
+    SELF_SCOPED = {"upkeep", "end_step", "draw", "landfall", "cast", "begin_combat",
+                   "gain_life"}
     # descripción amigable de cada evento, para el resumen de habilidades
     EVENT_KIND = {
         "etb": "cuando algo entra al campo", "landfall": "al jugar una tierra",
@@ -530,6 +531,7 @@ class Game:
         # turnos extra pendientes (para el mismo jugador)
         self.extra_turns: list = []
         self.spell_x = 0            # X elegido del último hechizo con {X} lanzado
+        self.spells_this_turn = 0   # hechizos lanzados este turno (storm)
         # última habilidad activada resuelta (para copiarla: Strionic Resonator):
         # (perm, ability_dict, targets)
         self.last_activated = None
@@ -850,6 +852,14 @@ class Game:
                     return True
         return False
 
+    def gain_life(self, player: "Player", n: int, reason: str = ""):
+        """Suma vida y dispara 'gain_life' (soul sisters, Ajani's Pridemate,
+        Heliod…). Sólo cuenta ganancia real (n > 0)."""
+        if n <= 0:
+            return
+        player.life += n
+        self.emit("gain_life", player=player, amount=n)
+
     def add_counters(self, perm: Permanent, kind: str, n: int):
         """Pone `n` contadores de tipo `kind` sobre `perm`, aplicando los
         modificadores de reemplazo (doblar, sumar) de los permanentes de su
@@ -1067,7 +1077,7 @@ class Game:
                     target.damage = max(target.damage, target.toughness)
         # lifelink: la fuente gana vida = daño hecho, contra CUALQUIER objetivo
         if src_perm and source.has("lifelink"):
-            source.controller.life += amount
+            self.gain_life(source.controller, amount)
 
     # -- acciones basadas en estado -------------------------------------- #
     def sba(self):
@@ -1171,7 +1181,7 @@ class Game:
         cost = card.cost
         # impuesto de comandante + reducción "cuesta {N} menos"
         extra = player.cmdr_tax if from_command else 0
-        red = getattr(card, "cost_reduction", 0) or 0
+        red = (getattr(card, "cost_reduction", 0) or 0) + self._static_cost_reduction(player, card)
         pay_cost = cost
         if cost is not None and (extra or red):
             pay_cost = Cost(generic=max(0, cost.generic + extra - red), pips=cost.pips)
@@ -1204,6 +1214,15 @@ class Game:
                 delve_n = min(gen, len(player.graveyard))
                 gen -= delve_n
             pay_cost = Cost(generic=gen, pips=pay_cost.pips)
+        # Buyback: coste adicional de maná; si se paga, la carta vuelve a la mano al
+        # resolver. Auto: se paga si el jugador puede afrontar coste base + buyback.
+        card._buyback_used = False
+        bb = getattr(card, "_buyback_cost", 0) or 0
+        if bb and pay_cost is not None:
+            bb_cost = Cost(generic=pay_cost.generic + bb, pips=pay_cost.pips)
+            if player.can_pay(bb_cost):
+                pay_cost = bb_cost
+                card._buyback_used = True
         if not player.can_pay(pay_cost):
             return False
         # coste adicional al lanzar (pagar vida / descartar / sacrificar)
@@ -1249,7 +1268,16 @@ class Game:
             st["cast_counts"][card.name] += 1
             if card is player.commander_card and st["commander_turn"] is None:
                 st["commander_turn"] = self.turn
+        # Storm: copias = hechizos ya lanzados este turno ANTES de este.
+        storm_copies = self.spells_this_turn if (getattr(card, "tags", set())
+                                                 and "storm" in card.tags) else 0
+        self.spells_this_turn += 1
+        # Buyback: si se pagó el coste adicional de buyback, la carta vuelve a la mano.
+        buyback_used = bool(getattr(card, "_buyback_used", False))
         self.emit("cast", player=player, card=card)
+        # disparos "cuando un RIVAL lanza un hechizo": evento sin scope; el callback
+        # sólo actúa si el permanente que observa NO es del que lanzó.
+        self.emit("opp_cast", caster=player, card=card)
         # prowess: al lanzar un hechizo no-criatura, +1/+1 a las criaturas con prowess
         if {"instant", "sorcery"} & card.types:
             for perm in player.battlefield:
@@ -1272,14 +1300,23 @@ class Game:
                                 eff(g, player, targets or [])
                 elif card.on_cast_resolve:
                     g.note_ability(card, "resuelve su efecto", controller=player)
-                    card.on_cast_resolve(g, player, targets or [])
+                    reps = 1 + storm_copies      # storm: repetir el efecto por copia
+                    if storm_copies:
+                        g.log(f"Storm: {card.name} se copia {storm_copies} vez(ces)")
+                    for _ in range(reps):
+                        card.on_cast_resolve(g, player, targets or [])
                 else:
                     # carta sin efecto modelado (mecánica compleja): que al menos se
                     # vea que se resolvió, en vez de "no pasó nada".
                     g.log(f"{player.name} resuelve {card.name} "
                           f"(efecto complejo: no se simula en detalle)")
-                player.graveyard.append(card)
-                g.emit("to_graveyard", player=player, card=card)
+                # Buyback: vuelve a la mano en vez de al cementerio.
+                if buyback_used:
+                    player.hand.append(card)
+                    g.log(f"{card.name} vuelve a la mano (buyback)")
+                else:
+                    player.graveyard.append(card)
+                    g.emit("to_graveyard", player=player, card=card)
             else:
                 g.move_to_battlefield(card, player)
 
@@ -1525,6 +1562,27 @@ class Game:
         la["run"](self)
         self.sba()
 
+    def _static_cost_reduction(self, player: "Player", card: Card) -> int:
+        """Reducción de coste genérico que dan permanentes del jugador a los
+        hechizos que lanza ('creature spells you cast cost {N} less', etc.).
+        card.spell_discount = (monto, filtro) con filtro any/creature/noncreature/
+        instant_sorcery/artifact."""
+        types = getattr(card, "types", set())
+        total = 0
+        for pm in player.battlefield:
+            disc = getattr(pm.card, "spell_discount", None)
+            if not disc:
+                continue
+            amt, filt = disc
+            ok = (filt == "any"
+                  or (filt == "creature" and "creature" in types)
+                  or (filt == "noncreature" and "creature" not in types)
+                  or (filt == "instant_sorcery" and ({"instant", "sorcery"} & types))
+                  or (filt == "artifact" and "artifact" in types))
+            if ok:
+                total += amt
+        return total
+
     def land_limit(self, player: "Player") -> int:
         """Cuántas tierras puede jugar este turno: 1 + las 'additional land' que
         le den sus permanentes en juego (Exploration, Azusa, etc.)."""
@@ -1728,6 +1786,15 @@ class Game:
                 self.stack.append(StackObject(
                     p, (lambda g, _cb=cb, _perm=perm, _d=defender: _cb(g, _perm, defender=_d)),
                     source=perm, label=f"attacks:{perm.name}"))
+        # Exalted: si atacó UNA sola criatura, recibe +1/+1 por cada permanente
+        # con exaltación que controle el atacante.
+        if len(declared) == 1:
+            bonus = sum(getattr(pm.card, "exalted", 0) or 0 for pm in p.battlefield)
+            if bonus:
+                lone = declared[0]
+                lone.temp_pt[0] += bonus
+                lone.temp_pt[1] += bonus
+                self.log(f"Exaltación: {lone.name} recibe +{bonus}/+{bonus}")
         self.resolve_stack()
         return declared
 
@@ -1841,6 +1908,7 @@ class Game:
             perm.activated_this_turn = False
         p.lands_played = 0
         p.draws_this_turn = 0
+        self.spells_this_turn = 0    # para storm (hechizos lanzados este turno)
         p.mana_pool = 0              # el maná flotante se vacía al empezar el turno
         for pl in self.players:      # los escudos de prevención se agotan por turno
             pl.prevent = 0
