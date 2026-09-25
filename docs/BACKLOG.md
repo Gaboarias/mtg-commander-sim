@@ -23,21 +23,38 @@ prioridad 1 son las que hacen que los porcentajes signifiquen algo.
   widget de **feedback** global + burbuja tras 5 partidas (`/api/feedback`, Turso);
   pase visual (atmósfera, material de cards, tablero) verificado con capturas.
 - **Multijugador live**: planificado en `docs/MULTIPLAYER_PLAN.md` (no implementado).
+- **Catálogo de mecánicas completo** (ver `docs/MECHANICS.md`): costes alternativos
+  y lanzar desde otra zona (flashback, escape, embalm/eternalize, disturb,
+  aftermath, madness, evoke, suspend, adventure, **prepared**); mecánicas complejas
+  (cascade, storm, replicate, buyback, kicker, entwine, echo, cipher, level up,
+  monstrosity, devour, exalted, extort, persist, undying, soulbond, changeling);
+  disparos "al lanzar / al ganar vida / cuando un rival lanza"; efectos de
+  reemplazo; reducción de coste estática; tierra extra; control masivo; hate de
+  vida/prevención/bloqueo. **Toda acción que pide decisión del jugador tiene gesto
+  de UI en `/play`** (elegir objetivo, carta del cementerio/exilio, modo, X…).
+- **Analizador de mazo** (`/deck`): fortalezas/debilidades/curva/manabase +
+  **combos** (base local curada `combos.py` que corre siempre, fusionada con
+  Commander Spellbook) + recomendaciones con precios.
 
 ---
 
 ## P1 — Cobertura de cartas (el cuello de botella real)
 
-Estado actual (`python3 coverage.py`):
+Estado actual (`python3 coverage.py`) — **cobertura pareja lograda**:
 
 ```
-Lorehold   efecto implementado  12 | vainilla   9
-Tricky     efecto implementado   8 | vainilla  14
-Kang       efecto implementado  26 | vainilla  16
+lorehold   efecto implementado  39 | vainilla  26
+tricky     efecto implementado  39 | vainilla  26
+kang       efecto implementado  39 | vainilla  25
+strixhaven efecto implementado  38 | vainilla  27
+marvel     efecto implementado  38 | vainilla  26
+old-guard  efecto implementado  38 | vainilla  27
 ```
 
-Kang gana 93% de las simulaciones porque es el unico mazo cuyas cartas estan
-programadas. **No es un desequilibrio real, es un artefacto de cobertura.**
+El viejo 93% de winrate de Kang era un **artefacto de cobertura** (era el único
+mazo con cartas programadas). Con los tres precons emparejados (39/39/39) los
+enfrentamientos quedaron equilibrados. Las cartas "vainilla" restantes son
+mayormente tierras y cuerpos sin texto relevante para la simulación.
 
 ### P1.1 Motor de Espiritus del Lorehold
 Hoy `Quintorius()` solo crea un Espiritu si hay un permanente con tag `gy_exile`
@@ -148,8 +165,9 @@ puntuacion (y prefiere tierras de sobra si estas inundado).
 
 ## P4 — Infraestructura  ✅ (todo implementado)
 
-- **Tests.** ✅ 30 tests en `tests/test_engine.py` (mana con duales, impuesto de
-  comandante, 21 de dano, arrollar, amenaza, legendarios, y cada P1/P2/P3/P4).
+- **Tests.** ✅ 244 tests en `tests/test_engine.py` (mana con duales, impuesto de
+  comandante, daño, arrollar, amenaza, legendarios, cada P1/P2/P3/P4, y una
+  regresión por cada mecánica compleja del catálogo).
 - **Importar listas desde texto.** ✅ `decklist.py` (Moxfield/Archidekt/texto) +
   `cardsdb.py` (registro + Scryfall) + editor web `/deck`.
 - **Exportar partidas.** ✅ `run.py --json out.json` (resumen + por-partida;

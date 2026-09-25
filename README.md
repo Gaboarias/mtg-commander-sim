@@ -19,7 +19,8 @@ decks.py       Listas de 99 + comandante (precons).
 interactive.py Juego HUMANO (una persona + bots) para /play, con pausas de decisión.
 run.py         CLI y agregación estadística.
 coverage.py    Reporte de cuántas cartas tienen efecto real implementado.
-tests/         Tests del motor (143: mana, combate, pila, copiar, reacciones…).
+tests/         Tests del motor (244: mana, combate, pila, copiar, reacciones,
+               costes alternativos, mecánicas complejas…).
 
 api/          Funciones serverless de Vercel (Python). Entre otras:
   simulate.py   GET  /api/simulate?matchup=lorehold,kang&n=200[&log=1&seed=0]
@@ -31,17 +32,30 @@ api/          Funciones serverless de Vercel (Python). Entre otras:
 
 app/          Frontend Next.js (App Router): simulador (/), /play, /watch,
               editor de decks (/deck), reglas, y widget de feedback global.
-docs/         ARCHITECTURE.md, API.md, BACKLOG.md, ADDING_CARDS.md, DEPLOY.md,
-              MULTIPLAYER_PLAN.md (plan futuro).
+docs/         ARCHITECTURE.md, API.md, MECHANICS.md (catálogo de mecánicas),
+              BACKLOG.md, ADDING_CARDS.md, DEPLOY.md, MULTIPLAYER_PLAN.md (futuro).
 CLAUDE.md     Reglas del proyecto para trabajar el motor.
 ```
 
 **Mecánicas destacadas:** prioridad y pila (hechizos, habilidades activadas y
 disparadas pasan por la pila), reacciones a velocidad de instante, contrarrestar,
-copiar (clones completos, Fork/Twincast, Strionic, populate), jugar desde el
-cementerio (flashback/unearth/embalm/escape) y el exilio (foretell), planeswalkers,
+copiar (clones completos, Fork/Twincast, Strionic, populate), planeswalkers,
 modales, X, y palabras clave de combate (vuelo, mortal, arrolla, amenaza, doble
 golpe, vínculo, infección…).
+
+**Costes alternativos / desde otra zona:** flashback, jump-start, retrace, escape,
+unearth, embalm/eternalize, disturb, aftermath, foretell (exilio), madness, evoke,
+suspend, adventure y **prepared** (set FRA).
+
+**Mecánicas complejas modeladas:** cascade, storm, replicate, buyback, kicker,
+entwine, echo, cipher, level up, monstrosity, devour, exalted, extort, persist,
+undying, soulbond, changeling; disparos "al lanzar / al ganar vida / cuando un
+rival lanza"; efectos de reemplazo (dobladores de fichas/daño/contadores, "si
+moriría, exíliala"); reducción de coste estática, tierra extra por turno,
+ganar el control de todas las criaturas, "no se puede ganar vida / prevenir
+daño / bloquear". Todo lo que requiere una decisión del jugador (elegir objetivo,
+carta del cementerio/exilio, modo, X…) tiene su gesto de UI en `/play`. Ver
+`docs/MECHANICS.md`.
 
 ## Uso local (CLI)
 

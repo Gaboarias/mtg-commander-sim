@@ -162,6 +162,7 @@ con dos entradas en la lista da UNA, no dos. Usa `produces=lambda p,pl: {C: 2}`.
 2. **Auto desde Scryfall en `cardsdb.py`** (`build_card_from_data`): para decks del
    usuario. Lee el *oracle text* y arma la `Card` con las mecánicas reconocidas.
 
+El catálogo completo de mecánicas ya reconocidas está en `docs/MECHANICS.md`.
 `cardsdb.py` ya cablea muchos ganchos extendidos del `Card`. Si agregás una
 mecánica nueva, sumá su parser ahí (no en `engine.py`) y un test:
 

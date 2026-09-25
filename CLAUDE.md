@@ -70,7 +70,7 @@ tags, y una linea en `decks.py`.
 ## Definicion de terminado, por tarea
 
 - El codigo corre: `python3 run.py` sin excepciones
-- `python3 tests/test_engine.py` en verde (143 tests)
+- `python3 tests/test_engine.py` en verde (244 tests)
 - Si tocaste el frontend: `npm run build` limpio
 - `python3 coverage.py` muestra el incremento esperado de cartas implementadas
 - Existe al menos una partida con `--log` donde se ve el efecto funcionando
