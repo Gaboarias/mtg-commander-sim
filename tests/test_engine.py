@@ -5162,6 +5162,32 @@ def test_cumulative_upkeep_life_sacrifices_when_unaffordable():
     assert c not in me.battlefield                       # se sacrifica
 
 
+def test_final_act_modal_five_modes_all_resolve():
+    import cards
+    from cardsdb import build_card_from_data
+    def FA():
+        return build_card_from_data({
+            "name": "Final Act", "mana_cost": "{5}{W}{W}", "cmc": 7,
+            "type_line": "Sorcery",
+            "oracle_text": ("Choose one or more —\n• Destroy all creatures.\n"
+                            "• Destroy all planeswalkers.\n• Destroy all battles.\n"
+                            "• Exile all graveyards.\n• Each opponent loses all counters.")})
+    fa = FA()
+    assert len(fa.modes) == 5 and fa.mode_pick == 5      # 5 modos, elegir cualquier cantidad
+    g, me, op = _duel()
+    for _ in range(7):
+        g.move_to_battlefield(cards.land("Plains", ["W"], basic=True), me)
+    mc = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    oc = g.move_to_battlefield(cards.creature("Wolf", "1G", 3, 3), op)
+    g.add_counters(oc, "+1/+1", 2)
+    op.poison = 3
+    op.graveyard.append(cards.creature("Dead", "1G", 1, 1))
+    g.cast(me, FA(), chosen_modes=[0, 3, 4]); g.resolve_stack(); g.sba()
+    assert mc not in me.battlefield and oc not in op.battlefield   # destruir criaturas
+    assert len(op.graveyard) == 0                                  # exiliar cementerios
+    assert op.poison == 0                                          # perder contadores
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

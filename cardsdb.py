@@ -537,6 +537,38 @@ def _fragment_effect(seg: str):
                 if hasattr(tg, "counters"):
                     game.add_counters(tg, "+1/+1", _n)
         return putc, "own_creature", 1
+    # Barridas por tipo como MODO ("destroy all creatures/planeswalkers/battles",
+    # "exile all graveyards"). En un modo van por _fragment_effect (no por el tag wipe).
+    mall = re.search(r"destroy all (creatures?|planeswalkers?|battles?)", seg, re.I)
+    if mall:
+        kind = mall.group(1).lower().rstrip("s")
+
+        def wipe_type(game, ctrl, targets, _k=kind):
+            for pl in game.players:
+                for pm in list(pl.battlefield):
+                    if _k in pm.card.types:
+                        game.destroy(pm, f"destruir todos los {_k}")
+            game.sba()
+            game.log(f"Se destruyen todos los {_k}")
+        return wipe_type, None, 1
+    if re.search(r"exile all graveyards", seg, re.I):
+        def exile_gys(game, ctrl, targets):
+            for pl in game.players:
+                while pl.graveyard:
+                    pl.exile.append(pl.graveyard.pop())
+            game.log("Se exilian todos los cementerios")
+        return exile_gys, None, 1
+    # "Each opponent loses all counters" (Final Act): quita contadores de sus
+    # permanentes y el veneno del jugador.
+    if re.search(r"each opponent loses all counters", seg, re.I):
+        def lose_counters(game, ctrl, targets):
+            for o in game.opponents(ctrl):
+                for pm in o.battlefield:
+                    pm.counters = {}
+                o.poison = 0
+            game.sba()
+            game.log("Cada rival pierde todos sus contadores")
+        return lose_counters, None, 1
     # Investigate (N): crea N fichas Pista (Clue).
     minv = re.search(r"\binvestigate(?: (\w+))?\b", seg, re.I)
     if minv:
@@ -660,7 +692,6 @@ def _parse_modes(oracle: str):
     if not m:
         return None
     head = m.group(1).lower()
-    pick = 2 if ("two" in head or "both" in head or "more" in head) else 1
     body = m.group(2)
     parts = None
     for pat in (r"\s*•\s*", r"\s*\n\s*", r"\s*;\s*or\s+"):  # bullets, saltos, "; or"
@@ -674,7 +705,7 @@ def _parse_modes(oracle: str):
     if not parts:
         return None
     modes = []
-    for seg in parts[:4]:
+    for seg in parts[:8]:               # hasta 8 modos (Final Act tiene 5)
         eff, spec, count = _fragment_effect(seg)
         label = _short_label(seg)
         if eff is None:                 # efecto no modelado: respaldo visible
@@ -685,6 +716,18 @@ def _parse_modes(oracle: str):
                       "target_spec": spec, "target_count": count})
     if len(modes) < 2:
         return None
+    # cuántos modos se pueden elegir (según el encabezado)
+    if "more" in head:                  # "choose one or more": cualquier cantidad
+        pick = len(modes)
+    elif "both" in head or "two" in head:
+        pick = 2
+    elif "three" in head:
+        pick = 3
+    elif head.startswith("up to"):
+        pick = _count_word(head.replace("up to", "").strip()) or 1
+    else:
+        pick = 1
+    pick = min(pick, len(modes))
     return modes, pick
 
 
