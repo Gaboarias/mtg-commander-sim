@@ -4028,6 +4028,77 @@ def test_exile_recover_human_chooses():
     assert "Goblin" not in [c.name for c in me.exile]
 
 
+def test_destroy_artifact_target_spec():
+    from cardsdb import build_card_from_data
+    nat = build_card_from_data({
+        "name": "Naturalize", "mana_cost": "{1}{G}", "cmc": 2,
+        "type_line": "Instant",
+        "oracle_text": "Destroy target artifact or enchantment."})
+    assert nat.target_spec == "any_art_ench"
+    assert nat.target_count == 1
+    shatter = build_card_from_data({
+        "name": "Shatter", "mana_cost": "{1}{R}", "cmc": 2,
+        "type_line": "Instant", "oracle_text": "Destroy target artifact."})
+    assert shatter.target_spec == "any_artifact"
+
+
+def test_destroy_artifact_interactive_choice_and_legality():
+    import interactive, decks, cards
+    from cardsdb import build_card_from_data
+    defs = [("Tu deck",) + decks.build("marvel"),
+            ("Rival",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    g = ig.g
+    me = ig.human()
+    opp = g.opponents(me)[0]
+    nat = build_card_from_data({
+        "name": "Naturalize", "mana_cost": "{1}{G}", "cmc": 2,
+        "type_line": "Instant",
+        "oracle_text": "Destroy target artifact or enchantment."})
+    me.hand.append(nat)
+    for _ in range(3):
+        g.move_to_battlefield(cards.land("Forest", ["G"]), me)
+
+    # sin objetivos legales -> no se puede lanzar (con motivo)
+    n1 = [c for c in ig.legal()["casts"] if c["name"] == "Naturalize"][0]
+    assert n1.get("castable") is False and n1.get("reason")
+
+    # con objetivos -> ofrece artefacto Y encantamiento del rival
+    g.move_to_battlefield(build_card_from_data({
+        "name": "Sol Ring", "mana_cost": "{1}", "cmc": 1,
+        "type_line": "Artifact", "oracle_text": ""}), opp)
+    g.move_to_battlefield(build_card_from_data({
+        "name": "Aura X", "mana_cost": "{2}", "cmc": 2,
+        "type_line": "Enchantment", "oracle_text": ""}), opp)
+    n2 = [c for c in ig.legal()["casts"] if c["name"] == "Naturalize"][0]
+    assert n2.get("castable") is not False
+    names = {t["name"] for t in n2["targets"]}
+    assert {"Sol Ring", "Aura X"} <= names
+    # destruir SOLO el elegido
+    uid = [t["uid"] for t in n2["targets"] if t["name"] == "Sol Ring"][0]
+    ig.cast(me.hand.index(nat), "hand", target_uids=[uid])
+    assert not any(pm.name == "Sol Ring" for pm in opp.battlefield)
+    assert any(pm.name == "Aura X" for pm in opp.battlefield)
+
+
+def test_local_combos_detect():
+    import combos
+    deck = ["Sanguine Bond", "Exquisite Blood", "Walking Ballista",
+            "Heliod, Sun-Crowned"]
+    r = combos.detect(deck, identity=set("WUBRG"))
+    armed = {frozenset(c["cards"]) for c in r["included"]}
+    assert frozenset(["Sanguine Bond", "Exquisite Blood"]) in armed
+    assert frozenset(["Heliod, Sun-Crowned", "Walking Ballista"]) in armed
+    # 'almost': a Walking Ballista le falta Mikaeus -> propuesto (identidad completa)
+    almost_missing = {tuple(c["missing"]) for c in r["almost"]}
+    assert ("Mikaeus, the Unhallowed",) in almost_missing
+    # filtro de color: mono-rojo no ve combos azules/negros
+    r2 = combos.detect(["Kiki-Jiki, Mirror Breaker"], identity={"R"})
+    for c in r2["almost"]:
+        assert c["missing"] == ["Zealous Conscripts"] or "R" in "".join(c["cards"])
+
+
 def test_distribute_counters_human_chooses():
     import cards
     from cardsdb import build_card_from_data

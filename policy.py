@@ -296,7 +296,35 @@ class Policy:
             pass
         return v
 
+    # predicados de los specs de permanente por tipo (destruir/exiliar/bounce)
+    _PERM_SPEC_PRED = {
+        "any_artifact": lambda pm: "artifact" in pm.card.types,
+        "any_enchantment": lambda pm: "enchantment" in pm.card.types,
+        "any_art_ench": lambda pm: bool({"artifact", "enchantment"} & pm.card.types),
+        "any_planeswalker": lambda pm: "planeswalker" in pm.card.types,
+        "any_nonland": lambda pm: not pm.card.is_land(),
+        "any_perm": lambda pm: True,
+    }
+
+    def _perm_spec_targets(self, game, me, spec, count):
+        """Objetivos para un spec de permanente: los del RIVAL primero (más caros),
+        y sólo si no hay, los propios. Legal-target aware."""
+        pred = self._PERM_SPEC_PRED[spec]
+        opp = []
+        mine = []
+        for pm in [p for pl in game.players for p in pl.battlefield]:
+            if not pred(pm) or not game.can_target(me, pm):
+                continue
+            (mine if pm.controller is me else opp).append(pm)
+        opp.sort(key=lambda x: (x.card.cost.cmc if x.card.cost else 0), reverse=True)
+        pool = opp or []                      # el bot no se destruye lo propio salvo…
+        if not pool:                          # …que sea la única opción (raro; lo evita)
+            return []
+        return pool[:max(1, count)]
+
     def _spec_targets(self, game, me, spec, count):
+        if spec in self._PERM_SPEC_PRED:
+            return self._perm_spec_targets(game, me, spec, count)
         if spec == "own_creature":
             mine = [c for c in me.creatures()]
             if not mine:
@@ -389,6 +417,9 @@ class Policy:
 
     def choose_targets(self, game, me, card):
         spec = getattr(card, "target_spec", None)
+        if spec in self._PERM_SPEC_PRED:
+            return self._perm_spec_targets(game, me, spec,
+                                           max(1, getattr(card, "target_count", 1)))
         if spec == "own_creature":
             mine = [c for c in me.creatures()]
             if not mine:

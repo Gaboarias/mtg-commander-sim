@@ -24,7 +24,7 @@ type AbilityOpt = { i: number; label: string; cost: string; tap: boolean; target
 type PermAbility = { uid: number; name: string; abilities: AbilityOpt[] };
 type TargetOpt = { uid?: number; idx?: number; name: string; power?: number; toughness?: number; from?: string };
 type ModeOpt = { i: number; label: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] };
-type CastOpt = { i?: number; name: string; zone: string; cost: string; tax?: number; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number };
+type CastOpt = { i?: number; name: string; zone: string; cost: string; tax?: number; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number; castable?: boolean; reason?: string | null };
 type Legal = {
   lands: { i: number; name: string }[];
   casts: CastOpt[];
@@ -762,9 +762,11 @@ export default function Play() {
                         <div className="hc-foot">
                           <span className="hc-name" onClick={() => inspectCard(hc)}>{hc.name}</span>
                           {canLand && <button className="go tiny" onClick={() => doAct("land", { i: hc.i })}>Jugar</button>}
-                          {castOpt && <button className="go tiny" onClick={() => castCard(castOpt)} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                            Lanzar{castOpt.target_spec ? <Icon name="target" size={12} /> : null}
-                          </button>}
+                          {castOpt && castOpt.castable === false
+                            ? <em className="pw-txt" title={castOpt.reason || ""}>({castOpt.reason || "no jugable"})</em>
+                            : castOpt && <button className="go tiny" onClick={() => castCard(castOpt)} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                Lanzar{castOpt.target_spec ? <Icon name="target" size={12} /> : null}
+                              </button>}
                         </div>
                       </div>
                     );

@@ -1364,12 +1364,17 @@ export default function DeckPage() {
               )}
 
               <h3 style={{ marginTop: 14 }}>Combos</h3>
-              {analysis.combos.error ? (
-                <p className="muted">No se pudieron consultar los combos ({analysis.combos.error}). El resto del análisis es válido.</p>
-              ) : (
-                <>
-                  {analysis.combos.included.length === 0 && (
-                    <p className="muted">No se detectaron combos completos en la lista.</p>
+              {analysis.combos.error && (
+                <p className="muted" style={{ fontSize: ".82rem" }}>
+                  Base externa de combos no disponible ahora; mostrando los combos conocidos que detectamos localmente.
+                </p>
+              )}
+              <>
+                  {analysis.combos.included.length === 0 && analysis.combos.almost.length === 0 && (
+                    <p className="muted">No se detectaron combos completos ni piezas de combo en la lista.</p>
+                  )}
+                  {analysis.combos.included.length > 0 && (
+                    <h3 style={{ marginTop: 8, fontSize: ".95rem" }}>Combos armados</h3>
                   )}
                   {analysis.combos.included.map((c) => (
                     <div key={c.id} className="combo">
@@ -1395,8 +1400,7 @@ export default function DeckPage() {
                       })}
                     </>
                   )}
-                </>
-              )}
+              </>
             </div>
           )}
         </div>

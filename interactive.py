@@ -461,6 +461,27 @@ class InteractiveGame:
                     return pm
         return None
 
+    # specs de permanente por tipo: el humano elige entre TODOS los que coincidan
+    # (de cualquier jugador). Predicado sobre un Permanent.
+    _PERM_SPECS = {
+        "any_artifact": lambda pm: "artifact" in pm.card.types,
+        "any_enchantment": lambda pm: "enchantment" in pm.card.types,
+        "any_art_ench": lambda pm: bool({"artifact", "enchantment"} & pm.card.types),
+        "any_planeswalker": lambda pm: "planeswalker" in pm.card.types,
+        "any_nonland": lambda pm: not pm.card.is_land(),
+        "any_perm": lambda pm: True,
+    }
+
+    def _perm_pool(self, pred):
+        """Permanentes de cualquier jugador que cumplen `pred` y son objetivo legal."""
+        me = self.human()
+        out = []
+        for pl in self.players:
+            for pm in pl.battlefield:
+                if pred(pm) and self.g.can_target(me, pm):
+                    out.append(pm)
+        return out
+
     def _auto_targets(self, card):
         """Objetivo(s) automático(s) (fallback si el humano no elige)."""
         p = self.human()
@@ -482,6 +503,13 @@ class InteractiveGame:
             if not mine:
                 return []
             return [max(mine, key=lambda x: (x.card.cost.cmc if x.card.cost else 0))]
+        if ts in self._PERM_SPECS:
+            # preferir permanentes del rival; el más caro primero
+            pool = self._perm_pool(self._PERM_SPECS[ts])
+            pool.sort(key=lambda pm: (pm.controller is not p,
+                                      pm.card.cost.cmc if pm.card.cost else 0),
+                      reverse=True)
+            return pool[:n]
         if ts == "stack_spell":
             return [self.g.stack[-1]] if self.g.stack else []
         return None
@@ -513,6 +541,13 @@ class InteractiveGame:
                      "toughness": pm.toughness if pm.is_creature() else None,
                      "from": "tuyo"}
                     for pm in self.human().battlefield]
+        if ts in self._PERM_SPECS:
+            return [{"uid": pm.uid, "name": pm.name,
+                     "power": pm.power if pm.is_creature() else None,
+                     "toughness": pm.toughness if pm.is_creature() else None,
+                     "from": ("tuyo" if pm.controller is self.human()
+                              else pm.controller.name)}
+                    for pm in self._perm_pool(self._PERM_SPECS[ts])]
         if ts == "stack_spell":
             return [{"idx": k, "name": getattr(o.source, "name", "?")}
                     for k, o in enumerate(self.g.stack)]
@@ -520,6 +555,22 @@ class InteractiveGame:
 
     def _targets_for(self, card):
         return self._targets_for_spec(getattr(card, "target_spec", None))
+
+    # specs que EXIGEN al menos un objetivo (si no hay, la carta no se puede jugar).
+    _MUST_TARGET = {"own_creature", "opp_creature", "opp_player", "own_perm",
+                    "stack_spell", "any_artifact", "any_enchantment", "any_art_ench",
+                    "any_planeswalker", "any_nonland", "any_perm"}
+
+    def _has_legal_target(self, card, precomputed=None):
+        """False sólo si la carta EXIGE objetivo, no es modal y no hay ninguno legal.
+        Los hechizos modales se evalúan por modo aparte (no se bloquean acá)."""
+        if getattr(card, "modes", ()):
+            return True
+        ts = getattr(card, "target_spec", None)
+        if ts not in self._MUST_TARGET or getattr(card, "target_count", 1) < 1:
+            return True
+        opts = precomputed if precomputed is not None else self._targets_for(card)
+        return len(opts) > 0
 
     def _modes_for(self, card):
         """Modos de un hechizo modal para la UI: cada uno con sus objetivos legales."""
@@ -560,6 +611,14 @@ class InteractiveGame:
             for uid in uids:
                 pm = self._find_any_perm(uid)
                 if pm is not None and pm.controller is self.human():
+                    out.append(pm)
+            return out
+        if ts in self._PERM_SPECS:
+            pred = self._PERM_SPECS[ts]
+            out = []
+            for uid in uids:
+                pm = self._find_any_perm(uid)
+                if pm is not None and pred(pm) and self.g.can_target(self.human(), pm):
                     out.append(pm)
             return out
         if ts == "opp_player":
@@ -630,6 +689,13 @@ class InteractiveGame:
                     if modes[m].get("target_spec"):
                         spec = modes[m].get("target_spec")
                         break
+            # regla: un hechizo que EXIGE objetivo y no tiene ninguno legal no se
+            # puede lanzar (evita "quemar" la carta sin efecto).
+            if not self._has_legal_target(card):
+                self.g.log(f"{card.name} no se puede lanzar: sin objetivos legales")
+                if self._undo:
+                    self._undo.pop()          # deshacer el snapshot (no pasó nada)
+                return self.state()
             targets = self._chosen_targets(card, target_uids, spec=spec)
             if getattr(card, "x_spell", False):
                 self._prompt_x(p, card, bool(from_command), targets, chosen)
@@ -879,13 +945,18 @@ class InteractiveGame:
                     if p.lands_played < 1:
                         lands.append({"i": i, "name": c.name})
                 elif c.cost is not None and p.can_pay(c.cost):
-                    casts.append({"i": i, "name": c.name, "zone": "hand",
-                                  "cost": _cost_str(c),
-                                  "target_spec": getattr(c, "target_spec", None),
-                                  "target_count": getattr(c, "target_count", 1),
-                                  "targets": self._targets_for(c),
-                                  "modes": self._modes_for(c),
-                                  "mode_pick": getattr(c, "mode_pick", 1)})
+                    tgts = self._targets_for(c)
+                    entry = {"i": i, "name": c.name, "zone": "hand",
+                             "cost": _cost_str(c),
+                             "target_spec": getattr(c, "target_spec", None),
+                             "target_count": getattr(c, "target_count", 1),
+                             "targets": tgts,
+                             "modes": self._modes_for(c),
+                             "mode_pick": getattr(c, "mode_pick", 1)}
+                    if not self._has_legal_target(c, tgts):
+                        entry["castable"] = False
+                        entry["reason"] = "Sin objetivos legales"
+                    casts.append(entry)
             for c in p.command:
                 pay = None if c.cost is None else Cost(c.cost.generic + p.cmdr_tax,
                                                        c.cost.pips)
@@ -925,10 +996,14 @@ class InteractiveGame:
                 else:
                     reason = self._extra_cost_reason(p, pm, ab)
                 spec = ab.get("target_spec")
+                ab_tgts = self._targets_for_spec(spec)
+                if (reason is None and spec in self._MUST_TARGET
+                        and ab.get("target_count", 1) >= 1 and not ab_tgts):
+                    reason = "sin objetivos legales"
                 usable.append({"i": i, "label": ab.get("label", f"Habilidad {i + 1}"),
                                "cost": _cost_str_cost(ab.get("cost")), "tap": bool(ab.get("tap")),
                                "target_spec": spec, "target_count": ab.get("target_count", 1),
-                               "targets": self._targets_for_spec(spec),
+                               "targets": ab_tgts,
                                "playable": reason is None, "reason": reason})
             if usable:
                 abilities.append({"uid": pm.uid, "name": pm.name, "abilities": usable})

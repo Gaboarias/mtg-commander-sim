@@ -513,10 +513,34 @@ def _cs_post(payload, timeout):
         return json.loads(resp.read().decode("utf-8"))
 
 
-def find_combos(commanders, main, timeout=25):
-    """Consulta Commander Spellbook. Devuelve {included, almost, error}.
-    Prueba el formato de objetos y, si falla, el de strings (la API ha usado
-    ambos); así seguimos funcionando ante cambios menores del esquema."""
+def _merge_combos(base, extra):
+    """Suma combos de `extra` a `base` (included/almost) sin duplicar por conjunto
+    de cartas. `base` manda (Commander Spellbook primero)."""
+    def key(c):
+        return frozenset(_norm(n) for n in c.get("cards", []))
+    for bucket in ("included", "almost"):
+        seen = {key(c) for c in base[bucket]}
+        for c in extra.get(bucket, []):
+            k = key(c)
+            if k and k not in seen:
+                base[bucket].append(c)
+                seen.add(k)
+    return base
+
+
+def find_combos(commanders, main, timeout=25, identity=None):
+    """Combos del mazo. Junta la base local curada (offline, siempre disponible)
+    con Commander Spellbook (si responde). Devuelve {included, almost, error}.
+    `identity`: set de colores del mazo (WUBRG) para filtrar los 'almost' locales.
+
+    El detector local corre SIEMPRE, así proponemos combos aunque la API externa
+    esté caída o bloqueada; el error de la externa se reporta pero no vacía todo."""
+    try:
+        import combos as _local_combos
+        local = _local_combos.detect((commanders or []) + (main or []), identity)
+    except Exception:  # noqa: BLE001
+        local = {"included": [], "almost": []}
+
     cs = [c for c in commanders if c]
     mn = [n for n in main if n]
     payloads = [
@@ -531,8 +555,11 @@ def find_combos(commanders, main, timeout=25):
             break
         except Exception as exc:  # noqa: BLE001
             last_err = str(exc)
+
     if data is None:
-        return {"included": [], "almost": [], "error": last_err or "sin respuesta"}
+        # sin API externa: devolvemos SOLO lo local (más el motivo del fallo)
+        return {"included": local["included"][:40], "almost": local["almost"][:30],
+                "error": last_err or "sin respuesta", "source": "local"}
 
     res = data.get("results", data) if isinstance(data, dict) else {}
     deck_norm = {_norm(c) for c in (commanders + main)}
@@ -540,4 +567,6 @@ def find_combos(commanders, main, timeout=25):
     almost = [_variant(v, deck_norm) for v in (res.get("almostIncluded") or [])]
     # solo los "casi" a los que les falta exactamente 1 carta (accionable)
     almost = [a for a in almost if len(a["missing"]) == 1]
-    return {"included": included[:40], "almost": almost[:30], "error": None}
+    merged = _merge_combos({"included": included, "almost": almost}, local)
+    return {"included": merged["included"][:40], "almost": merged["almost"][:30],
+            "error": None, "source": "spellbook+local"}

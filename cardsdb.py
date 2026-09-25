@@ -141,18 +141,40 @@ _NUMWORD = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4,
             "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 
 
+# tipo de objeto pedido por el texto -> target_spec que el humano puede elegir.
+# El orden importa: "artifact or enchantment" antes que "artifact" o "enchantment".
+_TARGET_TYPE_SPECS = [
+    (r"artifact or enchantment", "any_art_ench"),
+    (r"artifact", "any_artifact"),
+    (r"enchantment", "any_enchantment"),
+    (r"planeswalker", "any_planeswalker"),
+    (r"nonland permanent", "any_nonland"),
+    (r"permanent", "any_perm"),
+    (r"creature", "opp_creature"),
+]
+
+
 def _targeted_spell(oracle: str):
-    """Detecta remoción/bounce DIRIGIDA en el texto: (modo, cantidad de objetivos).
-    Aproximado, pero permite ELEGIR el/los objetivo(s) en vez de auto."""
+    """Detecta remoción/bounce DIRIGIDA en el texto: (modo, cantidad, target_spec).
+    Reconoce el TIPO de objeto (criatura/artefacto/encantamiento/planeswalker/
+    permanente) para ofrecer los objetivos correctos, no sólo criaturas."""
     t = re.sub(r"\s+", " ", (oracle or "").lower())
     for verb, mode in (("destroy", "destroy"), ("exile", "exile")):
-        m = re.search(verb + r" (up to )?(\w+ )?target (?:creature|permanent)", t)
+        m = re.search(
+            verb + r" (up to )?(\w+ )?target "
+            r"((?:artifact or enchantment)|nonland permanent|artifact|enchantment|"
+            r"planeswalker|permanent|creature)", t)
         if m:
-            return mode, _NUMWORD.get((m.group(2) or "").strip(), 1)
-    m = re.search(r"return (up to )?(\w+ )?target (?:creature|(?:nonland )?permanent)"
+            typ = m.group(3)
+            spec = next((s for pat, s in _TARGET_TYPE_SPECS if pat in typ), "opp_creature")
+            return mode, _NUMWORD.get((m.group(2) or "").strip(), 1), spec
+    m = re.search(r"return (up to )?(\w+ )?target "
+                  r"((?:nonland )?permanent|artifact|enchantment|creature)"
                   r"[^.]{0,40}hand", t)
     if m:
-        return "bounce", _NUMWORD.get((m.group(2) or "").strip(), 1)
+        typ = m.group(3)
+        spec = next((s for pat, s in _TARGET_TYPE_SPECS if pat in typ), "opp_creature")
+        return "bounce", _NUMWORD.get((m.group(2) or "").strip(), 1), spec
     return None
 
 
@@ -501,8 +523,8 @@ def _fragment_effect(seg: str):
         return tapc, "opp_creature", 1
     spec = _targeted_spell(seg)
     if spec is not None:
-        mode, count = spec
-        return cards.remove_targets(mode), "opp_creature", max(1, count)
+        mode, count, tspec = spec
+        return cards.remove_targets(mode), tspec, max(1, count)
     # quema a criatura elegida: "deals N damage to (up to M) target creature"
     mb = re.search(r"deals? (\w+) damage to (?:up to (\w+) )?target creature(?! or player)",
                    seg, re.I)
@@ -2641,9 +2663,9 @@ def build_card_from_data(data: dict) -> Card:
     if {"instant", "sorcery"} & types and not card.modes and not card.on_cast_resolve:
         spec = _targeted_spell(data.get("oracle_text", ""))
         if spec is not None:
-            mode, count = spec
+            mode, count, tspec = spec
             card.on_cast_resolve = cards.remove_targets(mode)
-            card.target_spec = "opp_creature"
+            card.target_spec = tspec
             card.target_count = max(1, count)
             card.tags = card.tags | {"removal"}
 

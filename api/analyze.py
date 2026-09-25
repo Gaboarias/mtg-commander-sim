@@ -50,8 +50,21 @@ def run(text, commander=None):
 
     report = _analyze.analyze(entries, cmd)
     report["scryfall_online"] = _scry is not None
+
+    # identidad de color del mazo (comandante; si no, unión de las cartas) para
+    # filtrar los combos "a una carta de" que estén en color.
+    ident = set()
+    cmd_raw = cache.get(cmd_norm) if cmd_norm else None
+    if cmd_raw:
+        ident = set(cmd_raw.get("color_identity") or [])
+    if not ident:
+        for _q, name in main:
+            r = cache.get(_norm(name))
+            if r:
+                ident |= set(r.get("color_identity") or [])
+
     report["combos"] = _analyze.find_combos(
-        [cmd] if cmd else [], [n for _, n in main])
+        [cmd] if cmd else [], [n for _, n in main], identity=ident)
 
     _attach_prices(report, cache)
     return report
