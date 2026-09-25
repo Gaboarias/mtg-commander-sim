@@ -4846,6 +4846,93 @@ def test_distribute_counters_human_chooses():
     assert g2.pending_choice is None
 
 
+# -- última tanda: evasión, disparos de combate, renombre, sed de sangre --- #
+def _bcreature(name, cost, p, t, oracle="", keywords=None):
+    from cardsdb import build_card_from_data
+    return build_card_from_data({
+        "name": name, "mana_cost": cost, "cmc": 3,
+        "type_line": "Creature — Test", "power": str(p), "toughness": str(t),
+        "oracle_text": oracle, "keywords": keywords or []})
+
+
+def test_fear_only_blocked_by_black_or_artifact():
+    import cards
+    g, me, op = _duel()
+    atk = g.move_to_battlefield(_bcreature("Ghoul", "2B", 2, 2, keywords=["Fear"]), me)
+    atk.summoning_sick = False
+    white = g.move_to_battlefield(cards.creature("WKnight", "1W", 2, 2), op)
+    g._begin_combat(me)
+    g._declare_attackers(me, [(atk, op)])
+    g._apply_block_pairs([atk], [(atk, white)])
+    assert atk.blocked_by == []                     # blanca no puede bloquear con miedo
+    # una criatura negra sí puede
+    g2, me2, op2 = _duel()
+    atk2 = g2.move_to_battlefield(_bcreature("Ghoul", "2B", 2, 2, keywords=["Fear"]), me2)
+    atk2.summoning_sick = False
+    black = g2.move_to_battlefield(cards.creature("BZombie", "1B", 2, 2), op2)
+    g2._begin_combat(me2)
+    g2._declare_attackers(me2, [(atk2, op2)])
+    g2._apply_block_pairs([atk2], [(atk2, black)])
+    assert black in atk2.blocked_by
+
+
+def test_skulk_blocked_only_by_lesser_power():
+    import cards
+    g, me, op = _duel()
+    atk = g.move_to_battlefield(_bcreature("Sneak", "2U", 3, 3, keywords=["Skulk"]), me)
+    atk.summoning_sick = False
+    big = g.move_to_battlefield(cards.creature("Ogre", "3R", 4, 4), op)
+    g._begin_combat(me)
+    g._declare_attackers(me, [(atk, op)])
+    g._apply_block_pairs([atk], [(atk, big)])
+    assert atk.blocked_by == []                     # 4 de poder no puede bloquear a skulk 3
+
+
+def test_battle_cry_pumps_other_attackers():
+    import cards
+    g, me, op = _duel()
+    cryer = g.move_to_battlefield(_bcreature("Herald", "1R", 1, 1, keywords=["Battle cry"]), me)
+    other = g.move_to_battlefield(cards.creature("Soldier", "1W", 2, 2), me)
+    cryer.summoning_sick = other.summoning_sick = False
+    g._begin_combat(me)
+    g._declare_attackers(me, [(cryer, op), (other, op)])
+    assert other.power == 3                          # +1/+0 del grito de guerra
+    assert cryer.power == 1                          # el propio no se pumpa
+
+
+def test_mentor_and_training_add_counters():
+    import cards
+    g, me, op = _duel()
+    mentor = g.move_to_battlefield(_bcreature("Cap", "2R", 3, 3, keywords=["Mentor"]), me)
+    small = g.move_to_battlefield(cards.creature("Recruit", "1R", 1, 1), me)
+    mentor.summoning_sick = small.summoning_sick = False
+    g._begin_combat(me)
+    g._declare_attackers(me, [(mentor, op), (small, op)])
+    assert small.counters.get("+1/+1", 0) == 1       # mentor pone +1/+1 en el menor
+
+
+def test_renown_counters_on_combat_damage():
+    import cards
+    g, me, op = _duel()
+    r = g.move_to_battlefield(_bcreature("Champ", "2W", 2, 2, oracle="Renown 2"), me)
+    g.deal_damage(r, op, 2, combat=True)
+    assert r.counters.get("+1/+1", 0) == 2 and getattr(r, "_renowned", False)
+    g.deal_damage(r, op, 2, combat=True)             # ya renombrada: no repite
+    assert r.counters.get("+1/+1", 0) == 2
+
+
+def test_bloodthirst_etb_with_damaged_opponent():
+    import cards
+    g, me, op = _duel()
+    g.damaged_players.add(op)                         # un rival fue dañado este turno
+    b = g.move_to_battlefield(_bcreature("Raider", "1R", 2, 2, oracle="Bloodthirst 1"), me)
+    assert b.counters.get("+1/+1", 0) == 1
+    # sin rival dañado, entra sin contadores
+    g2, me2, op2 = _duel()
+    b2 = g2.move_to_battlefield(_bcreature("Raider", "1R", 2, 2, oracle="Bloodthirst 1"), me2)
+    assert b2.counters.get("+1/+1", 0) == 0
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

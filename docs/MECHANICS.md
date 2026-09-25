@@ -44,6 +44,18 @@ doble golpe, amenaza, indestructible, hexproof, shroud, protección, prowess,
 infección/toxic, wither, defensor, destello, no-bloqueable. Ataques a planeswalkers
 (daño redirigido que resta lealtad). Exaltación (atacante solo → +1/+1).
 
+**Evasión no-vuelo** (`_can_block_evasion`): miedo (solo bloquean artefactos/negras),
+intimidar (artefactos o que compartan color), sombra (solo sombra bloquea sombra),
+horsemanship (solo horsemanship), skulk (no lo bloquean criaturas de mayor poder).
+
+**Disparos de combate al declarar** (`_combat_declare_triggers`, con la lista completa
+de atacantes): grito de guerra (battle cry, +1/+0 al resto de atacantes), mentor (+1/+1
+en un atacante de menor poder), melé (+1/+1 por jugador atacado), entrenamiento (+1/+1
+si ataca junto a una criatura de mayor poder). **Renombre N**: al pegar daño de combate
+a un jugador, si no está renombrada, gana N contadores +1/+1. **Sed de sangre N**
+(bloodthirst): entra con N contadores +1/+1 si un rival fue dañado este turno
+(`Game.damaged_players`).
+
 ## Efectos continuos / capas
 
 `static_mod` para anthems (+X/+X y keywords a "tus criaturas"), auras de mutación

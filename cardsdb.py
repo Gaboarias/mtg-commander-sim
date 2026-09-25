@@ -2959,6 +2959,37 @@ def build_card_from_data(data: dict) -> Card:
     if "exalted" in _lt or re.search(r"attacks alone.{0,40}gets \+1/\+1", _lt):
         card.exalted = getattr(card, "exalted", 0) + 1
 
+    # Disparos de combate al atacar (keyword o texto). Los aplica el motor con la
+    # lista completa de atacantes (battle cry, mentor, melee, training).
+    if "creature" in types:
+        _kws_lc = {k.lower() for k in (data.get("keywords") or [])}
+        if "battle cry" in _kws_lc or "battle cry" in _lt:
+            card.battle_cry = True
+        if "mentor" in _kws_lc or re.search(r"\bmentor\b", _lt):
+            card.mentor = True
+        if "melee" in _kws_lc or re.search(r"\bmelee\b", _lt):
+            card.melee = True
+        if "training" in _kws_lc or re.search(r"\btraining\b", _lt):
+            card.training = True
+        # Renombre N: al pegar daño de combate a un jugador (no renombrada) gana
+        # N contadores +1/+1. Lo resuelve el motor en deal_damage.
+        mren = re.search(r"renown (\d+)", _lt)
+        if mren:
+            card.renown = int(mren.group(1))
+        # Bloodthirst N: entra con N contadores +1/+1 si un rival fue dañado este turno.
+        mbt = re.search(r"bloodthirst (\d+)", _lt)
+        if mbt:
+            _bt = int(mbt.group(1))
+
+            def _bloodthirst(g, ctrl, perm, _n=_bt):
+                if any(pl in getattr(g, "damaged_players", set())
+                       for pl in g.opponents(ctrl)):
+                    g.add_counters(perm, "+1/+1", _n)
+                    g.log(f"Sed de sangre: {perm.name} entra con +{_n}/+{_n}")
+            _prev_bt = card.on_etb
+            card.on_etb = (lambda g, ctrl, perm, _d=_bloodthirst, _p=_prev_bt:
+                           (_d(g, ctrl, perm), _p(g, ctrl, perm) if _p else None))
+
     # reducción de coste ESTÁTICA a tus hechizos: "<tipo> spells you cast cost {N}
     # less to cast" (Goblin Electromancer, Medallion, etc.).
     mred = re.search(r"(creature|artifact|instant and sorcery|instant or sorcery|"

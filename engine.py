@@ -28,6 +28,7 @@ KEYWORDS = {
     "hexproof", "defender", "flash",
     "shroud", "protection", "prowess", "infect", "toxic", "wither",
     "unblockable", "ward",
+    "fear", "intimidate", "shadow", "skulk", "horsemanship",
 }
 
 
@@ -533,6 +534,7 @@ class Game:
         self.extra_turns: list = []
         self.spell_x = 0            # X elegido del último hechizo con {X} lanzado
         self.spells_this_turn = 0   # hechizos lanzados este turno (storm)
+        self.damaged_players: set = set()   # jugadores dañados este turno (bloodthirst)
         self.suspended: list = []   # cartas suspendidas: {card, player, n}
         self.dash_return: list = [] # criaturas jugadas por dash a devolver al fin de turno
         self.blitz_sac: list = []   # criaturas jugadas por blitz a sacrificar al fin de turno
@@ -1097,6 +1099,8 @@ class Game:
                     return
         src_perm = isinstance(source, Permanent)
         if isinstance(target, Player):
+            if amount > 0:
+                self.damaged_players.add(target)   # bloodthirst: rival dañado este turno
             if src_perm and source.has("infect"):
                 target.poison += amount            # infect: veneno en vez de vida
             elif src_perm and source.has("toxic"):
@@ -1118,6 +1122,16 @@ class Game:
                         source=source, label=f"cipher:{source.name}"))
                 self.note_ability(source.card, "cifrado (cipher)",
                                   controller=source.controller)
+            # Renombre N: al pegar daño de combate a un jugador, si no está renombrada,
+            # recibe N contadores +1/+1 y queda renombrada.
+            if combat and src_perm and getattr(source.card, "renown", 0):
+                if not getattr(source, "_renowned", False):
+                    n = source.card.renown
+                    self.add_counters(source, "+1/+1", n)
+                    source._renowned = True
+                    self.log(f"Renombre: {source.name} recibe {n} contador(es) +1/+1")
+                    self.note_ability(source.card, f"renombre {source.card.renown}",
+                                      controller=source.controller)
             # disparo "cuando ~ hace daño de combate a un jugador"
             if combat and src_perm:
                 cb = source.card.triggers.get("combat_damage_to_player")
@@ -2025,8 +2039,47 @@ class Game:
                 lone.temp_pt[0] += bonus
                 lone.temp_pt[1] += bonus
                 self.log(f"Exaltación: {lone.name} recibe +{bonus}/+{bonus}")
+        if declared:
+            self._combat_declare_triggers(p, declared)
         self.resolve_stack()
         return declared
+
+    def _combat_declare_triggers(self, p: "Player", declared: list):
+        """Disparos al declarar atacantes que necesitan la lista completa de
+        atacantes: battle cry, mentor, melee, training."""
+        # battle cry: cada atacante con battle_cry da +1/+0 a CADA otro atacante.
+        cries = sum(1 for a in declared if getattr(a.card, "battle_cry", False))
+        if cries:
+            for a in declared:
+                boost = cries - (1 if getattr(a.card, "battle_cry", False) else 0)
+                if boost:
+                    a.temp_pt[0] += boost
+            self.log(f"Grito de guerra: +{cries}/+0 al resto de atacantes")
+        # melee: +1/+1 por cada jugador atacado este combate.
+        opp_players = {(a.attacking if isinstance(a.attacking, Player)
+                        else a.attacking.controller) for a in declared}
+        nplayers = len(opp_players)
+        for a in declared:
+            if getattr(a.card, "melee", False) and nplayers:
+                a.temp_pt[0] += nplayers
+                a.temp_pt[1] += nplayers
+                self.log(f"Melé: {a.name} recibe +{nplayers}/+{nplayers}")
+        # mentor: pone un contador +1/+1 en otro atacante de menor poder.
+        for a in declared:
+            if not getattr(a.card, "mentor", False):
+                continue
+            cands = [o for o in declared if o is not a and o.power < a.power]
+            if cands:
+                tgt = max(cands, key=lambda o: o.power)
+                self.add_counters(tgt, "+1/+1", 1)
+                self.log(f"Mentor: {a.name} pone +1/+1 en {tgt.name}")
+        # training: si ataca junto a una criatura de MAYOR poder, gana un +1/+1.
+        for a in declared:
+            if not getattr(a.card, "training", False):
+                continue
+            if any(o is not a and o.power > a.power for o in declared):
+                self.add_counters(a, "+1/+1", 1)
+                self.log(f"Entrenamiento: {a.name} recibe un contador +1/+1")
 
     def _apply_block_pairs(self, incoming: list, pairs: list):
         """pairs: [(atacante, bloqueador), ...] ya como Permanent."""
@@ -2040,8 +2093,28 @@ class Game:
             # evasión: un atacante con volar solo puede bloquearse con volar o alcance
             if attacker.has("flying") and not (blocker.has("flying") or blocker.has("reach")):
                 continue
+            if not self._can_block_evasion(attacker, blocker):
+                continue
             attacker.blocked_by.append(blocker)
             blocker.blocking.append(attacker)
+
+    def _can_block_evasion(self, attacker, blocker) -> bool:
+        """Reglas de evasión no-vuelo: fear, intimidate, shadow, horsemanship, skulk."""
+        b_art = "artifact" in blocker.card.types
+        if attacker.has("shadow") and not blocker.has("shadow"):
+            return False
+        if blocker.has("shadow") and not attacker.has("shadow"):
+            return False   # las de sombra solo bloquean a las de sombra
+        if attacker.has("horsemanship") and not blocker.has("horsemanship"):
+            return False
+        if attacker.has("fear") and not (b_art or (B in blocker.card.identity())):
+            return False
+        if attacker.has("intimidate") and not (
+                b_art or (attacker.card.identity() & blocker.card.identity())):
+            return False
+        if attacker.has("skulk") and blocker.power > attacker.power:
+            return False
+        return True
 
     def _ai_block(self, defender: "Player", declared: list):
         """Deja que la política de `defender` bloquee a sus atacantes."""
@@ -2141,6 +2214,7 @@ class Game:
         p.lands_played = 0
         p.draws_this_turn = 0
         self.spells_this_turn = 0    # para storm (hechizos lanzados este turno)
+        self.damaged_players = set() # para bloodthirst (rivales dañados este turno)
         p.mana_pool = 0              # el maná flotante se vacía al empezar el turno
         for pl in self.players:      # los escudos de prevención se agotan por turno
             pl.prevent = 0
