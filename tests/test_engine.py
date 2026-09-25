@@ -3960,6 +3960,74 @@ def test_loyalty_targeted_effect_resolves():
     assert pm.counters["loyalty"] == 1
 
 
+# -- reanimación/recuperación: el humano ELIGE la carta ------------------- #
+def _reco_players():
+    import cards
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1U", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(10)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    return Game([me, op], seed=1), me
+
+
+def _mkc(name, cmc):
+    from cardsdb import build_card_from_data
+    return build_card_from_data({"name": name, "mana_cost": "{%d}" % cmc,
+                                 "cmc": cmc, "type_line": "Creature",
+                                 "oracle_text": "", "power": "2",
+                                 "toughness": "2"})
+
+
+def test_graveyard_reanimate_human_chooses_bot_autopicks():
+    from cardsdb import build_card_from_data
+    spell = build_card_from_data({
+        "name": "Raise", "mana_cost": "{3}{B}", "cmc": 4,
+        "type_line": "Sorcery",
+        "oracle_text": "Return target creature card from your graveyard "
+                       "to the battlefield."})
+    # humano: recibe la elección (ve las cartas del cementerio)
+    g, me = _reco_players()
+    g.interactive_human = me
+    me.graveyard = [_mkc("Dragon", 6), _mkc("Rat", 1)]
+    spell.on_cast_resolve(g, me, spell)
+    pc = g.pending_choice
+    assert pc and pc["kind"] == "reanimate"
+    assert {o["name"] for o in pc["options"]} == {"Dragon", "Rat"}
+    pc["_apply"](1)                                    # elige la Rata
+    assert any(p.card.name == "Rat" for p in me.battlefield)
+    # bot: sin modal, auto-elige la mejor (mayor CMC)
+    g2, bot = _reco_players()
+    spell2 = build_card_from_data({
+        "name": "Raise", "mana_cost": "{3}{B}", "cmc": 4,
+        "type_line": "Sorcery",
+        "oracle_text": "Return target creature card from your graveyard "
+                       "to the battlefield."})
+    bot.graveyard = [_mkc("Dragon", 6), _mkc("Rat", 1)]
+    spell2.on_cast_resolve(g2, bot, spell2)
+    assert g2.pending_choice is None
+    assert any(p.card.name == "Dragon" for p in bot.battlefield)
+
+
+def test_exile_recover_human_chooses():
+    from cardsdb import build_card_from_data
+    spell = build_card_from_data({
+        "name": "Recuperar", "mana_cost": "{2}", "cmc": 2,
+        "type_line": "Sorcery",
+        "oracle_text": "Return target card you own from exile to your hand."})
+    assert spell.on_cast_resolve
+    g, me = _reco_players()
+    g.interactive_human = me
+    me.exile = [_mkc("Angel", 5), _mkc("Goblin", 1)]
+    spell.on_cast_resolve(g, me, spell)
+    pc = g.pending_choice
+    assert pc and pc["kind"] == "exile_pick"
+    assert {o["name"] for o in pc["options"]} == {"Angel", "Goblin"}
+    pc["_apply"](1)                                    # elige el Goblin
+    assert "Goblin" in [c.name for c in me.hand]
+    assert "Goblin" not in [c.name for c in me.exile]
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

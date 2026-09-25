@@ -1044,6 +1044,7 @@ export default function Play() {
           etb_target: "Elegí un objetivo", creature_type: "Elegí un tipo de criatura",
           discard: "Descartar (mano de más de 7)", may: "¿Querés hacerlo?",
           legend: "Regla de legendarios", x: "Elegí X",
+          reanimate: "Elegí una carta del cementerio", exile_pick: "Elegí una carta del exilio",
         };
         const title = titles[ch.kind] || "Elegí una carta";
         const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno" : "No llevarme ninguna";

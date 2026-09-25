@@ -1135,6 +1135,29 @@ def _human_target_choice(game, ctrl, kind, prompt, options, apply_one,
         apply_one(options[0][1])
 
 
+def _pick_card_from_zone(game, ctrl, cards_list, apply_one, prompt, kind="reanimate"):
+    """Elegir UNA carta de una zona (cementerio/exilio) para recuperar/revivir.
+    El humano ve las cartas (imagen + nombre) en el modal y elige; el bot toma la
+    primera (el que llama la lista ordenada de mejor a peor)."""
+    cands = list(cards_list)
+    if not cands:
+        return
+    if ctrl is getattr(game, "interactive_human", None):
+        def _apply(idx, _objs=cands, _fn=apply_one):
+            if idx is not None and 0 <= idx < len(_objs):
+                _fn(_objs[idx])
+        game.pending_choice = {
+            "kind": kind,
+            "prompt": prompt,
+            "options": [{"i": i, "name": c.name, "is_land": c.is_land(), "ok": True}
+                        for i, c in enumerate(cands)],
+            "allow_none": False,
+            "_apply": _apply,
+        }
+    else:
+        apply_one(cands[0])
+
+
 def _count_word(w):
     """Palabra o dígito -> int, o None."""
     w = (w or "").strip().lower()
@@ -2243,10 +2266,15 @@ def _generic_amount_effect(oracle: str):
             if not cands:
                 game.log(f"{ctrl.name}: sin carta válida en el cementerio para revivir")
                 return
-            pick = max(cands, key=lambda c: (c.cost.cmc if c.cost else 0))
-            ctrl.graveyard.remove(pick)
-            game.move_to_battlefield(pick, ctrl)
-            game.log(f"{ctrl.name} revive {pick.name} del cementerio")
+            cands.sort(key=lambda c: (c.cost.cmc if c.cost else 0), reverse=True)
+
+            def _do(pick):
+                if pick in ctrl.graveyard:
+                    ctrl.graveyard.remove(pick)
+                    game.move_to_battlefield(pick, ctrl)
+                    game.log(f"{ctrl.name} revive {pick.name} del cementerio")
+            _pick_card_from_zone(game, ctrl, cands, _do,
+                                 "Elegí una carta del cementerio para revivir")
         return eff
 
     # regresar una carta del cementerio a la mano (elección automática + log)
@@ -2255,10 +2283,42 @@ def _generic_amount_effect(oracle: str):
             cands = [c for c in ctrl.graveyard if not c.is_land()]
             if not cands:
                 return
-            pick = max(cands, key=lambda c: (c.cost.cmc if c.cost else 0))
-            ctrl.graveyard.remove(pick)
-            ctrl.hand.append(pick)
-            game.log(f"{ctrl.name} recupera {pick.name} del cementerio a la mano")
+            cands.sort(key=lambda c: (c.cost.cmc if c.cost else 0), reverse=True)
+
+            def _do(pick):
+                if pick in ctrl.graveyard:
+                    ctrl.graveyard.remove(pick)
+                    ctrl.hand.append(pick)
+                    game.log(f"{ctrl.name} recupera {pick.name} del cementerio a la mano")
+            _pick_card_from_zone(game, ctrl, cands, _do,
+                                 "Elegí una carta del cementerio para tu mano")
+        return eff
+
+    # recuperar una carta tuya desde el exilio (a la mano o al campo, con elección)
+    mex = re.search(
+        r"(?:return|put) .{0,70}?(?:from|in|among the) .{0,20}?exile[d]?.{0,50}?"
+        r"(?:to|into|onto) (?:your |the )?(hand|battlefield)", t)
+    if mex:
+        to_bf = mex.group(1) == "battlefield"
+
+        def eff(game, ctrl, *_a):
+            pool = list(getattr(ctrl, "exile", []) or [])
+            cands = [c for c in pool if (not to_bf) or _is_permanent_card(c)]
+            if not cands:
+                return
+            cands.sort(key=lambda c: (c.cost.cmc if c.cost else 0), reverse=True)
+
+            def _do(pick):
+                if pick in getattr(ctrl, "exile", []):
+                    ctrl.exile.remove(pick)
+                    if to_bf:
+                        game.move_to_battlefield(pick, ctrl)
+                        game.log(f"{ctrl.name} devuelve {pick.name} del exilio al campo")
+                    else:
+                        ctrl.hand.append(pick)
+                        game.log(f"{ctrl.name} recupera {pick.name} del exilio a la mano")
+            _pick_card_from_zone(game, ctrl, cands, _do,
+                                 "Elegí una carta del exilio", kind="exile_pick")
         return eff
 
     # revelar las primeras N: quedarse una TIERRA en la mano, el resto al cementerio.
