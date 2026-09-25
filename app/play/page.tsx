@@ -67,8 +67,10 @@ type GameState = {
   react?: ReactState | null;
   choice: Choice | null; mulligan: Mulligan | null; log: string[];
   ability_feed?: AbilityEvent[];
+  opp_turns?: OppTurn[];
 };
 type AbilityEvent = { turn: number; controller: string | null; card: string; kind: string };
+type OppTurn = { turn: number; player: string; lines: string[] };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function loadScript(src: string) {
@@ -541,6 +543,24 @@ export default function Play() {
                 <Icon name="undo" size={14} /> Nueva partida
               </button>
             </div>
+
+            {myTurn && state.opp_turns && state.opp_turns.length > 0 && (
+              <div className="opp-recap">
+                <div className="opp-recap-head">
+                  <Icon name="scroll" size={13} /> Mientras no jugabas — turnos rivales
+                </div>
+                {state.opp_turns.map((ot, k) => (
+                  <div className="opp-turn" key={k}>
+                    <b>Turno {ot.turn} · {ot.player}</b>
+                    <ul>
+                      {ot.lines.length === 0
+                        ? <li className="muted">pasó sin jugar</li>
+                        : ot.lines.map((l, j) => <li key={j}>{l}</li>)}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="seats" data-n={state.players.length}>
               {state.players.map((p, i) => (

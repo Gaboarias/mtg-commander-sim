@@ -347,6 +347,20 @@ th { color: var(--muted); font-weight: 600; font-size: .8rem; text-transform: up
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .8rem; line-height: 1.55; white-space: pre-wrap; color: #c8cdd8;
 }
+.opp-recap {
+  margin: 10px 0 4px; padding: 12px 14px; border-radius: 12px;
+  background: rgba(224,163,90,.07); border: 1px solid var(--border);
+}
+.opp-recap-head {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: .8rem; font-weight: 600; color: var(--accent, #e0a35a);
+  margin-bottom: 8px; text-transform: uppercase; letter-spacing: .03em;
+}
+.opp-recap .opp-turn { padding: 4px 0; border-top: 1px solid var(--border); }
+.opp-recap .opp-turn:first-of-type { border-top: 0; }
+.opp-recap .opp-turn b { font-size: .82rem; }
+.opp-recap .opp-turn ul { margin: 3px 0 2px; padding-left: 18px; }
+.opp-recap .opp-turn li { font-size: .8rem; line-height: 1.45; color: #c8cdd8; }
 .choice-thumb {
   display: inline-block; width: 30px; height: 42px; flex: 0 0 auto;
   border-radius: 4px; background-size: cover; background-position: center;

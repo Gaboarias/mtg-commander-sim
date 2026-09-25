@@ -84,6 +84,7 @@ class InteractiveGame:
         self._undo = []             # pila de snapshots para deshacer jugadas del turno
         self._react_armed = False   # ventana de reacción activa (durante main del bot)
         self._react_ctx = None      # {p, step, spell} para reanudar tras responder
+        self.opp_turns = []         # resumen de los turnos rivales desde tu último turno
         # el motor pausa una resolución cuando el HUMANO debe elegir (revelar, etc.)
         self.g.interactive_human = self.human()
         self.g.pending_choice = None
@@ -177,7 +178,10 @@ class InteractiveGame:
                 self.phase = "main"
                 self.attacked = False
                 return
-            if self._ai_turn(p):     # pausó porque me atacan
+            n0 = len(self.g.log_lines)
+            paused = self._ai_turn(p)     # pausó porque me atacan
+            self._record_opp_turn(p, n0)
+            if paused:
                 return
 
     def _run_extra_turns(self):
@@ -201,9 +205,25 @@ class InteractiveGame:
                 self.phase = "main"
                 self.attacked = False
                 return True          # el humano juega su turno extra
-            if self._ai_turn(who):
+            n0 = len(self.g.log_lines)
+            paused = self._ai_turn(who)
+            self._record_opp_turn(who, n0)
+            if paused:
                 return True          # el bot me ataca en su turno extra
         return False
+
+    def _record_opp_turn(self, p, n0):
+        """Guarda lo que hizo el rival `p` en su turno (rebanada del registro), para
+        que el humano vea cada turno rival por separado en vez de todos juntos."""
+        lines = []
+        for ln in self.g.log_lines[n0:]:
+            body = ln.split(" ", 1)[1] if ln[:1] == "T" and " " in ln else ln
+            if body.startswith("‹turno›"):
+                continue
+            lines.append(body)
+        if lines:
+            self.opp_turns.append({"turn": self.g.turn, "player": p.name,
+                                   "lines": lines[-12:]})
 
     # -- turno rival, con pausa en mi defensa / reacción ----------------- #
     def _ai_turn(self, p):
@@ -891,6 +911,7 @@ class InteractiveGame:
 
     def _finish_end_turn(self, p):
         self._undo = []                 # no se puede deshacer entre turnos
+        self.opp_turns = []             # empezar a capturar los turnos rivales de nuevo
         self.g.end_turn(p)
         self.g.sba()
         self._advance_to_human()
@@ -1238,7 +1259,9 @@ class InteractiveGame:
             "mulligan": ({"mulls": self.mulls, "to_bottom": max(0, self.mulls - 1),
                           "lands": sum(1 for c in self.human().hand if c.is_land())}
                          if self.phase == "mulligan" else None),
-            "log": self.g.log_lines[-14:],
+            "log": self.g.log_lines[-30:],
+            # resumen de los turnos rivales desde tu último turno (uno por rival)
+            "opp_turns": self.opp_turns,
             # feed de habilidades activadas/disparadas (para avisar en pantalla)
             "ability_feed": self.g.ability_events[-10:],
         }

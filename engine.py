@@ -2312,6 +2312,8 @@ class Game:
     def begin_turn(self, p: "Player"):
         """UNTAP + UPKEEP + DRAW + SBA. Compartido por el turno de la política
         (run_turn) y por el turno manual de un humano (interactive)."""
+        # encabezado de turno: separa visualmente los turnos en el registro
+        self.log(f"‹turno› {p.name}")
         # UNTAP
         for perm in p.battlefield:
             perm.tapped = False
