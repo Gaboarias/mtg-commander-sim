@@ -2481,26 +2481,61 @@ def test_reaction_window_to_opponent_spell():
     ig.g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), hu)
     for _ in range(3):
         ig.g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), op)  # maná del rival
+    # una criatura del rival que NO me afecta (no me apunta, no es barrido) NO abre
+    # ventana, aunque tenga un instantáneo (elección "cuando te afecta a vos").
     beast = cards.creature("Ogro", "2R", 3, 3)
     ig._react_armed = True                           # ventana activa (fase main del bot)
-    assert ig._offer_reaction(op, beast) is True     # hay con qué responder
+    assert ig._offer_reaction(op, beast) is False
+    # pero una REMOCIÓN que apunta a MI criatura sí abre ventana
+    my_creat = ig.g.move_to_battlefield(cards.creature("Mío", "1W", 2, 2), hu)
+    kill = cardsdb.build_card_from_data({
+        "name": "Matar", "type_line": "Instant", "mana_cost": "{R}", "color_identity": ["R"],
+        "oracle_text": "Destroy target creature."})
     try:
-        ig.g.cast(op, beast)
+        ig.g.cast(op, kill, targets=[my_creat])
         paused = False
     except engine.ReactionPause as rp:
         paused = True
         ig._react_ctx = {"p": op, "step": "main2", "spell": rp.spell}
         ig.mode = "react"
         ig.phase = "react"
-    assert paused                                    # el motor pausó
+    assert paused                                    # el motor pausó: me afecta
     rs = ig._react_state()
-    assert rs["spell"] == "Ogro" and any(r["name"] == "Zap" for r in rs["responses"])
-    # pasar = resolver el hechizo en la pila -> la criatura entra
+    assert any(r["name"] == "Zap" for r in rs["responses"])
     ig.g._run_priority_and_resolve()
-    assert any(pm.name == "Ogro" for pm in op.battlefield)
-    # sin instantáneo NO se abre la ventana
+    ig.mode = None
+    ig._react_ctx = None
+    # sin instantáneo NI contrahechizo NO se abre la ventana ante remoción
     hu.hand = [c for c in hu.hand if c.name != "Zap"]
-    assert ig._offer_reaction(op, beast) is False
+    kill2 = cardsdb.build_card_from_data({
+        "name": "Matar2", "type_line": "Instant", "mana_cost": "{R}",
+        "color_identity": ["R"], "oracle_text": "Destroy target creature."})
+    my2 = ig.g.move_to_battlefield(cards.creature("Mío2", "1W", 2, 2), hu)
+    ig.g.stack.append(engine.StackObject(op, lambda g: None, source=kill2, targets=[my2]))
+    assert ig._offer_reaction(op, kill2) is False
+    ig.g.stack.clear()
+
+
+def test_reaction_window_opens_for_counterspell_to_any_spell():
+    # un contrahechizo en mano abre la ventana ante CUALQUIER hechizo del rival,
+    # aunque no me apunte (es una carta con que responder).
+    import interactive, cards, decks, cardsdb, engine
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    op = ig.g.opponents(hu)[0]
+    counter = cardsdb.build_card_from_data({
+        "name": "Negar", "type_line": "Instant", "mana_cost": "{U}", "color_identity": ["U"],
+        "oracle_text": "Counter target spell."})
+    assert getattr(counter, "target_spec", None) == "stack_spell"
+    hu.hand.append(counter)
+    ig.g.move_to_battlefield(cards.land("Island", ["U"], basic=True), hu)
+    beast = cards.creature("Ogro", "2R", 3, 3)
+    ig.g.stack.append(engine.StackObject(op, lambda g: None, source=beast))
+    ig._react_armed = True
+    assert ig._offer_reaction(op, beast) is True     # el contra abre la ventana
+    ig.g.stack.clear()
 
 
 def test_human_copies_bot_ability_in_reaction_window():

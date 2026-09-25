@@ -18,6 +18,14 @@ de reglas exhaustivo. Donde se aproxima, se indica.
 - Ventana de reacción a velocidad de instante para el humano (`ReactionPause`) y
   para los bots (`policy.respond`). Contrarrestar (`Counterspell`), removal
   instantáneo, copiar hechizos.
+- **Cuándo se abre la ventana del humano** (`_offer_reaction`): durante la fase
+  principal de un rival, cuando lo que el rival pone en la pila **lo afecta** —le
+  apunta a él o a un permanente suyo, o es un barrido (`_affects_human`)— y tiene
+  un instantáneo/destello pagable; o cuando tiene un **contrahechizo** con que
+  responder a cualquier hechizo (`_has_counter_response`). Un disparo/edicto que lo
+  afecta también abre la ventana. Criaturas u otros hechizos que no lo tocan ya no
+  interrumpen. *(Instantáneos en pasos de combate: pendiente — el combate aún no es
+  reanudable paso a paso.)*
 - Headless se resuelve de forma síncrona (determinismo preservado); interactivo
   usa `pending_choice` + `ReactionPause`.
 

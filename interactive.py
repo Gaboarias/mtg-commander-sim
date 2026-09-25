@@ -326,23 +326,52 @@ class InteractiveGame:
     def _offer_reaction(self, caster, arg):
         """¿El humano puede/quiere responder a `arg` de `caster`? `arg` es una
         carta (hechizo) o un StackObject (habilidad). Solo durante la fase
-        principal de un bot y si el humano tiene con qué responder."""
+        principal de un bot y si el objeto de la pila LO AFECTA (le apunta a él o
+        a un permanente suyo, o es un barrido) y tiene con qué responder."""
         if not self._react_armed:
             return False
         hu = self.human()
         if caster is hu or hu.lost or hu not in self.g.opponents(caster):
             return False
-        # responder a una HABILIDAD del rival: solo si el humano puede copiarla
-        # (controla un permanente con habilidad 'copiar habilidad' pagable).
-        if getattr(arg, "kind", None) in ("ability", "trigger"):
-            return self._ready_copy_ability(hu) is not None
-        card = arg
-        worth = bool(card.types & {"creature", "planeswalker"}) or \
-            bool(getattr(card, "tags", set()) & {"removal", "wipe", "engine", "counter"})
-        if not worth:
-            return False
+        top = self.g.stack[-1] if self.g.stack else None
+        affects = self._affects_human(hu, top)
+        kind = getattr(arg, "kind", None) or (top.kind if top else None)
+        # HABILIDAD / disparo del rival: responder si el humano puede copiarla, o
+        # con un instantáneo si el disparo lo afecta (edicto, quema por disparo…).
+        if kind in ("ability", "trigger"):
+            if self._ready_copy_ability(hu) is not None:
+                return True
+            return affects and self._has_instant_response(hu)
+        # HECHIZO del rival: si lo afecta y tiene un instantáneo pagable, o si tiene
+        # un contrahechizo con que responder a cualquier hechizo.
+        if affects and self._has_instant_response(hu):
+            return True
+        return self._has_counter_response(hu)
+
+    def _has_instant_response(self, hu):
+        """¿El humano tiene en mano un instantáneo/destello que pueda pagar?"""
         return any((("instant" in c.types) or ("flash" in c.keywords))
                    and c.cost is not None and hu.can_pay(c.cost) for c in hu.hand)
+
+    def _has_counter_response(self, hu):
+        """¿El humano tiene un contrahechizo (apunta a la pila) que pueda pagar?"""
+        return any(getattr(c, "target_spec", None) == "stack_spell"
+                   and c.cost is not None and hu.can_pay(c.cost) for c in hu.hand)
+
+    def _affects_human(self, hu, top=None):
+        """¿El objeto en el tope de la pila afecta al humano? Le apunta a él o a un
+        permanente que controla, o es un barrido (destruye/exilia a todos)."""
+        if top is None:
+            top = self.g.stack[-1] if self.g.stack else None
+        if top is None:
+            return False
+        for t in (top.targets or []):
+            if t is hu:                              # le apunta a él
+                return True
+            if getattr(t, "controller", None) is hu:  # apunta a un permanente suyo
+                return True
+        # barridos y "cada oponente…": lo afectan sin apuntarle explícitamente
+        return "wipe" in (getattr(top.source, "tags", set()) or set())
 
     def react(self, action=None, i=None, uid=None, index=0, target_uids=None):
         """El humano responde a un hechizo del rival (o pasa) y se reanuda el
