@@ -5274,6 +5274,36 @@ def test_forced_discard_human_prompts_on_own_turn():
     assert g.pending_choice and g.pending_choice["kind"] == "discard"
 
 
+def test_bot_edict_queues_choice_for_human():
+    # un edicto lanzado por un BOT contra el humano encola la decisión (no se
+    # auto-resuelve): resolve_stack no pausa en turno de bot, así que va a la cola.
+    import cards
+    from cardsdb import _human_or_auto_sacrifice
+    g, me, op = _duel(); g.interactive_human = me; g.active_index = 1   # turno del bot
+    g.move_to_battlefield(cards.creature("A", "1G", 1, 1), me)
+    g.move_to_battlefield(cards.creature("B", "2G", 5, 5), me)
+    _human_or_auto_sacrifice(g, me, "elegí")
+    assert g.pending_choice is None and len(g.choice_queue) == 1  # encolada, no auto
+
+
+def test_planeswalker_loyalty_target_prompts_human():
+    import cards
+    from cardsdb import build_card_from_data
+    pw = build_card_from_data({
+        "name": "Vraska", "mana_cost": "{4}{B}{G}", "cmc": 6,
+        "type_line": "Legendary Planeswalker — Vraska", "loyalty": "6",
+        "oracle_text": "+2: Draw a card.\n-3: Destroy target creature.", "keywords": []})
+    g, me, op = _duel(); g.interactive_human = me; g.active_index = 0
+    a = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), op)
+    b = g.move_to_battlefield(cards.creature("Wolf", "1G", 5, 5), op)
+    perm = g.move_to_battlefield(pw, me)
+    assert g.activate_loyalty(perm, 1); g.resolve_stack()
+    pc = g.pending_choice
+    assert pc and pc["kind"] == "etb_target" and len(pc["options"]) == 2
+    pc["_apply"](1)                                    # elegir el Wolf
+    assert b not in op.battlefield and a in op.battlefield
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

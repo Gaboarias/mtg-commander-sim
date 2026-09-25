@@ -1501,23 +1501,31 @@ def _pick_card_from_zone(game, ctrl, cards_list, apply_one, prompt, kind="reanim
         apply_one(cands[0])
 
 
-def _prompt_safe(game, player):
-    """¿Es seguro pausar con un pending_choice para `player`? Solo si es el humano
-    Y es su propio turno (resolve_stack no pausa en el turno de un bot, así que un
-    modal ahí quedaría colgado). Si no, se auto-resuelve."""
+def _route_choice(game, player, prompt_fn, auto_fn):
+    """Enruta una decisión de `player`:
+      - es el humano y es SU turno -> `prompt_fn()` arma el pending_choice ya (la pila
+        del turno del humano pausa bien);
+      - es el humano pero es el turno de un BOT -> se encola `prompt_fn` en
+        game.choice_queue (resolve_stack no pausa en turno de bot; la capa interactiva
+        drena la cola al volver el control al humano);
+      - es un bot -> `auto_fn()` resuelve solo."""
     hu = getattr(game, "interactive_human", None)
     if player is not hu or hu is None:
-        return False
+        auto_fn()
+        return
     try:
-        return game.ap() is hu
+        own_turn = game.ap() is hu
     except Exception:
-        return False
+        own_turn = False
+    if own_turn:
+        prompt_fn()
+    else:
+        game.choice_queue.append(prompt_fn)
 
 
 def _human_or_auto_sacrifice(game, player, prompt="Elegí una criatura para sacrificar",
                              pool=None):
-    """El jugador `player` sacrifica una criatura: si es el humano en su turno, elige
-    en un modal; si no, se sacrifica la más débil."""
+    """El jugador `player` sacrifica una criatura: humano elige (modal), bot la más débil."""
     cr = list(pool) if pool is not None else list(player.creatures())
     if not cr:
         return
@@ -1528,37 +1536,41 @@ def _human_or_auto_sacrifice(game, player, prompt="Elegí una criatura para sacr
             game.to_graveyard(pm, "sacrificio forzado")
             game.log(f"{pm.controller.name} sacrifica {pm.name}")
             game.sba()
-    if _prompt_safe(game, player):
-        cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm) for pm in cr]
-        _human_target_choice(game, player, "etb_target", prompt, cands, _do)
-    else:
-        _do(cr[0])
+
+    def _prompt():
+        cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm)
+                 for pm in player.creatures()]
+        if cands:
+            _human_target_choice(game, player, "etb_target", prompt, cands, _do)
+    _route_choice(game, player, _prompt, lambda: _do(cr[0]))
 
 
 def _human_or_auto_discard(game, player, n):
-    """El jugador `player` descarta N cartas: el humano elige (una a una en modal),
-    el bot usa su heurística (o la última carta)."""
+    """El jugador `player` descarta N cartas: humano elige (modal, una a una), bot auto."""
     n = len(player.hand) if n < 0 else n
 
-    def _one(remaining):
+    def _prompt_one(remaining):
         if remaining <= 0 or not player.hand:
             return
-        if _prompt_safe(game, player):
-            def _apply(idx, _r=remaining):
-                if idx is not None and 0 <= idx < len(player.hand):
-                    c = player.hand.pop(idx)
-                    player.graveyard.append(c)
-                    game.emit("to_graveyard", player=player, card=c)
-                    game.log(f"{player.name} descarta {c.name}")
-                _one(_r - 1)                        # encadena la próxima
-            game.pending_choice = {
-                "kind": "discard",
-                "prompt": f"Descartá una carta ({remaining} restante(s)).",
-                "options": [{"i": j, "name": c.name, "is_land": c.is_land()}
-                            for j, c in enumerate(player.hand)],
-                "allow_none": False, "_apply": _apply,
-            }
-        else:
+
+        def _apply(idx, _r=remaining):
+            if idx is not None and 0 <= idx < len(player.hand):
+                c = player.hand.pop(idx)
+                player.graveyard.append(c)
+                game.emit("to_graveyard", player=player, card=c)
+                game.log(f"{player.name} descarta {c.name}")
+            _prompt_one(_r - 1)                     # encadena la próxima
+        game.pending_choice = {
+            "kind": "discard",
+            "prompt": f"Descartá una carta ({remaining} restante(s)).",
+            "options": [{"i": j, "name": c.name, "is_land": c.is_land()}
+                        for j, c in enumerate(player.hand)],
+            "allow_none": False, "_apply": _apply,
+        }
+
+    def _auto():
+        rem = n
+        while rem > 0 and player.hand:
             if player.policy and hasattr(player.policy, "choose_discard"):
                 c = player.policy.choose_discard(game, player)
             else:
@@ -1566,8 +1578,8 @@ def _human_or_auto_discard(game, player, n):
             player.hand.remove(c)
             player.graveyard.append(c)
             game.emit("to_graveyard", player=player, card=c)
-            _one(remaining - 1)
-    _one(n)
+            rem -= 1
+    _route_choice(game, player, lambda: _prompt_one(n), _auto)
 
 
 def _count_word(w):
@@ -1630,10 +1642,41 @@ def _loyalty_effect(text: str):
     frag, spec, count = _fragment_effect(text or "")
     if frag is not None and spec is not None:
         def eff(game, ctrl, perm, _f=frag, _spec=spec, _n=count):
-            _f(game, ctrl, _auto_loyalty_targets(game, ctrl, _spec, _n))
+            _choose_loyalty_targets(game, ctrl, _spec, _n,
+                                    lambda tgs: _f(game, ctrl, tgs))
         return eff
 
     return None
+
+
+def _choose_loyalty_targets(game, ctrl, spec, n, apply_targets):
+    """Habilidad de lealtad dirigida: el humano (en su turno) elige el objetivo en un
+    modal; el bot usa el objetivo automático. Objetivo único (n<=1); si n>1, auto."""
+    auto = _auto_loyalty_targets(game, ctrl, spec, n)
+    if spec == "opp_creature":
+        pool = list(game.legal_creature_targets(ctrl))
+    elif spec == "own_creature":
+        pool = list(ctrl.creatures())
+    elif spec == "opp_player":
+        pool = list(game.opponents(ctrl))
+    else:
+        pool = []
+    if not pool or (n or 1) > 1:
+        apply_targets(auto)
+        return
+
+    def _prompt():
+        if spec == "opp_player":
+            cands = [(o.name, o) for o in pool]
+        else:
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness} · {pm.controller.name}", pm)
+                     for pm in pool]
+
+        def _do(obj):
+            apply_targets([obj])
+        _human_target_choice(game, ctrl, "etb_target",
+                             "Elegí el objetivo de la habilidad de lealtad", cands, _do)
+    _route_choice(game, ctrl, _prompt, lambda: apply_targets(auto))
 
 
 def _auto_loyalty_targets(game, ctrl, spec, n):

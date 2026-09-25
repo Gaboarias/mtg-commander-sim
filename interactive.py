@@ -85,6 +85,7 @@ class InteractiveGame:
         self._react_armed = False   # ventana de reacción activa (durante main del bot)
         self._react_ctx = None      # {p, step, spell} para reanudar tras responder
         self.opp_turns = []         # resumen de los turnos rivales desde tu último turno
+        self._draining = False      # mostrando decisiones encoladas durante el avance
         # el motor pausa una resolución cuando el HUMANO debe elegir (revelar, etc.)
         self.g.interactive_human = self.human()
         self.g.pending_choice = None
@@ -183,6 +184,23 @@ class InteractiveGame:
             self._record_opp_turn(p, n0)
             if paused:
                 return
+            if self._surface_queued_choice():   # el bot me forzó una decisión
+                return
+
+    def _surface_queued_choice(self):
+        """Si un efecto de un bot encoló una decisión del humano, la muestra ahora
+        (arma pending_choice) y marca que hay que reanudar el avance al resolverla.
+        Devuelve True si frenó el avance para que el humano decida."""
+        while self.g.choice_queue and self.g.pending_choice is None:
+            thunk = self.g.choice_queue.pop(0)
+            try:
+                thunk()
+            except Exception:
+                continue
+        if self.g.pending_choice is not None:
+            self._draining = True
+            return True
+        return False
 
     def _run_extra_turns(self):
         """Agota `game.extra_turns` tras el turno recién jugado (tope 4). Devuelve
@@ -210,6 +228,8 @@ class InteractiveGame:
             self._record_opp_turn(who, n0)
             if paused:
                 return True          # el bot me ataca en su turno extra
+            if self._surface_queued_choice():
+                return True          # el bot me forzó una decisión
         return False
 
     def _record_opp_turn(self, p, n0):
@@ -1287,4 +1307,16 @@ class InteractiveGame:
         self.g.sba()
         if len(self.g.alive()) <= 1:
             self._finish()
+            return self.state()
+        # el _apply pudo encadenar otra sub-decisión (p. ej. descartar de a una)
+        if self.g.pending_choice is not None:
+            return self.state()
+        # decisiones encoladas por efectos de un bot: mostrar la próxima
+        if self._surface_queued_choice():
+            return self.state()
+        # si estábamos drenando decisiones durante el avance de turnos rivales,
+        # reanudar el avance hasta el turno del humano
+        if self._draining:
+            self._draining = False
+            self._advance_to_human()
         return self.state()

@@ -528,6 +528,9 @@ class Game:
         # efecto que requiere elegir (revelar, etc.) hasta resolve_choice().
         self.interactive_human = None
         self.pending_choice = None
+        # cola de decisiones del humano diferidas (forzadas durante el turno de un
+        # bot, donde no se puede pausar la pila): thunks que arman pending_choice.
+        self.choice_queue: list = []
         # control temporal (Threaten): permanentes a devolver al fin del turno
         self.control_returns: list = []
         # turnos extra pendientes (para el mismo jugador)
