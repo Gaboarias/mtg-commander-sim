@@ -4161,6 +4161,52 @@ def test_reanimate_from_any_graveyard():
     assert not any(c.name == "Dragon" for c in op.graveyard)
 
 
+def test_persist_returns_once_with_minus_counter():
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    finks = build_card_from_data({
+        "name": "Kitchen Finks", "mana_cost": "{1}{G}{G}", "cmc": 3,
+        "type_line": "Creature", "power": "3", "toughness": "2",
+        "oracle_text": "When Kitchen Finks enters, you gain 2 life. Persist"})
+    perm = g.move_to_battlefield(finks, me)
+    g.to_graveyard(perm, "t")
+    back = [p for p in me.battlefield if p.card.name == "Kitchen Finks"]
+    assert back and back[0].counters.get("-1/-1") == 1
+    assert not any(c.name == "Kitchen Finks" for c in me.graveyard)
+    # segunda muerte: ya tenía -1/-1 -> ahora va al cementerio
+    g.to_graveyard(back[0], "t2")
+    assert any(c.name == "Kitchen Finks" for c in me.graveyard)
+    assert not any(p.card.name == "Kitchen Finks" for p in me.battlefield)
+
+
+def test_undying_returns_with_plus_counter():
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    c = build_card_from_data({
+        "name": "Undyer", "mana_cost": "{2}{B}", "cmc": 3,
+        "type_line": "Creature", "power": "2", "toughness": "2",
+        "oracle_text": "Undying"})
+    perm = g.move_to_battlefield(c, me)
+    g.to_graveyard(perm, "t")
+    back = [p for p in me.battlefield if p.card.name == "Undyer"]
+    assert back and back[0].counters.get("+1/+1") == 1
+
+
+def test_extort_drains_on_cast():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    op = g.opponents(me)[0]
+    ext = build_card_from_data({
+        "name": "Blind Obedience", "mana_cost": "{1}{W}", "cmc": 2,
+        "type_line": "Enchantment", "oracle_text": "Extort"})
+    g.move_to_battlefield(ext, me)
+    l0, my0 = op.life, me.life
+    g.emit("cast", player=me, card=cards.creature("Z", "1U", 1, 1))
+    g.resolve_stack()
+    assert op.life == l0 - 1 and me.life == my0 + 1
+
+
 def test_local_combos_detect():
     import combos
     deck = ["Sanguine Bond", "Exquisite Blood", "Walking Ballista",

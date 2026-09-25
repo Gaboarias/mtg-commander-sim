@@ -880,6 +880,39 @@ def _death_self_effect(oracle: str, name: str = ""):
     return on_death
 
 
+def _persist_undying_ondeath(oracle: str):
+    """Persist / Undying: al morir, si NO tenía el contador correspondiente, la
+    criatura vuelve al campo con un contador (-1/-1 persist, +1/+1 undying).
+    Devuelve on_death(game, ctrl, perm) que retorna True si la reubicó (para que
+    el motor no la mande al cementerio), o None si la carta no tiene la mecánica."""
+    t = re.sub(r"\s+", " ", (oracle or "").lower())
+    undying = ("undying" in t
+               or "return it to the battlefield under its owner's control with a "
+                  "+1/+1 counter" in t)
+    persist = ("persist" in t
+               or "return it to the battlefield under its owner's control with a "
+                  "-1/-1 counter" in t)
+    if not (undying or persist):
+        return None
+    kind = "+1/+1" if undying else "-1/-1"
+
+    def on_death(game, ctrl, perm, _kind=kind):
+        if perm.is_token:                       # las fichas dejan de existir
+            return False
+        if perm.card is ctrl.commander_card:    # el comandante va a la zona de mando
+            return False
+        if perm.counters.get(_kind, 0) > 0:     # ya tenía el contador -> al cementerio
+            return False
+        new = game.move_to_battlefield(perm.card, ctrl)
+        if new is not None:
+            game.add_counters(new, _kind, 1)
+            game.log(f"{perm.card.name} vuelve al campo "
+                     f"({'undying' if _kind == '+1/+1' else 'persist'})")
+            return True
+        return False
+    return on_death
+
+
 def _static_anthem(oracle: str):
     """Anthem estático genérico de un permanente: 'creatures you control get +X/+X'
     y 'creatures you control have <keyword>'. Devuelve (static_mod, keywords) o
@@ -2839,12 +2872,35 @@ def build_card_from_data(data: dict) -> Card:
                            else 99 if w == "any"
                            else (_count_word(w) or 1))
 
+    # Persist / Undying: recursión al morir con contador (tiene prioridad sobre
+    # un disparo de muerte genérico, porque DEFINE qué pasa al morir).
+    if card.on_death is None and "creature" in types:
+        pu = _persist_undying_ondeath(data.get("oracle_text", ""))
+        if pu is not None:
+            card.on_death = pu
+
     # disparo de MUERTE propia ("when this creature dies, <efecto>"). Antes el
     # efecto se cableaba mal como ETB (se disparaba al entrar en vez de al morir).
     if card.on_death is None:
         od = _death_self_effect(data.get("oracle_text", ""), name)
         if od is not None:
             card.on_death = od
+
+    # Extort: al lanzar un hechizo, drenás 1 por cada rival (aprox: pago automático
+    # del coste {W/B}). Motor de drenaje típico de mazos aristócratas/blink.
+    if re.search(r"\bextort\b", _otx := re.sub(r"\s+", " ",
+                 (data.get("oracle_text", "") or "").lower())):
+        def _extort(game, perm, card=None, **_kw):
+            opps = game.opponents(perm.controller)
+            drained = 0
+            for o in opps:
+                o.life -= 1
+                drained += 1
+            if drained:
+                perm.controller.life += drained
+                game.log(f"{perm.controller.name} extorsiona: drena {drained}")
+        card.triggers = dict(card.triggers)
+        card.triggers.setdefault("cast", _extort)
 
     # disparos recurrentes de mantenimiento / final de turno ("at the beginning of
     # your upkeep/end step, <efecto>"). Antes se cableaba mal como ETB de una vez.

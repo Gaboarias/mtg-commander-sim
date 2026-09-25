@@ -920,10 +920,15 @@ class Game:
         if perm not in ctrl.battlefield:
             return
         ctrl.battlefield.remove(perm)
+        relocated = False
         if perm.card.on_death:
-            perm.card.on_death(self, ctrl, perm)
+            # on_death puede devolver True (persist/undying) para indicar que la
+            # carta ya volvió al campo y NO debe ir al cementerio.
+            relocated = bool(perm.card.on_death(self, ctrl, perm))
         self.emit("death", player=ctrl, perm=perm)
         if perm.is_token:
+            return
+        if relocated:
             return
         # comandante: vuelve a la zona de mando (eleccion; aqui siempre)
         if perm.card is ctrl.commander_card:
