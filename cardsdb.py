@@ -2981,6 +2981,95 @@ def build_card_from_data(data: dict) -> Card:
             card.adventure = {"cost": adv_cost, "effect": aeff, "label": adv.get("name", "Aventura"),
                               "target_spec": aspec, "target_count": acount}
 
+    # Prepared (set FRA): la criatura entra "preparada" y, mientras lo esté, podés
+    # lanzar UNA copia de su hechizo (cara card_faces[1]). Hacerlo la desprepara.
+    if (len(_faces) == 2 and "creature" in types and "prepared" in _lt
+            and {"instant", "sorcery"} & set(parse_type_line(
+                _faces[1].get("type_line", ""))[0])):
+        spell = _faces[1]
+        pcost = parse_cost(mana_cost_to_str(spell.get("mana_cost", "") or "0"))
+        peff, pspec, pcount = _fragment_effect(spell.get("oracle_text", "") or "")
+        if peff is None:
+            peff2 = _generic_amount_effect(spell.get("oracle_text", "") or "")
+            peff = (lambda g, c, tg=None, _e=peff2: _e(g, c)) if peff2 else None
+            pspec, pcount = None, 1
+        if peff is not None:
+            def _prep_etb(g, ctrl, perm, _prev=card.on_etb):
+                perm._prepared = True
+                if _prev:
+                    _prev(g, ctrl, perm)
+            card.on_etb = _prep_etb
+
+            _mgl = re.search(r"gain (\w+) life", spell.get("oracle_text", "") or "", re.I)
+            _gl = _count_word(_mgl.group(1)) if _mgl else 0
+
+            def _prep_eff(g, c, perm, tg, _e=peff, _gain=_gl):
+                _e(g, c, tg)
+                if _gain:
+                    g.gain_life(c, _gain)
+                if perm is not None:
+                    perm._prepared = False
+            card.activated_abilities = tuple(card.activated_abilities) + ({
+                "cost": pcost, "tap": False, "sacrifice_self": False,
+                "sacrifice_other": None, "pay_life": 0, "discard": 0,
+                "label": f"Lanzar {spell.get('name', 'hechizo')} (preparada)",
+                "effect": _prep_eff, "target_spec": pspec,
+                "target_count": pcount, "is_copy_ability": False,
+                "prepared": True},)
+
+    # Changeling: la criatura es de TODOS los tipos de criatura (para sinergias
+    # tribales). Marcamos el flag; los conteos por tipo lo tratan como comodín.
+    if "changeling" in _lt and "creature" in types:
+        card.changeling = True
+
+    # Evoke {coste}: se puede lanzar por un coste alternativo más barato; al entrar
+    # se sacrifica (te quedás con el ETB). El bot la usa por el ETB.
+    mev = re.search(r"evoke ((?:\{[wubrgc0-9/x]+\})+)", _lt)
+    if mev and "creature" in types:
+        card.evoke_cost = parse_cost(mana_cost_to_str(
+            "".join(re.findall(r"\{[wubrgc0-9/x]+\}", mev.group(1)))))
+
+    # Entwine {coste}: en una carta modal, pagás el coste de entwine para elegir
+    # TODOS los modos en vez de uno.
+    men = re.search(r"entwine(?:—|\s)((?:\{[wubrgc0-9/x]+\})+)", _lt)
+    if men:
+        card._entwine_cost = sum(int(s) if s.isdigit() else 1
+                                 for s in re.findall(r"\{([wubrgc0-9/x]+)\}", men.group(1)))
+
+    # Aftermath: la mitad de "secuela" de una carta partida se lanza SOLO desde el
+    # cementerio. Exponemos esa cara como jugable desde el cementerio (gy_play).
+    if (len(_faces) == 2 and "aftermath" in ((_faces[1].get("oracle_text", "") or "")
+            + " " + (_faces[1].get("type_line", "") or "")).lower()):
+        af = _faces[1]
+        aff, _s, _c = _fragment_effect(af.get("oracle_text", "") or "")
+        if aff is None:
+            aff2 = _generic_amount_effect(af.get("oracle_text", "") or "")
+            aff = (lambda g, ctrl, tg=None, _e=aff2: _e(g, ctrl)) if aff2 else None
+        if aff is not None and not getattr(card, "gy_play", None):
+            card.gy_play = {"mode": "aftermath", "cost": parse_cost(
+                mana_cost_to_str(af.get("mana_cost", "") or "0")),
+                "effect": aff, "label": af.get("name", "Secuela")}
+
+    # Kicker {coste} / Multikicker: coste adicional opcional al lanzar; "if (this was)
+    # kicked, <efecto>" resuelve el bono. Auto: se paga si el jugador puede.
+    mk = re.search(r"(?:multikicker|kicker)(?:—|\s)((?:\{[wubrgc0-9/x]+\})+)", _lt)
+    if mk:
+        card._kicker_cost = sum(int(s) if s.isdigit() else 1
+                                for s in re.findall(r"\{([wubrgc0-9/x]+)\}", mk.group(1)))
+        mkb = re.search(r"if (?:this spell was |this creature was |this was |it was |"
+                        r"[\w~' ]{0,15}was |)kicked,?\s*(.{0,140})", _lt)
+        if mkb:
+            beff = _generic_amount_effect(mkb.group(1))
+            if beff is not None:
+                card._kicked_effect = beff
+                if "creature" in types:      # el bono corre al entrar (ETB)
+                    def _kick_etb(g, ctrl, perm, _prev=card.on_etb, _b=beff):
+                        if getattr(perm.card, "_kicked", False):
+                            _b(g, ctrl)
+                        if _prev:
+                            _prev(g, ctrl, perm)
+                    card.on_etb = _kick_etb
+
     # Madness <coste>: si se descarta, se puede lanzar por el coste de madness en
     # vez de ir al cementerio (el motor lo hace automático si hay maná).
     mmad = re.search(r"madness ((?:\{[wubrgc0-9/x]+\})+)", _lt)

@@ -124,6 +124,13 @@ class Policy:
         for card in castables:
             if card not in me.hand or card.is_land():
                 continue
+            # Evoke: si tiene ETB valioso y no puedo (o no quiero) pagar el cuerpo
+            # completo pero sí el coste de evoke, la lanzo por evoke (ETB + sacrificio).
+            ev = getattr(card, "evoke_cost", None)
+            if (not nov and ev and card.on_etb and me.can_pay(ev)
+                    and not (card.cost and me.can_pay(card.cost))):
+                game.cast_evoke(me, card)
+                continue
             # Adventure: si puedo pagar la aventura pero aún no la criatura, lanzo la
             # aventura por su valor (la criatura queda jugable desde el exilio).
             adv = getattr(card, "adventure", None)
@@ -226,6 +233,9 @@ class Policy:
             if done is not None and perm.uid in done:
                 continue
             for j, ab in enumerate(getattr(perm.card, "activated_abilities", ()) or ()):
+                # "prepared" (mecánica Prepared): sólo mientras la criatura lo esté
+                if ab.get("prepared") and not getattr(perm, "_prepared", False):
+                    continue
                 # no girar criaturas antes del combate (podrían atacar): las de {T}
                 # solo se usan en la 2da main
                 if ab.get("tap") and not second and perm.is_creature():
@@ -278,6 +288,12 @@ class Policy:
         modes = getattr(card, "modes", ())
         if not modes:
             return None
+        # Entwine: si puedo pagar base + entwine, elijo TODOS los modos.
+        ent = getattr(card, "_entwine_cost", 0) or 0
+        if ent and card.cost is not None:
+            from engine import Cost
+            if me.can_pay(Cost(card.cost.generic + ent, card.cost.pips)):
+                return list(range(len(modes)))
         pick = max(1, getattr(card, "mode_pick", 1))
         scored = []
         for i, m in enumerate(modes):

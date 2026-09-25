@@ -4207,6 +4207,109 @@ def test_extort_drains_on_cast():
     assert op.life == l0 - 1 and me.life == my0 + 1
 
 
+def test_prepared_cast_spell_and_unprepare():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    data = {
+        "name": "Blossom-Blessed Angel", "mana_cost": "{3}{W}", "cmc": 4,
+        "type_line": "Creature — Angel Cleric", "power": "2", "toughness": "4",
+        "oracle_text": "Flying, vigilance\nThis creature enters prepared.",
+        "card_faces": [
+            {"name": "Blossom-Blessed Angel", "type_line": "Creature — Angel Cleric",
+             "mana_cost": "{3}{W}", "oracle_text": "Flying, vigilance\n"
+             "This creature enters prepared.", "power": "2", "toughness": "4"},
+            {"name": "Seed Suture", "type_line": "Sorcery", "mana_cost": "{G/W}",
+             "oracle_text": "Put a +1/+1 counter on target creature. You gain 1 life."}]}
+    c = build_card_from_data(data)
+    ab = [a for a in c.activated_abilities if a.get("prepared")]
+    assert ab and ab[0]["target_spec"] == "own_creature"
+    perm = g.move_to_battlefield(c, me)
+    assert getattr(perm, "_prepared", False) is True
+    tgt = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    life0 = me.life
+    ab[0]["effect"](g, me, perm, [tgt])
+    assert tgt.counters.get("+1/+1") == 1
+    assert me.life == life0 + 1
+    assert perm._prepared is False
+
+
+def test_evoke_etb_then_sacrifice():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1U", 1, 1) for _ in range(12)],
+                cards.creature("Cmd", "2U", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(12)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(4):
+        g.move_to_battlefield(cards.land("Island", ["U"]), me)
+    ev = build_card_from_data({
+        "name": "Mulldrifter", "mana_cost": "{4}{U}", "cmc": 5, "type_line": "Creature",
+        "power": "2", "toughness": "2",
+        "oracle_text": "Flying\nWhen Mulldrifter enters, draw two cards.\nEvoke {2}{U}"})
+    assert ev.evoke_cost.cmc == 3
+    me.hand = [ev]
+    h0 = len(me.hand)
+    g.cast_evoke(me, ev)
+    g.resolve_stack()
+    assert len(me.hand) == (h0 - 1) + 2       # robó 2 por el ETB
+    assert not any(pm.card.name == "Mulldrifter" for pm in me.battlefield)
+    assert any(c.name == "Mulldrifter" for c in me.graveyard)
+
+
+def test_kicker_bonus_when_paid():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1R", 1, 1) for _ in range(12)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(12)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(4):
+        g.move_to_battlefield(cards.land("Mountain", ["R"]), me)
+    kk = build_card_from_data({
+        "name": "Kicker Bolt", "mana_cost": "{R}", "cmc": 1, "type_line": "Sorcery",
+        "oracle_text": "Kicker {2}\nKicker Bolt deals 2 damage to any target. "
+                       "If this spell was kicked, you gain 3 life."})
+    assert getattr(kk, "_kicker_cost", 0) == 2 and getattr(kk, "_kicked_effect", None)
+    me.hand = [kk]
+    l0, my0 = op.life, me.life
+    g.cast(me, kk)
+    g.resolve_stack()
+    assert op.life == l0 - 2 and me.life == my0 + 3      # kickeado
+
+
+def test_aftermath_from_graveyard():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1R", 1, 1) for _ in range(12)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(12)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(6):
+        g.move_to_battlefield(cards.land("Mountain", ["R"]), me)
+    af = build_card_from_data({
+        "name": "Split", "mana_cost": "{1}{R}", "cmc": 2, "type_line": "Sorcery",
+        "oracle_text": "Deal 2 damage to any target.",
+        "card_faces": [
+            {"name": "Front", "type_line": "Sorcery", "mana_cost": "{1}{R}",
+             "oracle_text": "Deal 2 damage to any target."},
+            {"name": "Back", "type_line": "Sorcery — Aftermath", "mana_cost": "{3}{R}",
+             "oracle_text": "Deal 4 damage to any target."}]})
+    assert af.gy_play and af.gy_play.get("mode") == "aftermath"
+    me.graveyard = [af]
+    l0 = op.life
+    g.play_from_graveyard(me, af)
+    g.resolve_stack()
+    assert op.life == l0 - 4
+    assert any(c.name == "Split" for c in me.exile)
+
+
 def test_level_up_grows_creature():
     import cards
     from cardsdb import build_card_from_data

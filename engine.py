@@ -1242,6 +1242,20 @@ class Game:
                 delve_n = min(gen, len(player.graveyard))
                 gen -= delve_n
             pay_cost = Cost(generic=gen, pips=pay_cost.pips)
+        # Entwine: si se eligieron TODOS los modos de una carta modal, se suma el coste.
+        ent = getattr(card, "_entwine_cost", 0) or 0
+        if (ent and pay_cost is not None and chosen_modes
+                and getattr(card, "modes", None)
+                and len(set(chosen_modes)) >= len(card.modes)):
+            pay_cost = Cost(generic=pay_cost.generic + ent, pips=pay_cost.pips)
+        # Kicker: coste adicional OPCIONAL; si se paga, se resuelve el bono "if kicked".
+        card._kicked = False
+        kick = getattr(card, "_kicker_cost", 0) or 0
+        if kick and pay_cost is not None:
+            k_cost = Cost(generic=pay_cost.generic + kick, pips=pay_cost.pips)
+            if player.can_pay(k_cost):
+                pay_cost = k_cost
+                card._kicked = True
         # Buyback: coste adicional de maná; si se paga, la carta vuelve a la mano al
         # resolver. Auto: se paga si el jugador puede afrontar coste base + buyback.
         card._buyback_used = False
@@ -1350,6 +1364,10 @@ class Game:
                     # vea que se resolvió, en vez de "no pasó nada".
                     g.log(f"{player.name} resuelve {card.name} "
                           f"(efecto complejo: no se simula en detalle)")
+                # Kicker: bono adicional si se pagó el coste de kicker.
+                if getattr(card, "_kicked", False) and getattr(card, "_kicked_effect", None):
+                    g.log(f"{card.name} fue kickeado: bono")
+                    card._kicked_effect(g, player)
                 # Buyback: vuelve a la mano en vez de al cementerio.
                 if buyback_used:
                     player.hand.append(card)
@@ -1653,6 +1671,18 @@ class Game:
         if cost is not None and not p.can_pay(cost):
             return False
         m, after = gp.get("mode"), gp.get("after")
+        if m == "aftermath":
+            # secuela: se lanza SÓLO desde el cementerio, resuelve su efecto y exilia.
+            if cost is not None:
+                p.pay(cost)
+            p.graveyard.remove(card)
+            eff = gp.get("effect")
+            if eff:
+                eff(self, p, targets or [])
+            p.exile.append(card)
+            self.log(f"{p.name} lanza la secuela de {card.name}")
+            self.sba()
+            return True
         if m == "escape":
             others = [x for x in p.graveyard if x is not card]
             need = gp.get("exile_n", 0) or 0
@@ -1739,6 +1769,21 @@ class Game:
             card.cost = orig
         if ok is not False and card in p.exile_play:
             p.exile_play.remove(card)
+        self.sba()
+        return True
+
+    def cast_evoke(self, p: "Player", card: Card) -> bool:
+        """Lanza una criatura por su coste de evoke: entra (dispara su ETB) y se
+        sacrifica de inmediato."""
+        ec = getattr(card, "evoke_cost", None)
+        if ec is None or card not in p.hand or not p.can_pay(ec):
+            return False
+        p.pay(ec)
+        p.hand.remove(card)
+        self.log(f"{p.name} lanza {card.name} por evoke")
+        perm = self.move_to_battlefield(card, p)   # dispara ETB
+        if perm is not None and perm in p.battlefield:
+            self.to_graveyard(perm, "evoke")
         self.sba()
         return True
 

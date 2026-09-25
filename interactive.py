@@ -660,6 +660,10 @@ class InteractiveGame:
                     p.impulse.remove(c)
                 self.g.sba()
             return self.state()
+        if zone == "evoke":       # lanzar una criatura por evoke (ETB + sacrificio)
+            if i is not None and 0 <= i < len(p.hand):
+                self.g.cast_evoke(p, p.hand[i])
+            return self.state()
         if zone == "adventure":   # lanzar la cara de aventura de una carta de la mano
             if i is not None and 0 <= i < len(p.hand):
                 c = p.hand[i]
@@ -964,6 +968,13 @@ class InteractiveGame:
                         entry["castable"] = False
                         entry["reason"] = "Sin objetivos legales"
                     casts.append(entry)
+                # Evoke: opción extra para lanzar por evoke (ETB + sacrificio).
+                ev = getattr(c, "evoke_cost", None)
+                if ev and p.can_pay(ev):
+                    casts.append({
+                        "i": i, "name": f"{c.name} (evoke)", "zone": "evoke",
+                        "cost": _cost_str_cost(ev), "target_spec": None,
+                        "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
                 # Adventure: opción extra para lanzar la cara de aventura.
                 adv = getattr(c, "adventure", None)
                 if adv and p.can_pay(adv["cost"]):
@@ -1006,7 +1017,9 @@ class InteractiveGame:
                 # las habilidades NO se descartan: se muestran deshabilitadas con
                 # el motivo, así no "desaparecen" al usar otra (girar / gastar maná).
                 reason = None
-                if ab.get("tap") and pm.tapped:
+                if ab.get("prepared") and not getattr(pm, "_prepared", False):
+                    reason = "ya usada"
+                elif ab.get("tap") and pm.tapped:
                     reason = "girada"
                 elif not p.can_pay(ab.get("cost")):
                     reason = "sin maná"
