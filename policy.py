@@ -124,6 +124,13 @@ class Policy:
         for card in castables:
             if card not in me.hand or card.is_land():
                 continue
+            # Suspend: si puedo pagar el coste de suspend pero no el cuerpo completo,
+            # la suspendo (se lanzará gratis en unos turnos).
+            sus = getattr(card, "suspend", None)
+            if (not nov and sus and me.can_pay(sus["cost"])
+                    and not (card.cost and me.can_pay(card.cost))):
+                game.suspend_card(me, card)
+                continue
             # Evoke: si tiene ETB valioso y no puedo (o no quiero) pagar el cuerpo
             # completo pero sí el coste de evoke, la lanzo por evoke (ETB + sacrificio).
             ev = getattr(card, "evoke_cost", None)

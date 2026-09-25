@@ -664,6 +664,10 @@ class InteractiveGame:
             if i is not None and 0 <= i < len(p.hand):
                 self.g.cast_evoke(p, p.hand[i])
             return self.state()
+        if zone == "suspend":     # suspender una carta de la mano
+            if i is not None and 0 <= i < len(p.hand):
+                self.g.suspend_card(p, p.hand[i])
+            return self.state()
         if zone == "adventure":   # lanzar la cara de aventura de una carta de la mano
             if i is not None and 0 <= i < len(p.hand):
                 c = p.hand[i]
@@ -968,6 +972,13 @@ class InteractiveGame:
                         entry["castable"] = False
                         entry["reason"] = "Sin objetivos legales"
                     casts.append(entry)
+                # Suspend: opción extra para suspender (se lanza gratis en N turnos).
+                sus = getattr(c, "suspend", None)
+                if sus and p.can_pay(sus["cost"]):
+                    casts.append({
+                        "i": i, "name": f"{c.name} (suspend {sus['n']})", "zone": "suspend",
+                        "cost": _cost_str_cost(sus["cost"]), "target_spec": None,
+                        "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
                 # Evoke: opción extra para lanzar por evoke (ETB + sacrificio).
                 ev = getattr(c, "evoke_cost", None)
                 if ev and p.can_pay(ev):

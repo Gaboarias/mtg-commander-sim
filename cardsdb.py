@@ -3256,6 +3256,56 @@ def build_card_from_data(data: dict) -> Card:
         else:
             card.die_exile = "all"
 
+    # Cipher: tras resolver el hechizo, se cifra en una criatura tuya; cuando esa
+    # criatura pega daño de combate a un jugador, lanzás una copia GRATIS.
+    if ("cipher" in _lt and {"instant", "sorcery"} & types
+            and card.on_cast_resolve is not None):
+        _base_ci = card.on_cast_resolve
+
+        def _cipher_resolve(g, ctrl, tg, _b=_base_ci, _nm=name):
+            _b(g, ctrl, tg)
+            mine = [pm for pm in ctrl.battlefield if pm.is_creature()]
+            if mine:
+                enc = max(mine, key=lambda p: (p.power, p.toughness))
+                lst = getattr(enc, "_ciphered", None)
+                if lst is None:
+                    lst = enc._ciphered = []
+                lst.append(_b)
+                g.log(f"{ctrl.name} cifra {_nm} en {enc.name}")
+        card.on_cast_resolve = _cipher_resolve
+
+    # Suspend N—<coste>: en vez de lanzar, pagás el coste y la exiliás con N
+    # contadores de tiempo; cada mantenimiento se quita uno y al llegar a 0 se lanza
+    # gratis. El motor administra los contadores (game.suspended).
+    msus = re.search(r"suspend (\d+)\s*[—-]\s*((?:\{[wubrgc0-9/x]+\})+)", _lt)
+    if msus:
+        card.suspend = {"n": int(msus.group(1)), "cost": parse_cost(mana_cost_to_str(
+            "".join(re.findall(r"\{[wubrgc0-9/x]+\}", msus.group(2)))))}
+
+    # Soulbond: al entrar, se empareja con otra criatura tuya sin pareja; mientras
+    # estén emparejadas, ambas tienen <keyword>. Aprox: se otorga de forma persistente.
+    if "soulbond" in _lt and "creature" in types:
+        mkw = re.search(r"both (?:creatures? )?have ([a-z ,and]+?)(?:\.|as long|$)", _lt)
+        gained = set()
+        if mkw:
+            for nm2, key in _KEYWORD_WORDS:
+                if re.search(r"\b" + nm2 + r"\b", mkw.group(1)):
+                    gained.add(key)
+        if gained:
+            def _soulbond_etb(g, ctrl, perm, _prev=card.on_etb, _kw=gained):
+                partner = next((pm for pm in ctrl.battlefield
+                                if pm.is_creature() and pm is not perm
+                                and not getattr(pm, "_soulbond_partner", None)), None)
+                if partner is not None:
+                    perm._soulbond_partner = partner
+                    partner._soulbond_partner = perm
+                    perm.perma_keywords |= _kw
+                    partner.perma_keywords |= _kw
+                    g.log(f"{perm.name} se empareja con {partner.name} (soulbond)")
+                if _prev:
+                    _prev(g, ctrl, perm)
+            card.on_etb = _soulbond_etb
+
     return cards.attach_generic_effects(card)
 
 

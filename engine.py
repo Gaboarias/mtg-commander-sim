@@ -215,6 +215,7 @@ class Permanent:
         self.uid = _next_uid()
         self.temp_pt = [0, 0]            # +P/+T "hasta el fin del turno" (prowess, pumps)
         self.temp_keywords = set()       # keywords otorgadas "hasta el fin del turno"
+        self.perma_keywords = set()      # keywords persistentes (soulbond, etc.)
         self.goaded = False              # goad: debe atacar en su próximo turno
         self.must_attack = False
         self.cant_block = False
@@ -279,7 +280,7 @@ class Permanent:
     def keywords(self) -> set:
         if self.abilities_off():
             return set()
-        return set(self.card.keywords) | self.temp_keywords
+        return set(self.card.keywords) | self.temp_keywords | self.perma_keywords
 
     def is_creature(self) -> bool:
         return self.card.is_creature()
@@ -287,7 +288,7 @@ class Permanent:
     def has(self, kw: str) -> bool:
         if self.abilities_off():
             return False                 # perdió todas sus habilidades (mutación)
-        if kw in self.card.keywords or kw in self.temp_keywords:
+        if kw in self.card.keywords or kw in self.temp_keywords or kw in self.perma_keywords:
             return True
         # keywords otorgadas por efectos estáticos (p. ej. Anger desde el cementerio)
         return self.game is not None and self.game.grants_keyword(self, kw)
@@ -532,6 +533,7 @@ class Game:
         self.extra_turns: list = []
         self.spell_x = 0            # X elegido del último hechizo con {X} lanzado
         self.spells_this_turn = 0   # hechizos lanzados este turno (storm)
+        self.suspended: list = []   # cartas suspendidas: {card, player, n}
         self.no_prevention_turn = False   # "el daño no se puede prevenir este turno"
         self.no_block_turn = False        # "las criaturas no pueden bloquear este turno"
         # última habilidad activada resuelta (para copiarla: Strionic Resonator):
@@ -1079,6 +1081,16 @@ class Game:
             if combat and src_perm and source.card is source.controller.commander_card:
                 key = source.name
                 target.cmdr_damage[key] = target.cmdr_damage.get(key, 0) + amount
+            # Cipher: al pegar daño de combate a un jugador, lanzar una copia GRATIS
+            # de cada hechizo cifrado en esta criatura.
+            if combat and src_perm and getattr(source, "_ciphered", None):
+                for ceff in list(source._ciphered):
+                    self.stack.append(StackObject(
+                        source.controller,
+                        (lambda g, _e=ceff, _c=source.controller: _e(g, _c, [])),
+                        source=source, label=f"cipher:{source.name}"))
+                self.note_ability(source.card, "cifrado (cipher)",
+                                  controller=source.controller)
             # disparo "cuando ~ hace daño de combate a un jugador"
             if combat and src_perm:
                 cb = source.card.triggers.get("combat_damage_to_player")
@@ -1772,6 +1784,46 @@ class Game:
         self.sba()
         return True
 
+    def suspend_card(self, p: "Player", card: Card) -> bool:
+        """Suspende una carta de la mano: paga el coste de suspend, la exilia con N
+        contadores de tiempo. Cada mantenimiento se quita uno; a 0 se lanza gratis."""
+        sus = getattr(card, "suspend", None)
+        if not sus or card not in p.hand:
+            return False
+        cost = sus["cost"]
+        if cost is not None and not p.can_pay(cost):
+            return False
+        if cost is not None:
+            p.pay(cost)
+        p.hand.remove(card)
+        self.suspended.append({"card": card, "player": p, "n": sus["n"]})
+        self.log(f"{p.name} suspende {card.name} ({sus['n']} contadores)")
+        return True
+
+    def _tick_suspended(self, p: "Player"):
+        """Quita un contador de tiempo a las cartas suspendidas de `p`; las que llegan
+        a 0 se lanzan gratis (con prisa si son criaturas)."""
+        ready = []
+        for entry in list(self.suspended):
+            if entry["player"] is not p:
+                continue
+            entry["n"] -= 1
+            if entry["n"] <= 0:
+                self.suspended.remove(entry)
+                ready.append(entry["card"])
+        for card in ready:
+            orig = card.cost
+            try:
+                card.cost = None                 # se lanza sin pagar su coste
+                self.log(f"{p.name} lanza {card.name} desde suspensión (gratis)")
+                self.cast(p, card)
+            finally:
+                card.cost = orig
+            # prisa: si entró como criatura, puede atacar ya
+            for pm in p.battlefield:
+                if pm.card is card:
+                    pm.summoning_sick = False
+
     def cast_evoke(self, p: "Player", card: Card) -> bool:
         """Lanza una criatura por su coste de evoke: entra (dispara su ETB) y se
         sacrifica de inmediato."""
@@ -2026,6 +2078,7 @@ class Game:
         self.no_block_turn = False        # "las criaturas no pueden bloquear" se agota
 
         # UPKEEP
+        self._tick_suspended(p)          # quita contadores de tiempo (suspend)
         self.emit("upkeep", player=p)
         self.resolve_stack()
 

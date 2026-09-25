@@ -4207,6 +4207,66 @@ def test_extort_drains_on_cast():
     assert op.life == l0 - 1 and me.life == my0 + 1
 
 
+def test_cipher_recasts_on_combat_damage():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    op = g.opponents(me)[0]
+    ci = build_card_from_data({
+        "name": "Hidden Strings", "mana_cost": "{1}{U}", "cmc": 2,
+        "type_line": "Sorcery",
+        "oracle_text": "You gain 2 life. Cipher (Then you may exile this spell card "
+                       "encoded on a creature you control.)"})
+    cr = g.move_to_battlefield(cards.creature("Rogue", "1U", 2, 2), me)
+    cr.summoning_sick = False
+    life0 = me.life
+    ci.on_cast_resolve(g, me, [])          # gana 2 + cifra en Rogue
+    assert me.life == life0 + 2 and getattr(cr, "_ciphered", None)
+    cr.attacking = op
+    g.deal_damage(cr, op, 2, combat=True)   # dispara la copia gratis
+    g.resolve_stack()
+    assert me.life == life0 + 4             # +2 de la copia cifrada
+
+
+def test_suspend_ticks_then_casts_free():
+    import cards
+    from cardsdb import build_card_from_data
+    from engine import Game, Player
+    me = Player("yo", [cards.creature("C", "1R", 1, 1) for _ in range(12)],
+                cards.creature("Cmd", "2R", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("X", "1B", 1, 1) for _ in range(12)],
+                cards.creature("O", "2B", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    for _ in range(4):
+        g.move_to_battlefield(cards.land("Mountain", ["R"]), me)
+    sus = build_card_from_data({
+        "name": "Rift Bolt", "mana_cost": "{2}{R}", "cmc": 3, "type_line": "Sorcery",
+        "oracle_text": "Rift Bolt deals 3 damage to any target.\nSuspend 1—{R}"})
+    assert sus.suspend["n"] == 1
+    me.hand = [sus]
+    g.suspend_card(me, sus)
+    assert len(g.suspended) == 1 and sus not in me.hand
+    l0 = op.life
+    g.begin_turn(me)                        # upkeep: contador 1->0 -> lanza gratis
+    g.resolve_stack()
+    assert op.life == l0 - 3
+
+
+def test_soulbond_grants_keyword_to_both():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me = _reco_players()
+    bear = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    sb = build_card_from_data({
+        "name": "Flyer", "mana_cost": "{2}{U}", "cmc": 3, "type_line": "Creature",
+        "power": "2", "toughness": "2",
+        "oracle_text": "Soulbond\nAs long as this creature is paired with another "
+                       "creature, both creatures have flying."})
+    fp = g.move_to_battlefield(sb, me)
+    assert getattr(fp, "_soulbond_partner", None) is bear
+    assert bear.has("flying") and fp.has("flying")
+
+
 def test_prepared_cast_spell_and_unprepare():
     import cards
     from cardsdb import build_card_from_data
