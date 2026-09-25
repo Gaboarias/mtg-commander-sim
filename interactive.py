@@ -68,7 +68,7 @@ def _cost_str_cost(c):
 
 class InteractiveGame:
     def __init__(self, deck_defs, human_index=0, seed=0, level="intermedio",
-                 max_turns=200):
+                 max_turns=60):
         self.players = run.build_players_from_defs(deck_defs, level=level)
         self.n = len(self.players)
         self.human_index = max(0, min(int(human_index), self.n - 1))
