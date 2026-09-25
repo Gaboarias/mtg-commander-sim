@@ -287,6 +287,19 @@ class Permanent:
     def is_creature(self) -> bool:
         return self.card.is_creature() or self.temp_creature
 
+    def has_subtype(self, sub: str) -> bool:
+        """¿Tiene el subtipo `sub`? Honra changeling y el contador 'everything'
+        (Omo): una criatura con esos es de TODOS los tipos de criatura; una tierra
+        con 'everything' es de todos los tipos de tierra."""
+        s = sub.lower()
+        if s in {x.lower() for x in self.card.subtypes}:
+            return True
+        if self.counters.get("everything", 0) > 0:
+            return True
+        if self.is_creature() and getattr(self.card, "changeling", False):
+            return True
+        return False
+
     def has(self, kw: str) -> bool:
         if self.abilities_off():
             return False                 # perdió todas sus habilidades (mutación)
@@ -720,7 +733,7 @@ class Game:
             ak = getattr(src.card, "anthem_keywords", None)
             if ak and kw in ak and src.controller is ctrl:
                 asub = getattr(src.card, "anthem_subtype", None)
-                if asub and asub.lower() not in {s.lower() for s in perm.card.subtypes}:
+                if asub and not perm.has_subtype(asub):
                     continue                    # lord por subtipo: solo ese tipo
                 if not (getattr(src.card, "anthem_others", False) and src is perm):
                     return True
@@ -1277,9 +1290,10 @@ class Game:
         # impuesto de comandante + reducción "cuesta {N} menos"
         extra = player.cmdr_tax if from_command else 0
         red = (getattr(card, "cost_reduction", 0) or 0) + self._static_cost_reduction(player, card)
+        tax = self._static_cost_increase(player, card)      # stax: "cuesta {N} más"
         pay_cost = cost
-        if cost is not None and (extra or red):
-            pay_cost = Cost(generic=max(0, cost.generic + extra - red), pips=cost.pips)
+        if cost is not None and (extra or red or tax):
+            pay_cost = Cost(generic=max(0, cost.generic + extra - red + tax), pips=cost.pips)
         # hechizos con {X}: se elige X = maná sobrante tras pagar el coste base
         self.spell_x = 0
         if getattr(card, "x_spell", False) and cost is not None:
@@ -1714,6 +1728,45 @@ class Game:
             if ok:
                 total += amt
         return total
+
+    def _static_cost_increase(self, player: "Player", card: Card) -> int:
+        """Impuesto de coste (stax) que dan permanentes EN JUEGO a los hechizos que
+        lanza `player`. card.spell_tax = (monto, filtro, quien) con quien in
+        {'all','opponents'} y filtro any/creature/noncreature/instant_sorcery/artifact."""
+        types = getattr(card, "types", set())
+        total = 0
+        for pm in self.all_permanents():
+            tx = getattr(pm.card, "spell_tax", None)
+            if not tx:
+                continue
+            amt, filt, whose = tx
+            if whose == "opponents" and pm.controller is player:
+                continue
+            ok = (filt == "any"
+                  or (filt == "creature" and "creature" in types)
+                  or (filt == "noncreature" and "creature" not in types)
+                  or (filt == "instant_sorcery" and ({"instant", "sorcery"} & types))
+                  or (filt == "artifact" and "artifact" in types))
+            if ok:
+                total += amt
+        return total
+
+    def transform(self, perm: "Permanent") -> bool:
+        """Da vuelta un permanente de doble cara (transform): intercambia su carta
+        actual con la cara trasera, conservando contadores/estado. Devuelve True si
+        transformó."""
+        faces = getattr(perm, "_dfc_faces", None)
+        if faces is None:
+            back = getattr(perm.card, "back_face", None)
+            if back is None:
+                return False
+            faces = perm._dfc_faces = [perm.card, back]
+            perm._dfc_idx = 0
+        perm._dfc_idx ^= 1
+        perm.card = faces[perm._dfc_idx]
+        self.log(f"{perm.name} se transforma")
+        self.sba()
+        return True
 
     def land_limit(self, player: "Player") -> int:
         """Cuántas tierras puede jugar este turno: 1 + las 'additional land' que

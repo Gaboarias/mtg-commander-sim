@@ -5419,6 +5419,79 @@ def test_additional_combat_phase():
     assert g.extra_combats == 1 and not c.tapped
 
 
+def test_omo_enters_or_attacks_everything_counter():
+    import cards
+    from cardsdb import build_card_from_data
+    def omo():
+        return build_card_from_data({
+            "name": "Omo", "mana_cost": "{G}{U}", "cmc": 2,
+            "type_line": "Legendary Creature — Frog Wizard", "power": "2", "toughness": "2",
+            "oracle_text": ("Whenever Omo enters or attacks, put an everything counter "
+                            "on each of up to one target land and up to one target "
+                            "creature.\nEach nonland creature with an everything counter "
+                            "on it is every creature type."), "keywords": []})
+    c = omo()
+    assert c.on_etb is not None and "attacks" in c.triggers
+    g, me, op = _duel(); g.interactive_human = me; g.active_index = 0
+    bear = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me)
+    g.move_to_battlefield(omo(), me)           # ETB dispara
+    pc = g.pending_choice
+    assert pc and pc["kind"] == "etb_target"
+    pc["_apply"](0)                            # elegir una criatura
+    if g.pending_choice:                       # luego pide tierra (opcional)
+        g.pending_choice["_apply"](0)
+    chosen = next(p for p in me.battlefield if p.counters.get("everything"))
+    assert chosen.has_subtype("Goblin")        # todos los tipos de criatura
+
+
+def test_cost_increaser_tax():
+    import cards
+    from engine import Game, Player
+    from cardsdb import build_card_from_data
+    me = Player("me", [cards.land("Plains", ["W"], basic=True) for _ in range(6)],
+                cards.creature("Cm", "2W", 3, 3, legendary=True))
+    op = Player("op", [], cards.creature("Om", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    th = build_card_from_data({
+        "name": "Thalia", "mana_cost": "{1}{W}", "cmc": 2,
+        "type_line": "Legendary Creature — Human Soldier", "power": "2", "toughness": "1",
+        "oracle_text": "Noncreature spells cost {1} more to cast.", "keywords": []})
+    assert getattr(th, "spell_tax", None) == (1, "noncreature", "all")
+    g.move_to_battlefield(th, op)
+    inst = build_card_from_data({"name": "Bolt", "mana_cost": "{R}", "cmc": 1,
+        "type_line": "Instant", "oracle_text": "", "keywords": []})
+    crea = build_card_from_data({"name": "Bear", "mana_cost": "{1}{G}", "cmc": 2,
+        "type_line": "Creature — Bear", "power": "2", "toughness": "2",
+        "oracle_text": "", "keywords": []})
+    assert g._static_cost_increase(me, inst) == 1     # noncreature: +1
+    assert g._static_cost_increase(me, crea) == 0     # creature: sin impuesto
+
+
+def test_transform_dfc_swaps_faces():
+    import cards
+    from cardsdb import build_card_from_data
+    dfc = build_card_from_data({
+        "name": "Delver", "mana_cost": "{U}", "cmc": 1,
+        "type_line": "Creature — Human Wizard", "power": "1", "toughness": "1",
+        "oracle_text": "At the beginning of your upkeep, you may transform Delver.",
+        "keywords": [], "card_faces": [
+            {"name": "Delver of Secrets", "type_line": "Creature — Human Wizard",
+             "mana_cost": "{U}", "power": "1", "toughness": "1",
+             "oracle_text": "... transform Delver."},
+            {"name": "Insectile Aberration", "type_line": "Creature — Human Insect",
+             "power": "3", "toughness": "2", "oracle_text": "Flying",
+             "keywords": ["Flying"]}]})
+    assert dfc.dfc == "transform" and dfc.back_face.name == "Insectile Aberration"
+    g, me, op = _duel()
+    p = g.move_to_battlefield(dfc, me)
+    assert p.power == 1 and not p.has("flying")
+    g.transform(p)
+    assert p.power == 3 and p.toughness == 2 and p.has("flying")
+    g.transform(p)                             # se puede volver a dar vuelta
+    assert p.power == 1
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

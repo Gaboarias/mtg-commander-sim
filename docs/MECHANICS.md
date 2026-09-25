@@ -151,6 +151,18 @@ dispara con muertes rivales).
   (Aggravated Assault…) suma a `game.extra_combats`; el turno corre combates
   extra (headless) o deja al humano atacar de nuevo (interactivo); "untap all
   creatures" endereza antes.
+- **Disparo "enters or attacks"** (Omo): se cablea a la vez como ETB y como
+  disparo de "attacks". Contador **everything**: el humano elige hasta 1 tierra y
+  hasta 1 criatura; `Permanent.has_subtype` honra ese contador (todos los tipos) y
+  changeling, así los lords por subtipo la benefician.
+- **Impuesto de coste (stax)**: "<tipo> spells (your opponents) cost {N} more"
+  (`spell_tax`, aplicado en `cast` vía `_static_cost_increase`): Thalia, Vryn
+  Wingmare, Sphere of Resistance, la mitad de impuesto de Grand Arbiter.
+- **Doble cara (DFC)**: se construye la cara trasera como `card.back_face` y
+  `card.dfc` ("transform"/"modal"). `game.transform(perm)` intercambia caras
+  (P/T, tipos, keywords) conservando contadores; las DFC de transformar exponen
+  una habilidad manual "Transformar". *(Día/noche automático de werewolves y jugar
+  la cara trasera de un modal DFC aún no están modelados.)*
 
 ## Efectos de reemplazo
 

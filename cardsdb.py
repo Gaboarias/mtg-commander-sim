@@ -896,6 +896,47 @@ def _attack_trigger_effect(oracle: str):
     return trig
 
 
+def _everything_counter_effect():
+    """Omo: pon un contador 'everything' en hasta 1 tierra objetivo y hasta 1
+    criatura objetivo (el humano elige, encadenado; puede omitir). La criatura pasa
+    a ser de todos los tipos de criatura y la tierra de todos los tipos de tierra
+    (ver Permanent.has_subtype)."""
+    def eff(game, ctrl, perm=None):
+        def _put(pm):
+            if pm is None:
+                return
+            pm.counters["everything"] = pm.counters.get("everything", 0) + 1
+            game.log(f"{pm.name} recibe un contador 'todo' (todos los tipos)")
+            game.sba()
+
+        lands = [pm for pl in game.players for pm in pl.battlefield if pm.card.is_land()]
+        creats = [pm for pl in game.players for pm in pl.battlefield if pm.is_creature()]
+        lands.sort(key=lambda x: x.controller is not ctrl)     # propias primero (bot)
+        creats.sort(key=lambda x: (x.controller is not ctrl, -(x.power + x.toughness)))
+
+        def _choose_land():
+            if not lands:
+                return
+            cands = [(f"{pm.name} · {pm.controller.name}", pm) for pm in lands]
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Contador 'todo': elegí una tierra (o ninguna)",
+                                 cands, _put, allow_none=True)
+
+        if creats:
+            ccands = [(f"{pm.name} {pm.power}/{pm.toughness} · {pm.controller.name}", pm)
+                      for pm in creats]
+
+            def _do_creat(pm):
+                _put(pm)
+                _choose_land()
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Contador 'todo': elegí una criatura (o ninguna)",
+                                 ccands, _do_creat, allow_none=True)
+        else:
+            _choose_land()
+    return eff
+
+
 def _event_trigger_effect(oracle: str):
     """Detecta disparos comunes y devuelve {evento: callback(g, perm, **kw)}.
     Cubre 'cuando una criatura muere', 'daño de combate a un jugador' y
@@ -1245,7 +1286,7 @@ def _static_anthem(oracle: str):
             return (0, 0)
         if _o and target is source:
             return (0, 0)
-        if _sub and _sub.lower() not in {s.lower() for s in target.card.subtypes}:
+        if _sub and not target.has_subtype(_sub):
             return (0, 0)
         return (_dp, _dt)
     return sm, kws, subtype
@@ -3490,6 +3531,25 @@ def build_card_from_data(data: dict) -> Card:
         card.triggers = dict(card.triggers)
         card.triggers["attacks"] = atk_eff
 
+    # disparo combinado "whenever ~ enters OR attacks, <efecto>" (Omo, etc.): se
+    # cablea a la vez como ETB y como disparo de "attacks".
+    _oatxt = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "")).lower()
+    meoa = re.search(r"when(?:ever)? [\w' ,]+? enters or attacks,?\s*(.{0,200})", _oatxt)
+    if meoa and "creature" in types:
+        body = meoa.group(1)
+        if "everything counter" in body:
+            _eoa = _everything_counter_effect()
+        else:
+            _e2, _s2, _c2 = _fragment_effect(body)
+            _eoa = (lambda g, c, p, _e=_e2: _e(g, c, [])) if _e2 else None
+        if _eoa is not None:
+            _prev_etb = card.on_etb
+            card.on_etb = (lambda g, c, p, _e=_eoa, _pv=_prev_etb:
+                           (_e(g, c, p), _pv(g, c, p) if _pv else None))
+            card.triggers = dict(card.triggers)
+            card.triggers.setdefault(
+                "attacks", lambda g, perm, _e=_eoa, **kw: _e(g, perm.controller, perm))
+
     # anthem estático genérico ("creatures you control get +X/+X" / "have <kw>"),
     # p. ej. importado de Scryfall. Se cablea antes de la capa por tags.
     if ({"creature", "artifact", "enchantment", "planeswalker", "land"} & types
@@ -3656,6 +3716,22 @@ def build_card_from_data(data: dict) -> Card:
                 else "any")
         card.spell_discount = (amt, filt)
 
+    # impuesto de coste ESTÁTICO (stax): "<tipo> spells (your opponents) cost {N} more"
+    # (Thalia, Vryn Wingmare, Sphere of Resistance, Grand Arbiter opp-tax, etc.).
+    mtax = re.search(r"(creature|artifact|noncreature|instant and sorcery|"
+                     r"instant or sorcery)?\s*spells?\s*(your opponents?(?: cast)?|"
+                     r"you cast|cast)?\s*cost \{(\d+)\} more", _lt)
+    if mtax:
+        amt = int(mtax.group(3))
+        w = (mtax.group(1) or "").strip()
+        filt = ("creature" if w == "creature"
+                else "artifact" if w == "artifact"
+                else "noncreature" if "noncreature" in w
+                else "instant_sorcery" if "instant" in w
+                else "any")
+        whose = "opponents" if "opponent" in (mtax.group(2) or "") else "all"
+        card.spell_tax = (amt, filt, whose)
+
     # Storm: al lanzarse, se copia por cada hechizo lanzado antes este turno (el
     # motor repite el efecto). Marcamos con un tag; sólo aplica a instant/sorcery.
     if re.search(r"\bstorm\b", _lt) and {"instant", "sorcery"} & types:
@@ -3767,6 +3843,41 @@ def build_card_from_data(data: dict) -> Card:
             card.gy_play = {"mode": "aftermath", "cost": parse_cost(
                 mana_cost_to_str(af.get("mana_cost", "") or "0")),
                 "effect": aff, "label": af.get("name", "Secuela")}
+
+    # Cartas de DOBLE CARA (transform / modal DFC): construye la cara trasera como
+    # Card aparte y guarda cómo se accede. Excluye adventure/aftermath/prepared/split
+    # (ya manejados) y las que no son de doble cara real.
+    if (len(_faces) == 2 and not getattr(card, "adventure", None)
+            and not getattr(card, "gy_play", None) and "prepared" not in _lt
+            and "adventure" not in (_faces[1].get("type_line", "") or "").lower()
+            and "aftermath" not in ((_faces[1].get("oracle_text", "") or "").lower())):
+        _back_raw = _faces[1]
+        _back_data = dict(data)
+        _back_data["card_faces"] = None
+        for _k in ("type_line", "mana_cost", "power", "toughness",
+                   "oracle_text", "loyalty", "name", "keywords"):
+            if _back_raw.get(_k) not in (None, "", []):
+                _back_data[_k] = _back_raw[_k]
+        _back_data["name"] = _back_raw.get("name") or (card.name + " (dorso)")
+        try:
+            _back = build_card_from_data(_back_data)
+        except Exception:
+            _back = None
+        if _back is not None:
+            card.back_face = _back
+            # modal DFC: la cara trasera tiene su propio coste -> jugable desde la mano.
+            # transform: sin coste propio -> se da vuelta en juego.
+            card.dfc = "modal" if (_back_raw.get("mana_cost") or "").strip() else "transform"
+            # habilidad manual "Transformar" si el texto la usa (aprox. de werewolves/
+            # DFC que se dan vuelta; sin modelar día/noche automático).
+            if card.dfc == "transform" and re.search(r"\btransform\b", _lt):
+                def _tf_eff(game, ctrl, perm, targets=None):
+                    game.transform(perm)
+                card.activated_abilities = tuple(card.activated_abilities or ()) + (
+                    {"cost": parse_cost("0"), "tap": False, "sacrifice_self": False,
+                     "sacrifice_other": None, "pay_life": 0, "discard": 0,
+                     "label": "Transformar", "effect": _tf_eff, "target_spec": None,
+                     "target_count": 1, "is_copy_ability": False, "sorcery_speed": True},)
 
     # Kicker {coste} / Multikicker: coste adicional opcional al lanzar; "if (this was)
     # kicked, <efecto>" resuelve el bono. Auto: se paga si el jugador puede.
