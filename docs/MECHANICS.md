@@ -127,7 +127,23 @@ aparecen como **opciones extra de casteo** en `/play`.
 `etb`, `death`, `cast` (tuyo, por tipo de hechizo: criatura/no-criatura/
 instant-sorcery/artefacto), **`opp_cast`** (cuando un rival lanza), **`gain_life`**
 (cuando ganás vida), `combat_damage_to_player`, `upkeep`, `end_step`, `draw_step`,
-`landfall`, `begin_combat`, `creature_enters`.
+`landfall`, `begin_combat`, `creature_enters`. Productores de disparo desde el
+campo para **landfall** ("cuando entra una tierra tuya"), **inicio de combate**
+("at the beginning of combat on your turn") y **robar** ("whenever you draw a
+card"). La muerte "a creature **you control** dies" filtra por controlador (no se
+dispara con muertes rivales).
+
+## Lords y equipos
+
+- **Lords por subtipo**: "Other Goblins/Elves… you control get +X/+X and have
+  <kw>" aplican el bonus (`static_mod`) y la keyword solo a criaturas de ese
+  subtipo (`anthem_subtype`), además del anthem genérico "creatures you control".
+- **Equipos** (Artifact — Equipment): habilidad **Equipar {N}** (activada, elegís
+  la criatura) que reusa `enchanting`; "equipped creature gets +X/+X / has <kw>"
+  aplica solo a la equipada; el equipo NO muere si la criatura se va (se
+  desanexa). *Living weapon* crea una ficha Germen 0/0 y se equipa.
+- **Fichas con X variable**: "create X … tokens, where X is the number of …" /
+  "for each …" escala la cantidad con el conteo (Krenko, etc.).
 
 ## Efectos de reemplazo
 

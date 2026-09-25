@@ -903,25 +903,60 @@ def _event_trigger_effect(oracle: str):
     sobre el texto del efecto (ficha, drenaje, robar, ganar vida, etc.)."""
     t = re.sub(r"\s+", " ", (oracle or "")).strip()
     out = {}
-    specs = [
-        (r"whenever (?:a|another) (?:nontoken )?creature (?:you control )?dies,?\s*"
-         r"(.{0,160})", "death"),
-        (r"whenever [\w' ,]{0,40}? deals combat damage to a player,?\s*(.{0,160})",
-         "combat_damage_to_player"),
-    ]
-    for pat, ev in specs:
-        if ev in out:
-            continue
-        m = re.search(pat, t, re.I)
-        if not m:
-            continue
-        eff = _generic_amount_effect(m.group(1))
-        if eff is None:
-            continue
+    # muerte de criatura: distingue "a creature" (cualquiera) de "a creature you
+    # control" (solo las tuyas) para no sobre-dispararse con muertes rivales.
+    md = re.search(r"whenever (?:a|another) (?:nontoken )?creature( you control)? "
+                   r"dies,?\s*(.{0,160})", t, re.I)
+    if md:
+        eff = _generic_amount_effect(md.group(2))
+        if eff is not None:
+            yours = bool(md.group(1))
 
-        def cb(game, perm, _e=eff, *_a, **_kw):
-            _e(game, perm.controller)
-        out[ev] = cb
+            def cb_death(game, perm, player=None, _e=eff, _y=yours, **_kw):
+                if _y and player is not None and player is not perm.controller:
+                    return                       # "you control": solo tus criaturas
+                _e(game, perm.controller)
+            out["death"] = cb_death
+    # daño de combate a un jugador
+    mcd = re.search(r"whenever [\w' ,]{0,40}? deals combat damage to a player,?\s*"
+                    r"(.{0,160})", t, re.I)
+    if mcd:
+        eff = _generic_amount_effect(mcd.group(1))
+        if eff is not None:
+            def cb_cd(game, perm, _e=eff, *_a, **_kw):
+                _e(game, perm.controller)
+            out["combat_damage_to_player"] = cb_cd
+
+    # landfall: "whenever a land enters (the battlefield) under your control, …" /
+    # "Landfall — …". El evento landfall es self-scoped (solo tus tierras).
+    ml = re.search(r"(?:landfall\s*[—–-]\s*|whenever a land (?:you control )?enters"
+                   r"(?: the battlefield)?(?: under your control)?,?\s*)(.{0,160})",
+                   t, re.I)
+    if ml:
+        eff = _generic_amount_effect(ml.group(1))
+        if eff is not None:
+            def cb_lf(game, perm, _e=eff, **_kw):
+                _e(game, perm.controller)
+            out["landfall"] = cb_lf
+
+    # inicio de combate: "at the beginning of combat on your turn, …"
+    mbc = re.search(r"at the beginning of combat on your turn,?\s*(.{0,160})", t, re.I)
+    if mbc:
+        eff = _generic_amount_effect(mbc.group(1))
+        if eff is not None:
+            def cb_bc(game, perm, _e=eff, **_kw):
+                _e(game, perm.controller)
+            out["begin_combat"] = cb_bc
+
+    # robo: "whenever you draw a/your first/second card, …" (self-scoped)
+    mdr = re.search(r"whenever you draw (?:a|your (?:first|second|third)) card,?\s*"
+                    r"(.{0,160})", t, re.I)
+    if mdr:
+        eff = _generic_amount_effect(mdr.group(1))
+        if eff is not None:
+            def cb_dr(game, perm, _e=eff, **_kw):
+                _e(game, perm.controller)
+            out["draw"] = cb_dr
 
     # "whenever an opponent casts a spell, <efecto>" (evento opp_cast sin scope; el
     # callback sólo actúa si el que lanzó es rival del permanente que observa).
@@ -1177,30 +1212,43 @@ def _persist_undying_ondeath(oracle: str):
 
 
 def _static_anthem(oracle: str):
-    """Anthem estático genérico de un permanente: 'creatures you control get +X/+X'
-    y 'creatures you control have <keyword>'. Devuelve (static_mod, keywords) o
-    (None, set())."""
+    """Anthem estático de un permanente. Cubre el genérico ('creatures you control
+    get +X/+X' / 'have <kw>') y los LORDS por subtipo ('other Goblins you control
+    get +1/+1'). Devuelve (static_mod, keywords, subtype) o (None, set(), None).
+    subtype != None => el buff/keyword solo aplica a criaturas de ese subtipo."""
     t = re.sub(r"\s+", " ", (oracle or "")).lower()
-    m = re.search(r"(?:other )?creatures you control get ([+-]\d+)/([+-]\d+)", t)
-    dp, dt = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    # el sustantivo puede ser "creatures" (genérico) o un subtipo ("goblins", "elves")
+    m = re.search(r"(?:other )?([a-z]+) you control get ([+-]\d+)/([+-]\d+)", t)
+    dp = dt = 0
+    subtype = None
+    if m:
+        noun = m.group(1)
+        dp, dt = int(m.group(2)), int(m.group(3))
+        if noun not in ("creatures", "creature"):
+            subtype = (noun[:-1] if noun.endswith("s") else noun).capitalize()
     kws = set()
-    mk = re.search(r"(?:other )?creatures you control have ([a-z ,and]+?)"
-                   r"(?:\.|$|until)", t)
+    mk = re.search(r"(?:other )?([a-z]+) you control (?:get [+-]\d+/[+-]\d+ and )?"
+                   r"have ([a-z ,and]+?)(?:\.|$|until)", t)
     if mk:
+        knoun = mk.group(1)
         for name, key in _KEYWORD_WORDS:
-            if re.search(r"\b" + name + r"\b", mk.group(1)):
+            if re.search(r"\b" + name + r"\b", mk.group(2)):
                 kws.add(key)
+        if kws and subtype is None and knoun not in ("creatures", "creature"):
+            subtype = (knoun[:-1] if knoun.endswith("s") else knoun).capitalize()
     if not (dp or dt or kws):
-        return None, set()
-    others = "other creatures" in t
+        return None, set(), None
+    others = "other " in t
 
-    def sm(source, target, _dp=dp, _dt=dt, _o=others):
+    def sm(source, target, _dp=dp, _dt=dt, _o=others, _sub=subtype):
         if not target.is_creature() or target.controller is not source.controller:
             return (0, 0)
         if _o and target is source:
             return (0, 0)
+        if _sub and _sub.lower() not in {s.lower() for s in target.card.subtypes}:
+            return (0, 0)
         return (_dp, _dt)
-    return sm, kws
+    return sm, kws, subtype
 
 
 def _cmc(perm):
@@ -1309,6 +1357,68 @@ def _wire_aura(card, oracle):
 
     card.on_etb = _attach
     card.tags = card.tags | {"aura"}
+
+
+def _wire_equipment(card, oracle):
+    """Equipo (Artifact — Equipment): habilidad 'Equip {N}' que lo anexa a una
+    criatura tuya (reusa `enchanting`), y buff 'equipped creature gets +X/+X /
+    has <kw>' que aplica solo a la criatura equipada. No muere si la criatura se
+    va (se desanexa; ver SBA). Living weapon: crea una ficha Germen 0/0 y se equipa."""
+    if "equipment" not in {s.lower() for s in card.subtypes}:
+        return
+    t = re.sub(r"\s+", " ", (oracle or "")).lower()
+    m = re.search(r"equipped creature gets ([+-]\d+)/([+-]\d+)", t)
+    dp, dt = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    kws = set()
+    for name, key in _KEYWORD_WORDS:
+        if "equipped creature" in t and re.search(r"\b" + re.escape(name) + r"\b", t):
+            kws.add(key)
+    if dp or dt:
+        card.static_mod = (lambda src, target, _d=(dp, dt):
+                           _d if target is getattr(src, "enchanting", None) else (0, 0))
+    if kws:
+        card.aura_keywords = set(kws)
+
+    # coste de equipar: "Equip {N}" / "Equip—{N}" / "Equip {W}"
+    meq = re.search(r"equip[ —–-]*((?:\{[^}]+\})+)", t)
+    if meq:
+        eq_cost = parse_cost(re.sub(r"[{}]", "", meq.group(1)))
+    else:
+        meq2 = re.search(r"equip[ —–-]+(\d+)", t)
+        eq_cost = parse_cost(meq2.group(1)) if meq2 else parse_cost("2")
+
+    def _equip_eff(game, ctrl, perm, targets=None):
+        pool = [pm for pm in ctrl.battlefield if pm.is_creature()]
+        if not pool:
+            return
+        pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+
+        def _do(tgt):
+            if tgt in ctrl.battlefield:
+                perm.enchanting = tgt
+                game.log(f"{ctrl.name}: {perm.name} se equipa a {tgt.name}")
+                game.sba()
+        cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm) for pm in pool]
+        _human_target_choice(game, ctrl, "etb_target",
+                             f"Equipar {perm.name} a una criatura", cands, _do)
+
+    equip_ab = {"cost": eq_cost, "tap": False, "sacrifice_self": False,
+                "sacrifice_other": None, "pay_life": 0, "discard": 0,
+                "label": "Equipar", "effect": _equip_eff, "target_spec": None,
+                "target_count": 1, "is_copy_ability": False, "sorcery_speed": True}
+    card.activated_abilities = tuple(card.activated_abilities or ()) + (equip_ab,)
+
+    # Living weapon: al entrar, crea una ficha Germen 0/0 negra y se equipa a ella.
+    if "living weapon" in t:
+        def _living(game, ctrl, perm):
+            germ = cards.make_token(game, ctrl, "Germ", 0, 0, subtypes=("Germ",))
+            if germ is not None:
+                perm.enchanting = germ
+                game.sba()
+        _prev = card.on_etb
+        card.on_etb = (lambda g, c, p, _l=_living, _p=_prev:
+                       (_l(g, c, p), _p(g, c, p) if _p else None))
+    card.tags = card.tags | {"equipment"}
 
 
 def _parse_etb_counters(oracle: str):
@@ -2289,9 +2399,17 @@ def _generic_amount_effect(oracle: str):
         mc = re.search(r"with (\w+) \+1/\+1 counters?", t)
         cn = _count_word(mc.group(1)) if mc else 0
         kw = ("trample",) if re.search(r"\bwith trample\b|has trample", t) else ()
+        # cantidad VARIABLE: "X ... where X is the number of …" / "for each …"
+        cnt_fn = None
+        mvar = re.search(r"(?:for each|equal to the number of|where x is the number of) "
+                         r"([\w' ]+)", t)
+        if mvar and (m.group(1).lower() == "x" or "for each" in t):
+            cnt_fn = _count_fn("number of " + mvar.group(1)) or _count_fn(mvar.group(1))
 
-        def eff(game, ctrl, *_a, _n=min(n, 8), _p=pw, _t=tf, _s=sub, _c=cn or 0, _kw=kw):
-            for _ in range(_n):
+        def eff(game, ctrl, *_a, _n=min(n, 8), _p=pw, _t=tf, _s=sub, _c=cn or 0,
+                _kw=kw, _cf=cnt_fn):
+            reps = min(_cf(game, ctrl), 40) if _cf else _n
+            for _ in range(max(0, reps)):
                 cards.make_token(game, ctrl, _s, _p, _t, kw=_kw,
                                  subtypes=(_s,), counters=_c)
         return eff
@@ -3012,6 +3130,7 @@ def build_card_from_data(data: dict) -> Card:
         card.keywords = set(card.keywords) | {"ward"}
     # auras: anexar a un huésped y bufearlo (antes de la capa ETB genérica)
     _wire_aura(card, data.get("oracle_text", ""))
+    _wire_equipment(card, data.get("oracle_text", ""))
 
     # jugar/lanzar desde el CEMENTERIO (flashback / escape / unearth / embalm /
     # disturb / recursión). Descriptor en card.gy_play; interactive lo ofrece.
@@ -3330,14 +3449,16 @@ def build_card_from_data(data: dict) -> Card:
     # p. ej. importado de Scryfall. Se cablea antes de la capa por tags.
     if ({"creature", "artifact", "enchantment", "planeswalker", "land"} & types
             and card.static_mod is None):
-        sm, akw = _static_anthem(data.get("oracle_text", ""))
+        sm, akw, asub = _static_anthem(data.get("oracle_text", ""))
         if sm is not None:
             card.static_mod = sm
             card.tags = card.tags | {"anthem"}
         if akw:
             card.anthem_keywords = set(akw)
-            card.anthem_others = "other creatures" in (
+            card.anthem_others = "other " in (
                 data.get("oracle_text", "") or "").lower()
+            if asub:
+                card.anthem_subtype = asub
 
     # "play an additional land / X additional lands on each of your turns"
     # (Exploration, Azusa, Dryad…): sube el límite de tierras del controlador.

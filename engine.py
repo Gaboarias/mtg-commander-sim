@@ -717,6 +717,9 @@ class Game:
         for src in self.all_permanents():
             ak = getattr(src.card, "anthem_keywords", None)
             if ak and kw in ak and src.controller is ctrl:
+                asub = getattr(src.card, "anthem_subtype", None)
+                if asub and asub.lower() not in {s.lower() for s in perm.card.subtypes}:
+                    continue                    # lord por subtipo: solo ese tipo
                 if not (getattr(src.card, "anthem_others", False) and src is perm):
                     return True
         for card in ctrl.graveyard:
@@ -1214,12 +1217,17 @@ class Game:
             # aura sin huésped válido -> al cementerio
             for p in self.players:
                 for perm in list(p.battlefield):
-                    if "aura" not in {s.lower() for s in perm.card.subtypes}:
-                        continue
+                    subs = {s.lower() for s in perm.card.subtypes}
                     host = perm.enchanting
-                    if host is None or host not in host.controller.battlefield:
-                        self.to_graveyard(perm, "aura sin objetivo")
-                        changed = True
+                    if "aura" in subs:
+                        if host is None or host not in host.controller.battlefield:
+                            self.to_graveyard(perm, "aura sin objetivo")
+                            changed = True
+                    elif "equipment" in subs and host is not None:
+                        # el equipo NO muere: si su criatura se fue, se desanexa
+                        if host not in host.controller.battlefield:
+                            perm.enchanting = None
+                            changed = True
             # regla de legendarios: el controlador elige cuál conserva. El humano
             # decide (pending_choice); los bots conservan la "mejor" copia.
             human = getattr(self, "interactive_human", None)

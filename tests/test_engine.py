@@ -5304,6 +5304,91 @@ def test_planeswalker_loyalty_target_prompts_human():
     assert b not in op.battlefield and a in op.battlefield
 
 
+def _mkcard(name, tl, p, t, txt):
+    from cardsdb import build_card_from_data
+    return build_card_from_data({
+        "name": name, "mana_cost": "{1}{G}", "cmc": 2, "type_line": tl,
+        "power": str(p), "toughness": str(t), "oracle_text": txt, "keywords": []})
+
+
+def test_landfall_begin_combat_draw_triggers():
+    import cards
+    g, me, op = _duel()
+    lf = g.move_to_battlefield(_mkcard("Cobra", "Creature — Snake", 2, 1,
+        "Whenever a land enters the battlefield under your control, you gain 2 life."), me)
+    assert "landfall" in lf.card.triggers
+    l0 = me.life
+    g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me); g.resolve_stack()
+    assert me.life == l0 + 2
+    bc = g.move_to_battlefield(_mkcard("Rabble", "Creature — Goblin", 1, 1,
+        "At the beginning of combat on your turn, create a 1/1 red Goblin creature token."), me)
+    n0 = len([p for p in me.battlefield if p.is_token])
+    g.emit("begin_combat", player=me); g.resolve_stack()
+    assert len([p for p in me.battlefield if p.is_token]) == n0 + 1
+    dr = g.move_to_battlefield(_mkcard("Drawer", "Creature — Bird", 1, 1,
+        "Whenever you draw a card, you gain 1 life."), me)
+    me.library.append(cards.creature("z", "1G", 1, 1)); l1 = me.life
+    me.draw(1, g); g.resolve_stack()
+    assert me.life == l1 + 1
+
+
+def test_death_trigger_you_control_not_opponents():
+    import cards
+    g, me, op = _duel()
+    r = g.move_to_battlefield(_mkcard("Reaper", "Creature — Zombie", 2, 2,
+        "Whenever a creature you control dies, each opponent loses 1 life."), me)
+    ol = op.life
+    oc = g.move_to_battlefield(cards.creature("EnemyCrit", "1G", 1, 1), op)
+    g.to_graveyard(oc, "muere"); g.resolve_stack()
+    assert op.life == ol                               # muerte RIVAL: no dispara
+    myc = g.move_to_battlefield(cards.creature("MyCrit", "1G", 1, 1), me)
+    g.to_graveyard(myc, "muere"); g.resolve_stack()
+    assert op.life == ol - 1                           # muerte MÍA: sí dispara
+
+
+def test_tribal_lord_by_subtype():
+    g, me, op = _duel()
+    g.move_to_battlefield(_mkcard("Goblin King", "Creature — Goblin", 2, 2,
+        "Other Goblins you control get +1/+1 and have haste."), me)
+    gob = g.move_to_battlefield(_mkcard("Gob", "Creature — Goblin", 1, 1, ""), me)
+    elf = g.move_to_battlefield(_mkcard("Elf", "Creature — Elf", 1, 1, ""), me)
+    assert gob.power == 2 and gob.toughness == 2 and gob.has("haste")
+    assert elf.power == 1 and not elf.has("haste")     # otro subtipo: sin buff
+
+
+def test_equipment_attach_buff_and_survive_creature_death():
+    import cards
+    from cardsdb import build_card_from_data
+    g, me, op = _duel(); g.interactive_human = me; g.active_index = 0
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me)
+    eq = g.move_to_battlefield(build_card_from_data({
+        "name": "Sword", "mana_cost": "{2}", "cmc": 2, "type_line": "Artifact — Equipment",
+        "oracle_text": "Equipped creature gets +2/+2 and has trample.\nEquip {2}",
+        "keywords": []}), me)
+    cr = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    assert g.activate_ability(eq, 0); g.resolve_stack()
+    g.pending_choice["_apply"](0)                      # equipar al Bear
+    assert cr.power == 4 and cr.toughness == 4 and cr.has("trample")
+    g.to_graveyard(cr, "muere"); g.sba()
+    assert eq in me.battlefield and eq.enchanting is None   # sobrevive y se desanexa
+
+
+def test_x_token_scales_with_count():
+    from cardsdb import build_card_from_data
+    g, me, op = _duel()
+    for i in range(3):
+        g.move_to_battlefield(build_card_from_data({
+            "name": f"G{i}", "mana_cost": "{R}", "cmc": 1, "type_line": "Creature — Goblin",
+            "power": "1", "toughness": "1", "oracle_text": "", "keywords": []}), me)
+    sp = build_card_from_data({
+        "name": "Krenko", "mana_cost": "{2}{R}", "cmc": 3, "type_line": "Sorcery",
+        "oracle_text": "Create X 1/1 red Goblin creature tokens, where X is the "
+                       "number of Goblins you control.", "keywords": []})
+    sp.on_cast_resolve(g, me, sp)
+    assert len([p for p in me.battlefield if p.is_token]) == 3
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
