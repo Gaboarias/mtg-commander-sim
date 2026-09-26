@@ -114,7 +114,7 @@ export default function Play() {
   const [zoneView, setZoneView] = useState<{ title: string; names: string[] } | null>(null);
   const infoReq = useRef<Set<string>>(new Set());  // nombres ya pedidos
   const [assign, setAssign] = useState<Record<number, number>>({});  // bloqueador -> atacante
-  const [targeting, setTargeting] = useState<{ kind: "cast" | "respond" | "ability"; i?: number; zone?: string; name: string; targets: TargetOpt[]; count: number; mode?: number; uid?: number; index?: number } | null>(null);
+  const [targeting, setTargeting] = useState<{ kind: "cast" | "respond" | "ability" | "combat_ability"; i?: number; zone?: string; name: string; targets: TargetOpt[]; count: number; mode?: number; uid?: number; index?: number } | null>(null);
   const [modePick, setModePick] = useState<{ kind: "cast" | "respond"; i?: number; zone?: string; name: string; modes: ModeOpt[]; pick?: number } | null>(null);
   const [modeSel, setModeSel] = useState<number[]>([]);  // modos elegidos (choose two)
   const [tsel, setTsel] = useState<number[]>([]);  // objetivos elegidos (multi)
@@ -403,10 +403,21 @@ export default function Play() {
       doAct("ability", { uid, index: ab.i });
     }
   }
+  // habilidad activada durante defensa/daño: con objetivo abre el selector manual
+  function useCombatAbility(ab: { uid: number; index: number; label: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[] }) {
+    if (ab.target_spec && ab.targets && ab.targets.length > 0) {
+      setTsel([]);
+      setTargeting({ kind: "combat_ability", uid: ab.uid, index: ab.index, name: ab.label, targets: ab.targets, count: ab.target_count || 1 });
+    } else {
+      doAct("combat_ability", { uid: ab.uid, index: ab.index });
+    }
+  }
   function dispatchTargets(uids: number[]) {
     if (!targeting) return;
     if (targeting.kind === "ability") {
       doAct("ability", { uid: targeting.uid, index: targeting.index, target_uids: uids });
+    } else if (targeting.kind === "combat_ability") {
+      doAct("combat_ability", { uid: targeting.uid, index: targeting.index, target_uids: uids });
     } else {
       doAct(targeting.kind, { i: targeting.i, zone: targeting.zone, target_uids: uids, mode: targeting.mode });
     }
@@ -617,7 +628,7 @@ export default function Play() {
                 <div className="act-block">
                   <span className="act-label">Activar habilidad:</span>
                   {(state.combat.abilities ?? []).map((ab) => (
-                    <button key={ab.uid + "-" + ab.index} className="ghost" onClick={() => doAct("combat_ability", { uid: ab.uid, index: ab.index })} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <button key={ab.uid + "-" + ab.index} className="ghost" onClick={() => useCombatAbility(ab)} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                       <Icon name="sparkles" size={13} /> {ab.name}: {ab.label}{ab.target_spec ? <Icon name="target" size={12} /> : null} <span className="muted">{ab.cost}</span>
                     </button>
                   ))}
@@ -712,7 +723,7 @@ export default function Play() {
                 <div className="act-block">
                   <span className="act-label">Activar habilidad:</span>
                   {(state.combat.abilities ?? []).map((ab) => (
-                    <button key={ab.uid + "-" + ab.index} className="ghost" onClick={() => doAct("combat_ability", { uid: ab.uid, index: ab.index })} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <button key={ab.uid + "-" + ab.index} className="ghost" onClick={() => useCombatAbility(ab)} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                       <Icon name="sparkles" size={13} /> {ab.name}: {ab.label}{ab.target_spec ? <Icon name="target" size={12} /> : null} <span className="muted">{ab.cost}</span>
                     </button>
                   ))}

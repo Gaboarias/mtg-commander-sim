@@ -167,6 +167,36 @@ def test_activate_ability_during_defense():
     assert ig.mode == "defense"       # sigue en la ventana para poder bloquear
 
 
+def test_combat_ability_manual_target():
+    # Una habilidad de combate CON objetivo respeta el objetivo elegido a mano.
+    import interactive, cards, decks
+    from engine import parse_cost
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human(); op = ig.g.opponents(hu)[0]
+
+    def pump(g, ctrl, perm, targets=None):
+        for t in (targets or []):
+            g.add_counters(t, "+1/+1", 2)
+    src = cards.creature("Buffer", "1G", 1, 1)
+    src.activated_abilities = ({"cost": parse_cost("0"), "tap": False,
+        "sacrifice_self": False, "sacrifice_other": None, "pay_life": 0, "discard": 0,
+        "label": "Da +2/+2", "effect": pump, "target_spec": "own_creature",
+        "target_count": 1, "is_copy_ability": False, "sorcery_speed": False},)
+    pm = ig.g.move_to_battlefield(src, hu); pm.summoning_sick = False
+    t1 = cards.make_token(ig.g, hu, "A", 1, 1)
+    t2 = cards.make_token(ig.g, hu, "B", 1, 1)
+    atk = ig.g.move_to_battlefield(cards.creature("Ogro", "2R", 3, 3), op)
+    atk.summoning_sick = False
+    ig.g._begin_combat(op)
+    ig._attacker = op; ig._declared = ig.g._declare_attackers(op, [(atk, hu)])
+    ig.mode = "defense"; ig.phase = "defense"
+    ig.activate_in_combat(pm.uid, 0, target_uids=[t2.uid])   # apuntar a t2 a mano
+    assert (t2.power, t2.toughness) == (3, 3)
+    assert (t1.power, t1.toughness) == (1, 1)                # t1 intacto
+
+
 def test_menace_needs_two_blockers():
     a = _mk_player("a")
     b = _mk_player("b")
