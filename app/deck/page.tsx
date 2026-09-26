@@ -11,7 +11,9 @@ import {
   storageAvailable,
   listBinder,
   addToBinder,
+  addManyToBinder,
   removeFromBinder,
+  removeManyFromBinder,
   getSyncCode,
   mergeDecks,
   setBinder as saveBinder,
@@ -307,6 +309,11 @@ export default function DeckPage() {
   const [opponents, setOpponents] = useState<{ key: string; label: string }[]>([]);
   const [copied, setCopied] = useState(false);
   const [binder, setBinder] = useState<BinderCard[]>([]);
+  const [binderText, setBinderText] = useState("");        // pegar set/lista completa
+  const [binderRows, setBinderRows] = useState<Record<string, Row>>({});  // detalles por carta
+  const [binderSel, setBinderSel] = useState<Set<string>>(new Set());     // selección múltiple
+  const [binderBusy, setBinderBusy] = useState(false);
+  const [binderMsg, setBinderMsg] = useState<string | null>(null);
   const [syncCode, setSyncCode] = useState("");
   const [otherCode, setOtherCode] = useState("");
   const [cloudMsg, setCloudMsg] = useState<string | null>(null);
@@ -505,10 +512,93 @@ export default function DeckPage() {
   }
 
   // binder
-  function binderAdd(name: string) { setBinder(addToBinder(name)); }
+  function binderAdd(name: string) {
+    setBinder(addToBinder(name));
+    reviewBinder([name]);            // trae identidad/coste/estado de la nueva
+  }
   function binderRemove(name: string) {
     setBinder(removeFromBinder(name));
+    setBinderSel((s) => { const n = new Set(s); n.delete(name.toLowerCase()); return n; });
     if (suggest?.card.toLowerCase() === name.toLowerCase()) setSuggest(null);
+  }
+
+  // alta masiva: pegar un set / lista entera y agregar todo de una (como el deck)
+  async function binderBulkAdd() {
+    const list = binderText.trim();
+    if (!list) return;
+    setBinderBusy(true); setBinderMsg(null);
+    try {
+      const r = await fetch("/api/deck", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "resolve", list }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+      const rows: Row[] = (d.cards || []).filter((c: Row) => c.qty > 0);
+      const entries = rows.map((c) => ({ name: c.name, qty: c.qty }));
+      if (d.commander_name) entries.push({ name: d.commander_name, qty: 1 });
+      setBinder(addManyToBinder(entries));
+      // guardo los detalles (identidad/coste/estado) que ya vinieron resueltos
+      setBinderRows((m) => {
+        const n = { ...m };
+        for (const c of rows) n[c.name.toLowerCase()] = c;
+        if (d.commander) n[(d.commander_name || d.commander.name).toLowerCase()] = d.commander;
+        return n;
+      });
+      const impl = rows.filter((c) => c.implemented).length;
+      setBinderMsg(`Agregadas ${entries.length} cartas · ${impl} con habilidad cargada · ${(d.missing || []).length} sin encontrar.`);
+      setBinderText("");
+    } catch (e) {
+      setBinderMsg(e instanceof Error ? e.message : String(e));
+    } finally { setBinderBusy(false); }
+  }
+
+  // revisar si las cartas "funcionan": resuelve las cartas dadas (o el binder entero)
+  // y guarda coste, identidad y estado (con habilidad / carta real / sin encontrar).
+  async function reviewBinder(names?: string[]) {
+    const target = (names && names.length ? names : binder.map((c) => c.name));
+    if (target.length === 0) return;
+    setBinderBusy(true); setBinderMsg(null);
+    try {
+      const list = target.map((n) => `1 ${n}`).join("\n");
+      const r = await fetch("/api/deck", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "resolve", list }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+      const rows: Row[] = d.cards || [];
+      setBinderRows((m) => {
+        const n = { ...m };
+        for (const c of rows) n[c.name.toLowerCase()] = c;
+        return n;
+      });
+      if (names && names.length > 1) {
+        const impl = rows.filter((c) => c.implemented).length;
+        setBinderMsg(`Revisadas ${rows.length}: ${impl} con habilidad cargada, ${rows.length - impl} juegan con stats.`);
+      }
+    } catch (e) {
+      setBinderMsg(e instanceof Error ? e.message : String(e));
+    } finally { setBinderBusy(false); }
+  }
+
+  function toggleBinderSel(name: string) {
+    setBinderSel((s) => {
+      const n = new Set(s); const k = name.toLowerCase();
+      if (n.has(k)) n.delete(k); else n.add(k);
+      return n;
+    });
+  }
+  function binderSelectAll() { setBinderSel(new Set(binder.map((c) => c.name.toLowerCase()))); }
+  function binderClearSel() { setBinderSel(new Set()); }
+  function binderRemoveSelected() {
+    const names = binder.filter((c) => binderSel.has(c.name.toLowerCase())).map((c) => c.name);
+    setBinder(removeManyFromBinder(names));
+    setBinderSel(new Set());
+  }
+  function reviewSelected() {
+    const names = binder.filter((c) => binderSel.has(c.name.toLowerCase())).map((c) => c.name);
+    reviewBinder(names.length ? names : undefined);
   }
   async function whereDoesItHelp(card: string) {
     const decks = listDecks();
@@ -1502,29 +1592,93 @@ export default function DeckPage() {
         <div className="card">
           <h2><Icon name="archive" size={19} /> Mi binder</h2>
           <p className="muted" style={{ fontSize: ".82rem" }}>
-            Tu colección de cartas (guardada en este navegador). Agregá cartas y fijate
-            en cuáles de tus decks guardados te sirve cada una.
+            Tu colección de cartas (guardada en este navegador). Pegá un set o lista
+            entera para cargarlo de una, y revisá cuáles ya tienen su habilidad cargada.
           </p>
-          <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-            <span className="muted">Agregar al binder:</span>
+
+          {/* alta masiva: pegar un set / lista completa (como al importar un deck) */}
+          <textarea
+            value={binderText}
+            onChange={(e) => setBinderText(e.target.value)}
+            spellCheck={false}
+            placeholder={"Pegá un set o lista entera, ej.:\n1 Sol Ring\n1 Cyclonic Rift\n1 Rhystic Study"}
+            style={{
+              width: "100%", minHeight: 96, background: "#0a0c10", color: "#c8cdd8",
+              border: "1px solid var(--border)", borderRadius: 10, padding: 10,
+              fontFamily: "ui-monospace, monospace", fontSize: ".82rem",
+            }}
+          />
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8, marginBottom: 10 }}>
+            <button className="go" onClick={binderBulkAdd} disabled={binderBusy || !binderText.trim()}>
+              {binderBusy ? "Cargando…" : "Agregar todo al binder"}
+            </button>
+            <span className="muted">o de a una:</span>
             <CardAdder onAdd={binderAdd} placeholder="nombre de la carta…" />
           </div>
+          {binderMsg && <p className="muted" style={{ fontSize: ".82rem" }}>{binderMsg}</p>}
+
           {binder.length === 0 ? (
             <p className="muted">Tu binder está vacío.</p>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {binder.map((c) => (
-                <div key={c.name} className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                  <span style={{ minWidth: 180 }}>{c.qty > 1 ? `${c.qty}× ` : ""}{c.name}</span>
-                  {resolved && <button className="ghost" style={{ padding: "3px 8px", display: "inline-flex", alignItems: "center", gap: 4 }} onClick={() => addCardToDeck(c.name)}><Icon name="plus" size={12} /> al deck</button>}
-                  <button className="ghost" style={{ padding: "3px 8px" }} disabled={suggesting === c.name}
-                    onClick={() => whereDoesItHelp(c.name)}>
-                    {suggesting === c.name ? "Buscando…" : "¿Dónde me sirve?"}
-                  </button>
-                  <button className="ghost" style={{ padding: "3px 8px" }} aria-label={`Quitar ${c.name} del binder`} title="Quitar" onClick={() => binderRemove(c.name)}><Icon name="x" size={13} /></button>
-                </div>
-              ))}
-            </div>
+            <>
+              {/* barra de selección múltiple + revisar / quitar */}
+              <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+                <span className="muted">{binder.length} cartas · {binderSel.size} seleccionadas</span>
+                <button className="ghost" style={{ padding: "4px 10px" }} onClick={binderSelectAll}>Seleccionar todas</button>
+                <button className="ghost" style={{ padding: "4px 10px" }} onClick={binderClearSel} disabled={binderSel.size === 0}>Limpiar</button>
+                <button className="ghost" style={{ padding: "4px 10px" }} onClick={reviewSelected} disabled={binderBusy}>
+                  {binderBusy ? "Revisando…" : binderSel.size > 0 ? "Revisar seleccionadas" : "Revisar todas"}
+                </button>
+                <button className="ghost" style={{ padding: "4px 10px", color: "#d98" }} onClick={binderRemoveSelected} disabled={binderSel.size === 0}>
+                  <Icon name="x" size={12} /> Quitar seleccionadas
+                </button>
+              </div>
+
+              <table>
+                <thead>
+                  <tr>
+                    <th></th><th>Cant.</th><th>Carta</th><th>Identidad</th>
+                    <th>Coste</th><th>Tipo</th><th>Estado</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {binder.map((c) => {
+                    const info = binderRows[c.name.toLowerCase()];
+                    const sel = binderSel.has(c.name.toLowerCase());
+                    return (
+                      <tr key={c.name} style={{ background: sel ? "rgba(90,120,180,.12)" : undefined }}>
+                        <td>
+                          <input type="checkbox" checked={sel} onChange={() => toggleBinderSel(c.name)}
+                            aria-label={`Seleccionar ${c.name}`} />
+                        </td>
+                        <td>{c.qty}</td>
+                        <td>
+                          {c.name}
+                          {info?.legal === false && <span title="No legal en Commander" style={{ marginLeft: 4 }}><Icon name="ban" size={12} /></span>}
+                        </td>
+                        <td>{info ? <ColorPips colors={info.colors || []} /> : <span className="muted">—</span>}</td>
+                        <td>{info?.cost || <span className="muted">—</span>}</td>
+                        <td className="muted">{info?.type || "—"}</td>
+                        <td>
+                          {info ? <Tag r={info} /> : <span className="muted" style={{ fontSize: ".72rem" }}>sin revisar</span>}
+                          {info?.generic && (
+                            <span style={{ background: "#5a4a2a", padding: "2px 6px", borderRadius: 6, fontSize: ".68rem", marginLeft: 4 }}>aprox</span>
+                          )}
+                        </td>
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          {resolved && <button className="ghost" style={{ padding: "3px 7px", display: "inline-flex", alignItems: "center", gap: 3 }} title="Agregar al deck abierto" onClick={() => addCardToDeck(c.name)}><Icon name="plus" size={12} /></button>}
+                          <button className="ghost" style={{ padding: "3px 7px" }} disabled={suggesting === c.name}
+                            title="¿En qué deck me sirve?" onClick={() => whereDoesItHelp(c.name)}>
+                            {suggesting === c.name ? "…" : "¿dónde?"}
+                          </button>
+                          <button className="ghost" style={{ padding: "3px 7px" }} aria-label={`Quitar ${c.name} del binder`} title="Quitar" onClick={() => binderRemove(c.name)}><Icon name="x" size={13} /></button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </>
           )}
           {suggest && (
             <div style={{ marginTop: 12 }}>

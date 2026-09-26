@@ -91,6 +91,27 @@ export function removeFromBinder(name: string): BinderCard[] {
   return listBinder();
 }
 
+// alta masiva: agrega/mezcla varias cartas de una (pegar un set o lista entera)
+export function addManyToBinder(entries: { name: string; qty?: number }[]): BinderCard[] {
+  const b = listBinder();
+  for (const e of entries || []) {
+    const name = (e.name || "").trim();
+    if (!name) continue;
+    const i = b.findIndex((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (i >= 0) b[i] = { ...b[i], qty: b[i].qty + (e.qty || 1) };
+    else b.push({ name, qty: e.qty || 1 });
+  }
+  write(BINDER_KEY, b);
+  return listBinder();
+}
+
+// quita varias cartas del binder de una (por nombre)
+export function removeManyFromBinder(names: string[]): BinderCard[] {
+  const kill = new Set((names || []).map((n) => n.toLowerCase()));
+  write(BINDER_KEY, listBinder().filter((c) => !kill.has(c.name.toLowerCase())));
+  return listBinder();
+}
+
 // ---- Sync anónimo (código en el navegador) ------------------------------- //
 export function getSyncCode(): string {
   let code = read<string>(SYNC_KEY, "");
