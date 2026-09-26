@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   getProfile,
@@ -314,6 +314,8 @@ export default function DeckPage() {
   const [binderSel, setBinderSel] = useState<Set<string>>(new Set());     // selección múltiple
   const [binderBusy, setBinderBusy] = useState(false);
   const [binderMsg, setBinderMsg] = useState<string | null>(null);
+  const [autoSave, setAutoSave] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [syncCode, setSyncCode] = useState("");
   const [otherCode, setOtherCode] = useState("");
   const [cloudMsg, setCloudMsg] = useState<string | null>(null);
@@ -514,10 +516,12 @@ export default function DeckPage() {
   // binder
   function binderAdd(name: string) {
     setBinder(addToBinder(name));
+    scheduleAutosave();
     reviewBinder([name]);            // trae identidad/coste/estado de la nueva
   }
   function binderRemove(name: string) {
     setBinder(removeFromBinder(name));
+    scheduleAutosave();
     setBinderSel((s) => { const n = new Set(s); n.delete(name.toLowerCase()); return n; });
     if (suggest?.card.toLowerCase() === name.toLowerCase()) setSuggest(null);
   }
@@ -538,6 +542,7 @@ export default function DeckPage() {
       const entries = rows.map((c) => ({ name: c.name, qty: c.qty }));
       if (d.commander_name) entries.push({ name: d.commander_name, qty: 1 });
       setBinder(addManyToBinder(entries));
+      scheduleAutosave();
       // guardo los detalles (identidad/coste/estado) que ya vinieron resueltos
       setBinderRows((m) => {
         const n = { ...m };
@@ -597,6 +602,7 @@ export default function DeckPage() {
     if (typeof window !== "undefined" &&
         !window.confirm(`¿Quitar ${names.length} carta(s) del binder? Esto no se puede deshacer.`)) return;
     setBinder(removeManyFromBinder(names));
+    scheduleAutosave();
     setBinderSel(new Set());
   }
   function reviewSelected() {
@@ -627,6 +633,31 @@ export default function DeckPage() {
     } catch (e) {
       setBinderMsg("No se pudo analizar: " + (e instanceof Error ? e.message : String(e)));
     } finally { setSuggesting(null); }
+  }
+
+  // programa un autosave a la nube tras un cambio real del binder (debounce 1.2s).
+  // El guardado LOCAL ya ocurrió al mutar (localDecks escribe en el acto).
+  function scheduleAutosave() {
+    setAutoSave("saving");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => { autosaveCloud(); }, 1200);
+  }
+
+  // autosave silencioso del binder (+ decks) a la nube/cuenta, con debounce.
+  async function autosaveCloud() {
+    setAutoSave("saving");
+    try {
+      const r = await fetch("/api/cloud", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "push", code: effectiveCode(), token: getToken(),
+                               decks: listDecks(), binder: listBinder() }),
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      setAutoSave("saved");
+    } catch {
+      setAutoSave("error");   // queda guardado local igual; reintenta al próximo cambio
+    }
   }
 
   // nube: subir / bajar por código
@@ -1601,10 +1632,19 @@ export default function DeckPage() {
 
       {!noStorage && (
         <div className="card">
-          <h2><Icon name="archive" size={19} /> Mi binder</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <h2 style={{ margin: 0 }}><Icon name="archive" size={19} /> Mi binder</h2>
+            <span className="muted" style={{ fontSize: ".78rem", display: "inline-flex", alignItems: "center", gap: 4 }}>
+              {autoSave === "saving" ? <><Icon name="refresh" size={12} /> guardando…</>
+                : autoSave === "saved" ? <><Icon name="check" size={12} /> guardado</>
+                : autoSave === "error" ? <span style={{ color: "#e88" }}>guardado local (sin nube)</span>
+                : <>autosave activo</>}
+            </span>
+          </div>
           <p className="muted" style={{ fontSize: ".82rem" }}>
-            Tu colección de cartas (guardada en este navegador). Pegá un set o lista
-            entera para cargarlo de una, y revisá cuáles ya tienen su habilidad cargada.
+            Tu colección de cartas se guarda sola (en este navegador y, si hay conexión,
+            en tu cuenta/código). Pegá un set o lista entera para cargarlo de una, y revisá
+            cuáles ya tienen su habilidad cargada.
           </p>
 
           {/* alta masiva: pegar un set / lista completa (como al importar un deck) */}
