@@ -60,6 +60,22 @@ type Resolved = {
 type SimResult = { n: number; opponent: string; results: { deck: string; wins: number; pct: number }[] };
 type Suggestion = { name: string; in_color: boolean; fills: string[]; verdict: string; score: number; impact?: number; adds?: boolean; reasons?: string[] };
 type SuggestResp = { card: string; roles: string[]; colors: string[]; themes?: string[]; resolved?: boolean; decks: Suggestion[] };
+type CmdCand = { name: string; identity: string[]; coverage: number };
+type BuildReport = {
+  counts: Record<string, number>; roles: Record<string, number>;
+  avg_cmc: number; themes: { key: string; label: string; count: number }[];
+  strengths: string[]; weaknesses: string[];
+  recommendations: { text: string; cards: string[] }[];
+  consistency: { land_prob: number; score: number };
+};
+type BuildResult = {
+  ok: boolean; reason?: string;
+  commander?: CmdCand; alternates?: CmdCand[];
+  pool_total?: number; usable?: number; off_color?: string[];
+  deck_size?: number; to_99?: number; report?: BuildReport;
+  bracket?: { estimate: number; label: string; game_changers: string[];
+              next?: { to_bracket: number; need: number } | null; suggestions: string[] };
+};
 type PricedCard = { name: string; price: number | null };
 type Combo = { id: string; cards: string[]; produces: string[]; missing: string[]; missing_priced?: PricedCard[] };
 type Recommendation = { text: string; cards: PricedCard[]; subtotal?: number | null };
@@ -319,6 +335,8 @@ export default function DeckPage() {
   const [binderSort, setBinderSort] = useState<"name" | "color" | "cmc">("name");
   const [binderDeckId, setBinderDeckId] = useState<string>("");   // deck destino
   const [bulkAnalysis, setBulkAnalysis] = useState<{ deck: string; rows: { card: string; impact: number; adds: boolean; reason: string }[] } | null>(null);
+  const [buildResult, setBuildResult] = useState<BuildResult | null>(null);
+  const [buildBusy, setBuildBusy] = useState(false);
   const [syncCode, setSyncCode] = useState("");
   const [otherCode, setOtherCode] = useState("");
   const [cloudMsg, setCloudMsg] = useState<string | null>(null);
@@ -611,6 +629,24 @@ export default function DeckPage() {
   function reviewSelected() {
     const names = binder.filter((c) => binderSel.has(c.name.toLowerCase())).map((c) => c.name);
     reviewBinder(names.length ? names : undefined);
+  }
+
+  // ¿qué mazo puedo armar con TODO el binder? (comandante + análisis + bracket)
+  async function buildFromBinder() {
+    if (binder.length === 0) { setBinderMsg("Tu binder está vacío."); return; }
+    setBuildBusy(true); setBinderMsg(null); setBuildResult(null);
+    try {
+      const r = await fetch("/api/binderbuild", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cards: binder.map((c) => c.name) }),
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      setBuildResult(d as BuildResult);
+      setTimeout(() => document.getElementById("binder-build")?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 40);
+    } catch (e) {
+      setBinderMsg("No se pudo armar: " + (e instanceof Error ? e.message : String(e)));
+    } finally { setBuildBusy(false); }
   }
 
   // CMC numérico a partir del coste "2RR"/"1"/"" (generico + pips)
@@ -1785,6 +1821,16 @@ export default function DeckPage() {
                 {savedDecks.length === 0 && <span className="muted" style={{ fontSize: ".78rem" }}>Guardá un deck arriba para habilitarlo.</span>}
               </div>
 
+              {/* armar un mazo desde CERO con lo que hay en el binder */}
+              <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+                <button className="go" onClick={buildFromBinder} disabled={buildBusy}>
+                  {buildBusy ? "Armando…" : "¿Qué mazo puedo armar con mi binder?"}
+                </button>
+                <span className="muted" style={{ fontSize: ".78rem" }}>
+                  Sugiere comandante, qué cartas usás, qué te falta y el bracket.
+                </span>
+              </div>
+
               <table>
                 <thead>
                   <tr>
@@ -1831,6 +1877,104 @@ export default function DeckPage() {
               </table>
             </>
           )}
+          {buildResult && (
+            <div id="binder-build" style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <b style={{ fontSize: "1.05rem" }}>Mazo sugerido con tu binder</b>
+                <button className="ghost" style={{ padding: "2px 8px", fontSize: ".75rem" }} onClick={() => setBuildResult(null)}>cerrar</button>
+              </div>
+              {!buildResult.ok ? (
+                <p className="muted" style={{ marginTop: 6 }}>{buildResult.reason}</p>
+              ) : (
+                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 10 }}>
+                  {/* comandante + alternativas */}
+                  <div className="combo" style={{ borderLeftColor: "var(--accent)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <Icon name="crown" size={15} />
+                      <b>{buildResult.commander!.name}</b>
+                      <ColorPips colors={buildResult.commander!.identity} />
+                      <span className="muted" style={{ fontSize: ".8rem" }}>cubre {buildResult.commander!.coverage} de tus cartas</span>
+                    </div>
+                    {buildResult.alternates && buildResult.alternates.length > 0 && (
+                      <div className="muted" style={{ fontSize: ".8rem", marginTop: 4 }}>
+                        Otros comandantes posibles: {buildResult.alternates.map((a) => `${a.name} (${a.identity.join("") || "C"})`).join(" · ")}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* números clave */}
+                  <div className="row" style={{ gap: 14, flexWrap: "wrap", fontSize: ".85rem" }}>
+                    <span><b>{buildResult.usable}</b> cartas usables (en color)</span>
+                    <span>faltan <b>{buildResult.to_99}</b> para 99</span>
+                    <span>curva media <b>{buildResult.report!.avg_cmc}</b></span>
+                    <span>consistencia <b>{buildResult.report!.consistency.score}/100</b></span>
+                    {buildResult.off_color && buildResult.off_color.length > 0 &&
+                      <span className="muted">{buildResult.off_color.length} fuera de color</span>}
+                  </div>
+
+                  {/* bracket + game changers para subir */}
+                  {buildResult.bracket && (
+                    <div className="combo" style={{ borderLeftColor: "#5a6172" }}>
+                      <div><b>Bracket estimado: {buildResult.bracket.estimate}</b> — {buildResult.bracket.label}</div>
+                      {buildResult.bracket.game_changers.length > 0 && (
+                        <div className="muted" style={{ fontSize: ".8rem", marginTop: 3 }}>
+                          Game Changers que ya tenés: {buildResult.bracket.game_changers.join(", ")}
+                        </div>
+                      )}
+                      {buildResult.bracket.next && (
+                        <div style={{ fontSize: ".82rem", marginTop: 4 }}>
+                          Para subir al <b>bracket {buildResult.bracket.next.to_bracket}</b> te faltan ~{buildResult.bracket.next.need} Game Changer(s).
+                        </div>
+                      )}
+                      {buildResult.bracket.suggestions.length > 0 && (
+                        <div className="muted" style={{ fontSize: ".82rem", marginTop: 4 }}>
+                          En tu color, podés sumar: {buildResult.bracket.suggestions.join(", ")}.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* qué agregar (recomendaciones por rol) */}
+                  {buildResult.report!.recommendations.length > 0 && (
+                    <div>
+                      <b style={{ fontSize: ".9rem" }}>Qué te conviene agregar</b>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: ".82rem" }}>
+                        {buildResult.report!.recommendations.map((rec, k) => (
+                          <li key={k}>{rec.text}{rec.cards.length > 0 && <span className="muted"> — p.ej. {rec.cards.slice(0, 4).join(", ")}</span>}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* fortalezas / debilidades + temas */}
+                  <div className="row" style={{ gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+                    {buildResult.report!.weaknesses.length > 0 && (
+                      <div style={{ minWidth: 220, flex: 1 }}>
+                        <b style={{ fontSize: ".85rem" }}>Debilidades</b>
+                        <ul className="muted" style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: ".8rem" }}>
+                          {buildResult.report!.weaknesses.slice(0, 5).map((w, k) => <li key={k}>{w}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    {buildResult.report!.strengths.length > 0 && (
+                      <div style={{ minWidth: 220, flex: 1 }}>
+                        <b style={{ fontSize: ".85rem" }}>Fortalezas</b>
+                        <ul className="muted" style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: ".8rem" }}>
+                          {buildResult.report!.strengths.slice(0, 5).map((s, k) => <li key={k}>{s}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                  {buildResult.report!.themes.length > 0 && (
+                    <div className="muted" style={{ fontSize: ".82rem" }}>
+                      Temas detectados: {buildResult.report!.themes.map((t) => `${t.label} (${t.count})`).join(" · ")}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {bulkAnalysis && (
             <div id="binder-suggest" style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>

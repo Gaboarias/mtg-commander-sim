@@ -515,6 +515,93 @@ def suggest_decks(card_name, decks, cache):
             "colors": sorted(card_colors), "decks": out}
 
 
+def _can_command(craw):
+    tl = (craw.get("type_line") or "").lower()
+    return "legendary" in tl and ("creature" in tl or "planeswalker" in tl)
+
+
+def build_from_pool(pool_names, cache, gc_cards=None):
+    """Sugiere un mazo Commander a partir de un pool (binder): comandante,
+    cartas del pool que sirven, análisis profundo, qué falta para ~99, bracket y
+    game changers EN COLOR para subir de bracket. `gc_cards`: {norm: craw} de los
+    game changers (para su identidad de color)."""
+    try:
+        import gamechangers as gc
+    except Exception:            # noqa: BLE001
+        gc = None
+
+    resolved = [(n, cache.get(_norm(n))) for n in (pool_names or [])]
+    resolved = [(n, c) for n, c in resolved if c]
+    if not resolved:
+        return {"ok": False, "reason": "No pudimos resolver ninguna carta del binder."}
+
+    # candidatos a comandante: legendaria criatura/planeswalker con más cobertura
+    cands = []
+    for n, c in resolved:
+        if not _can_command(c):
+            continue
+        ident = set(c.get("color_identity") or [])
+        cov = sum(1 for _n2, c2 in resolved
+                  if set(c2.get("color_identity") or []) <= ident)
+        themes = _card_themes(c)
+        syn = sum(1 for _n2, c2 in resolved if _card_themes(c2) & themes)
+        cands.append({"name": n, "identity": sorted(ident),
+                      "coverage": cov, "score": cov + syn})
+    cands.sort(key=lambda x: (x["score"], x["coverage"]), reverse=True)
+    if not cands:
+        return {"ok": False, "reason":
+                "No hay ningún comandante legal (criatura o planeswalker legendaria) "
+                "en el binder. Agregá al menos uno para armar el mazo."}
+
+    best = cands[0]
+    ident = set(best["identity"])
+    usable = [(n, c) for n, c in resolved
+              if n != best["name"] and set(c.get("color_identity") or []) <= ident]
+    entries = [(1, n, c) for n, c in usable]
+    report = analyze(entries, best["name"])
+
+    # fuera de color: lo que tenés pero no entra con este comandante
+    off_color = [n for n, c in resolved
+                 if n != best["name"] and not (set(c.get("color_identity") or []) <= ident)]
+
+    # bracket + game changers
+    have_norm = {_norm(n) for n, _c in resolved}
+    gc_in_pool = [n for n, _c in resolved if gc and gc.is_game_changer(n)]
+    gc_sugs = []
+    if gc is not None:
+        for raw in gc.GAME_CHANGERS_RAW:
+            k = _norm(raw)
+            if k in have_norm:
+                continue
+            gcc = (gc_cards or {}).get(k)
+            gci = set((gcc or {}).get("color_identity") or []) if gcc else None
+            if gci is not None and not (gci <= ident):
+                continue          # sólo game changers que entran en tu identidad
+            gc_sugs.append(raw)
+    est_b, est_lbl = gc.bracket_hint(len(gc_in_pool)) if gc else (2, "Base")
+    thr = {2: 1, 3: 4, 4: 7}      # GC necesarios para el próximo bracket
+    nxt = None
+    if est_b in thr:
+        nxt = {"to_bracket": est_b + 1, "need": max(1, thr[est_b] - len(gc_in_pool))}
+
+    return {
+        "ok": True,
+        "commander": {"name": best["name"], "identity": best["identity"],
+                      "coverage": best["coverage"]},
+        "alternates": [{"name": c["name"], "identity": c["identity"],
+                        "coverage": c["coverage"]} for c in cands[1:4]],
+        "pool_total": len(resolved),
+        "usable": len(usable),
+        "off_color": off_color[:20],
+        "deck_size": len(usable) + 1,
+        "to_99": max(0, 99 - len(usable)),
+        "report": report,
+        "bracket": {"estimate": est_b, "label": est_lbl,
+                    "game_changers": gc_in_pool, "next": nxt,
+                    "suggestions": gc_sugs[:12]},
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Commander Spellbook: combos reales por nombre
 # --------------------------------------------------------------------------- #

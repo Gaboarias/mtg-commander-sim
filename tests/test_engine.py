@@ -1908,6 +1908,37 @@ def test_binder_suggest_decks():
     assert any("fuera" in why.lower() for why in rojo["reasons"])
 
 
+def test_build_from_pool_suggests_commander_and_bracket():
+    an = _analyze_mod()
+    n = an._norm
+
+    def c(name, tl, ot="", ci=None):
+        return {"name": name, "type_line": tl, "oracle_text": ot,
+                "color_identity": ci or [], "cmc": 2, "mana_cost": ""}
+
+    cache = {}
+    def put(x): cache[n(x["name"])] = x
+    put(c("Krenko, Mob Boss", "Legendary Creature — Goblin", "create Goblin tokens", ["R"]))
+    put(c("Goblin Chieftain", "Creature — Goblin", "other Goblins get +1/+1", ["R"]))
+    put(c("Sol Ring", "Artifact", "add {C}{C}", []))
+    put(c("Counterspell", "Instant", "Counter target spell.", ["U"]))   # fuera de color
+    # un game changer rojo/incoloro simulado, con identidad conocida
+    put(c("Jeska's Will", "Sorcery", "add red mana", ["R"]))
+    gc_cards = {n("Jeska's Will"): cache[n("Jeska's Will")]}
+
+    pool = ["Krenko, Mob Boss", "Goblin Chieftain", "Sol Ring", "Counterspell"]
+    res = an.build_from_pool(pool, cache, gc_cards=gc_cards)
+    assert res["ok"] is True
+    assert res["commander"]["name"] == "Krenko, Mob Boss"      # el único legal
+    assert res["commander"]["identity"] == ["R"]
+    assert "Counterspell" in res["off_color"]                   # azul fuera de rojo
+    assert res["usable"] == 2                                    # chieftain + sol ring
+    assert res["to_99"] == 97
+    assert res["bracket"]["estimate"] == 2                      # sin game changers en pool
+    assert "Jeska's Will" in res["bracket"]["suggestions"]      # GC rojo sugerido
+    assert res["report"]["recommendations"]                     # análisis profundo presente
+
+
 def test_commander_spellbook_variant_parsing():
     an = _analyze_mod()
     data = {"results": {
