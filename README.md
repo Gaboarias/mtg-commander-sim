@@ -27,6 +27,10 @@ api/          Funciones serverless de Vercel (Python). Entre otras:
   catalog.py    GET  /api/catalog     (mazos + comandante + cobertura)
   deck.py       POST /api/deck        (resolver decklist, brackets, precios)
   cardsearch.py GET  /api/cardsearch  (corregir cartas no encontradas)
+  suggest.py    POST /api/suggest     (¿dónde sirve una carta? impacto 1-5 + razones;
+                                       acepta {card} o {cards:[...]} en bulk)
+  binderbuild.py POST /api/binderbuild (armá un mazo con el binder: asistente por
+                                       pasos -> comandante, tema/afinidad, sugerencias)
   feedback.py   POST /api/feedback    (comentarios de usuarios -> Turso)
   cloud.py, precons.py, samples.py, auth.py, supporter.py, …
 
@@ -102,6 +106,32 @@ sin cuentas ni backend): un nombre y una lista de **decks guardados**
 recargarlo cuando quiera y simularlo. Los decks viven solo en ese dispositivo
 (no sincronizan entre navegadores/personas); es la opción simple pedida. Para
 cuentas reales cross-device haría falta auth + DB (p. ej. Supabase), no incluido.
+
+## Mi binder (colección + armado asistido)
+
+En `/deck` el **binder** es la colección personal del usuario (`localDecks.ts`,
+`localStorage`, con **autosave** a la nube/código por cambio). Funciones:
+
+- **Alta masiva**: pegás un set o lista entera y se agrega todo de una (mismo
+  resolver que el import de decks).
+- **Tabla** con identidad (pips), coste, tipo y **estado** (con habilidad / carta
+  real / básica / sin encontrar), ordenable por **alfabético / color / coste**.
+- **Selección múltiple**: revisar / quitar en lote, y elegir un **deck destino**
+  para **agregar** o **analizar en bulk** las seleccionadas contra ese deck.
+- **Caché de cartas** (`getCardCache`/`mergeCardCache`): lo resuelto se guarda y
+  el binder no se re-analiza cada vez (sólo resuelve lo que falta).
+- **¿Dónde me sirve?** (`/api/suggest`): por deck da **impacto 1–5**, si **aporta**
+  y las **razones** (fuera de color, qué hueco de rol cubre, qué tema refuerza).
+- **Armá un mazo con tu binder** (`/api/binderbuild`, asistente por pasos):
+  1. elegís **comandante** entre los candidatos (identidad + cobertura + tema);
+  2. ves **afinidad de maná** y el **tema** con las cartas del binder que lo
+     acompañan;
+  3. el resto: **qué agregar** (con ejemplos), **qué sacar** (`cuts`), **bracket**
+     estimado y **Game Changers en color** para subir de bracket. Un botón
+     **arma y guarda** el deck (comandante + usables) y lo abre en el editor.
+  Las **tierras básicas** se tratan como un dado: no se listan como usables ni
+  como "fuera de color", y las sugerencias de tierras apuntan a las **especiales**
+  (fijado/rampeo).
 
 ## Tus decks (presets) y el formato de tablas
 
