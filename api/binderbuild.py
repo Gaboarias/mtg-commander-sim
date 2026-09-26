@@ -26,7 +26,7 @@ except Exception:  # noqa: BLE001
 MAX_POOL = 400
 
 
-def run(cards):
+def run(cards, commander=None):
     names = []
     for c in (cards or [])[:MAX_POOL]:
         s = (c or "").strip()
@@ -39,7 +39,7 @@ def run(cards):
     gc_names = list(gamechangers.GAME_CHANGERS_RAW)
     cache = _scry.resolve_many(names + gc_names) if _scry is not None else {}
     gc_cards = {_analyze._norm(n): cache.get(_analyze._norm(n)) for n in gc_names}
-    return _analyze.build_from_pool(names, cache, gc_cards=gc_cards)
+    return _analyze.build_from_pool(names, cache, gc_cards=gc_cards, commander=commander)
 
 
 class handler(BaseHTTPRequestHandler):
@@ -48,7 +48,7 @@ class handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length) if length else b"{}"
             req = json.loads(raw.decode("utf-8") or "{}")
-            body = run(req.get("cards", []))
+            body = run(req.get("cards", []), req.get("commander"))
             code = 200
         except Exception as exc:  # noqa: BLE001
             body, code = {"error": str(exc)}, 400

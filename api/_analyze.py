@@ -548,16 +548,29 @@ def suggest_decks(card_name, decks, cache):
             "colors": sorted(card_colors), "decks": out}
 
 
+_THEME_LABELS = {k: lbl for k, lbl, _f in _THEMES}
+
+
 def _can_command(craw):
     tl = (craw.get("type_line") or "").lower()
     return "legendary" in tl and ("creature" in tl or "planeswalker" in tl)
 
 
-def build_from_pool(pool_names, cache, gc_cards=None):
-    """Sugiere un mazo Commander a partir de un pool (binder): comandante,
-    cartas del pool que sirven, análisis profundo, qué falta para ~99, bracket y
-    game changers EN COLOR para subir de bracket. `gc_cards`: {norm: craw} de los
-    game changers (para su identidad de color)."""
+def _is_basic_land(craw):
+    """Tierra básica (Plains/Island/Swamp/Mountain/Forest/Wastes o supertype Basic)."""
+    tl = (craw.get("type_line") or "").lower()
+    return "basic" in tl and "land" in tl
+
+
+def build_from_pool(pool_names, cache, gc_cards=None, commander=None):
+    """Asistente por pasos para armar un mazo desde el binder.
+
+    - Sin `commander`: PASO 1 — devuelve los candidatos a comandante (legendarias
+      criatura/planeswalker) con su identidad, cobertura y temas.
+    - Con `commander`: PASO 2/3 — arma alrededor de ese comandante: afinidad de
+      maná, temas con las cartas del pool que van con cada tema, análisis profundo,
+      qué falta para ~99, bracket y game changers EN COLOR para subir.
+    `gc_cards`: {norm: craw} de los game changers (para su identidad de color)."""
     try:
         import gamechangers as gc
     except Exception:            # noqa: BLE001
@@ -578,26 +591,68 @@ def build_from_pool(pool_names, cache, gc_cards=None):
                   if set(c2.get("color_identity") or []) <= ident)
         themes = _card_themes(c)
         syn = sum(1 for _n2, c2 in resolved if _card_themes(c2) & themes)
-        cands.append({"name": n, "identity": sorted(ident),
-                      "coverage": cov, "score": cov + syn})
+        cands.append({"name": n, "identity": sorted(ident), "coverage": cov,
+                      "score": cov + syn,
+                      "themes": sorted(_THEME_LABELS[k] for k in themes if k in _THEME_LABELS)})
     cands.sort(key=lambda x: (x["score"], x["coverage"]), reverse=True)
     if not cands:
         return {"ok": False, "reason":
                 "No hay ningún comandante legal (criatura o planeswalker legendaria) "
                 "en el binder. Agregá al menos uno para armar el mazo."}
 
-    best = cands[0]
-    ident = set(best["identity"])
+    # PASO 1: sin comandante elegido -> devolver la lista de candidatos
+    if not commander:
+        return {"ok": True, "step": "choose_commander",
+                "pool_total": len(resolved),
+                "candidates": [{"name": c["name"], "identity": c["identity"],
+                                "coverage": c["coverage"], "themes": c["themes"]}
+                               for c in cands[:12]]}
+
+    # PASO 2/3: armar alrededor del comandante elegido
+    chosen = next((c for c in cands if _norm(c["name"]) == _norm(commander)), None)
+    if chosen is None:
+        return {"ok": False, "reason":
+                "Ese comandante no está en el binder o no es legal. Elegí uno de la lista."}
+    ident = set(chosen["identity"])
+    # las tierras básicas son un dado: no las contamos como cartas del pool
     usable = [(n, c) for n, c in resolved
-              if n != best["name"] and set(c.get("color_identity") or []) <= ident]
+              if n != chosen["name"] and not _is_basic_land(c)
+              and set(c.get("color_identity") or []) <= ident]
     entries = [(1, n, c) for n, c in usable]
-    report = analyze(entries, best["name"])
+    report = analyze(entries, chosen["name"])
 
-    # fuera de color: lo que tenés pero no entra con este comandante
+    # básicas obviadas: en vez de "sumá N tierras" sugerimos tierras ESPECIALES
+    _recs, _land_note = [], False
+    for r in report.get("recommendations", []):
+        t = r.get("text", "")
+        if ("apuntá a ~36" in t) or ("Bajá" in t and "tierras" in t):
+            if not _land_note:
+                _recs.append({"text":
+                    "Asumí ~36 tierras (las básicas son un dado). Sumá tierras "
+                    "ESPECIALES de fijado/rampeo: duales, fetch, Command Tower, "
+                    "bounce lands, tierras que buscan (p. ej. Fabled Passage).",
+                    "cards": []})
+                _land_note = True
+            continue
+        _recs.append(r)
+    report["recommendations"] = _recs
+
+    # temas del mazo con las cartas del pool que van con cada tema (paso 2)
+    theme_cards = []
+    for t in report["themes"]:
+        cards = [n for n, c in usable if t["key"] in _card_themes(c)]
+        theme_cards.append({"key": t["key"], "label": t["label"],
+                            "count": len(cards), "cards": sorted(cards)[:24]})
+
+    # afinidad de maná: demanda de pips por color (del pool usable)
+    demand = report["mana"]["demand"]
+    affinity = sorted(({"color": c, "pips": demand[c]} for c in demand if demand[c] > 0),
+                      key=lambda x: x["pips"], reverse=True)
+
     off_color = [n for n, c in resolved
-                 if n != best["name"] and not (set(c.get("color_identity") or []) <= ident)]
+                 if n != chosen["name"] and not _is_basic_land(c)
+                 and not (set(c.get("color_identity") or []) <= ident)]
 
-    # bracket + game changers
     have_norm = {_norm(n) for n, _c in resolved}
     gc_in_pool = [n for n, _c in resolved if gc and gc.is_game_changer(n)]
     gc_sugs = []
@@ -612,17 +667,20 @@ def build_from_pool(pool_names, cache, gc_cards=None):
                 continue          # sólo game changers que entran en tu identidad
             gc_sugs.append(raw)
     est_b, est_lbl = gc.bracket_hint(len(gc_in_pool)) if gc else (2, "Base")
-    thr = {2: 1, 3: 4, 4: 7}      # GC necesarios para el próximo bracket
+    thr = {2: 1, 3: 4, 4: 7}
     nxt = None
     if est_b in thr:
         nxt = {"to_bracket": est_b + 1, "need": max(1, thr[est_b] - len(gc_in_pool))}
 
     return {
         "ok": True,
-        "commander": {"name": best["name"], "identity": best["identity"],
-                      "coverage": best["coverage"]},
+        "step": "built",
+        "commander": {"name": chosen["name"], "identity": chosen["identity"],
+                      "coverage": chosen["coverage"], "themes": chosen["themes"]},
         "alternates": [{"name": c["name"], "identity": c["identity"],
-                        "coverage": c["coverage"]} for c in cands[1:4]],
+                        "coverage": c["coverage"]} for c in cands if c["name"] != chosen["name"]][:4],
+        "affinity": affinity,
+        "themes": theme_cards,
         "pool_total": len(resolved),
         "usable": len(usable),
         "usable_cards": [n for n, _c in usable],

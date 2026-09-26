@@ -1926,19 +1926,28 @@ def test_build_from_pool_suggests_commander_and_bracket():
     put(c("Jeska's Will", "Sorcery", "add red mana", ["R"]))
     gc_cards = {n("Jeska's Will"): cache[n("Jeska's Will")]}
 
-    pool = ["Krenko, Mob Boss", "Goblin Chieftain", "Sol Ring", "Counterspell"]
-    res = an.build_from_pool(pool, cache, gc_cards=gc_cards)
-    assert res["ok"] is True
-    assert res["commander"]["name"] == "Krenko, Mob Boss"      # el único legal
+    pool = ["Krenko, Mob Boss", "Goblin Chieftain", "Sol Ring", "Counterspell", "Mountain"]
+    cache[n("Mountain")] = c("Mountain", "Basic Land — Mountain", "", ["R"])
+
+    # PASO 1: sin comandante -> candidatos
+    step1 = an.build_from_pool(pool, cache, gc_cards=gc_cards)
+    assert step1["ok"] is True and step1["step"] == "choose_commander"
+    assert any(cd["name"] == "Krenko, Mob Boss" for cd in step1["candidates"])
+
+    # PASO 2/3: con el comandante elegido
+    res = an.build_from_pool(pool, cache, gc_cards=gc_cards, commander="Krenko, Mob Boss")
+    assert res["step"] == "built"
+    assert res["commander"]["name"] == "Krenko, Mob Boss"
     assert res["commander"]["identity"] == ["R"]
     assert "Counterspell" in res["off_color"]                   # azul fuera de rojo
-    assert res["usable"] == 2                                    # chieftain + sol ring
-    assert set(res["usable_cards"]) == {"Goblin Chieftain", "Sol Ring"}
-    assert res["to_99"] == 97
-    assert res["bracket"]["estimate"] == 2                      # sin game changers en pool
+    assert "Mountain" not in res["off_color"]                    # básica obviada
+    assert set(res["usable_cards"]) == {"Goblin Chieftain", "Sol Ring"}  # sin la básica
+    assert res["bracket"]["estimate"] == 2
     assert "Jeska's Will" in res["bracket"]["suggestions"]      # GC rojo sugerido
-    assert res["report"]["recommendations"]                     # análisis profundo presente
+    assert "affinity" in res and "themes" in res               # afinidad + temas
     assert "cuts" in res["report"]                              # sugerencias de recorte
+    # la recomendación de tierras es sobre ESPECIALES, no básicas
+    assert any("ESPECIALES" in x["text"] for x in res["report"]["recommendations"])
 
 
 def test_cut_candidates_flag_low_impact_cards():

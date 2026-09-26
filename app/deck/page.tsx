@@ -62,7 +62,8 @@ type Resolved = {
 type SimResult = { n: number; opponent: string; results: { deck: string; wins: number; pct: number }[] };
 type Suggestion = { name: string; in_color: boolean; fills: string[]; verdict: string; score: number; impact?: number; adds?: boolean; reasons?: string[] };
 type SuggestResp = { card: string; roles: string[]; colors: string[]; themes?: string[]; resolved?: boolean; decks: Suggestion[] };
-type CmdCand = { name: string; identity: string[]; coverage: number };
+type CmdCand = { name: string; identity: string[]; coverage: number; themes?: string[] };
+type ThemeCards = { key: string; label: string; count: number; cards: string[] };
 type BuildReport = {
   counts: Record<string, number>; roles: Record<string, number>;
   avg_cmc: number; themes: { key: string; label: string; count: number }[];
@@ -72,8 +73,11 @@ type BuildReport = {
   cuts?: { name: string; cmc: number; reason: string }[];
 };
 type BuildResult = {
-  ok: boolean; reason?: string;
+  ok: boolean; reason?: string; step?: string;
+  candidates?: CmdCand[];
   commander?: CmdCand; alternates?: CmdCand[];
+  affinity?: { color: string; pips: number }[];
+  themes?: ThemeCards[];
   pool_total?: number; usable?: number; usable_cards?: string[]; off_color?: string[];
   deck_size?: number; to_99?: number; report?: BuildReport;
   bracket?: { estimate: number; label: string; game_changers: string[];
@@ -340,6 +344,7 @@ export default function DeckPage() {
   const [binderDeckId, setBinderDeckId] = useState<string>("");   // deck destino
   const [bulkAnalysis, setBulkAnalysis] = useState<{ deck: string; rows: { card: string; impact: number; adds: boolean; reason: string }[] } | null>(null);
   const [buildResult, setBuildResult] = useState<BuildResult | null>(null);
+  const [buildCandidates, setBuildCandidates] = useState<CmdCand[] | null>(null);
   const [buildBusy, setBuildBusy] = useState(false);
   const [syncCode, setSyncCode] = useState("");
   const [otherCode, setOtherCode] = useState("");
@@ -644,18 +649,26 @@ export default function DeckPage() {
     reviewBinder(names.length ? names : undefined);
   }
 
-  // ¿qué mazo puedo armar con TODO el binder? (comandante + análisis + bracket)
-  async function buildFromBinder() {
+  // asistente de armado: sin comandante -> lista de candidatos (paso 1); con
+  // comandante -> arma alrededor de él (afinidad/tema + resto de sugerencias).
+  async function buildFromBinder(commander?: string) {
     if (binder.length === 0) { setBinderMsg("Tu binder está vacío."); return; }
-    setBuildBusy(true); setBinderMsg(null); setBuildResult(null);
+    setBuildBusy(true); setBinderMsg(null);
+    if (!commander) { setBuildResult(null); setBuildCandidates(null); }
     try {
       const r = await fetch("/api/binderbuild", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cards: binder.map((c) => c.name) }),
+        body: JSON.stringify({ cards: binder.map((c) => c.name), commander }),
       });
       const d = await r.json();
       if (d.error) throw new Error(d.error);
-      setBuildResult(d as BuildResult);
+      const res = d as BuildResult;
+      if (res.ok && res.step === "choose_commander") {
+        setBuildCandidates(res.candidates || []);
+        setBuildResult(null);
+      } else {
+        setBuildResult(res);
+      }
       setTimeout(() => document.getElementById("binder-build")?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 40);
     } catch (e) {
       setBinderMsg("No se pudo armar: " + (e instanceof Error ? e.message : String(e)));
@@ -1859,7 +1872,7 @@ export default function DeckPage() {
 
               {/* armar un mazo desde CERO con lo que hay en el binder */}
               <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
-                <button className="go" onClick={buildFromBinder} disabled={buildBusy}>
+                <button className="go" onClick={() => buildFromBinder()} disabled={buildBusy}>
                   {buildBusy ? "Armando…" : "¿Qué mazo puedo armar con mi binder?"}
                 </button>
                 <span className="muted" style={{ fontSize: ".78rem" }}>
@@ -1913,10 +1926,40 @@ export default function DeckPage() {
               </table>
             </>
           )}
+          {/* PASO 1: elegir comandante */}
+          {buildCandidates && !buildResult && (
+            <div id="binder-build" style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <b style={{ fontSize: "1.05rem" }}>Paso 1 — elegí tu comandante</b>
+                <button className="ghost" style={{ padding: "2px 8px", fontSize: ".75rem" }} onClick={() => setBuildCandidates(null)}>cerrar</button>
+              </div>
+              {buildCandidates.length === 0 ? (
+                <p className="muted" style={{ marginTop: 6 }}>No hay comandantes legales en tu binder (falta una criatura o planeswalker legendaria).</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+                  <p className="muted" style={{ fontSize: ".82rem", margin: 0 }}>Estas cartas de tu binder pueden ser comandante. Elegí una para ver su afinidad de color, su tema y las cartas que le sirven:</p>
+                  {buildCandidates.map((cand) => (
+                    <button key={cand.name} className="combo" style={{ borderLeftColor: "var(--accent)", textAlign: "left", cursor: "pointer", background: "transparent" }}
+                      onClick={() => buildFromBinder(cand.name)} disabled={buildBusy}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <Icon name="crown" size={14} />
+                        <b>{cand.name}</b>
+                        <ColorPips colors={cand.identity} />
+                        <span className="muted" style={{ fontSize: ".8rem" }}>cubre {cand.coverage}</span>
+                        {cand.themes && cand.themes.length > 0 && <span className="muted" style={{ fontSize: ".8rem" }}>· {cand.themes.join(", ")}</span>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {buildResult && (
             <div id="binder-build" style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <b style={{ fontSize: "1.05rem" }}>Mazo sugerido con tu binder</b>
+                {buildResult.ok && <button className="ghost" style={{ padding: "2px 8px", fontSize: ".75rem" }} onClick={() => { setBuildResult(null); buildFromBinder(); }}>← elegir otro comandante</button>}
                 <button className="ghost" style={{ padding: "2px 8px", fontSize: ".75rem" }} onClick={() => setBuildResult(null)}>cerrar</button>
               </div>
               {!buildResult.ok ? (
@@ -1948,14 +1991,43 @@ export default function DeckPage() {
                     )}
                   </div>
 
+                  {/* PASO 2 — afinidad de maná */}
+                  {buildResult.affinity && buildResult.affinity.length > 0 && (
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: ".85rem" }}>
+                      <b style={{ fontSize: ".9rem" }}>Afinidad de maná:</b>
+                      {buildResult.affinity.map((a) => (
+                        <span key={a.color} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          <ColorPips colors={[a.color]} /> <span className="muted">{a.pips} pips</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* PASO 2 — temas y las cartas del binder que van con cada uno */}
+                  {buildResult.themes && buildResult.themes.length > 0 && (
+                    <div>
+                      <b style={{ fontSize: ".9rem" }}>Tema del mazo y cartas que lo acompañan</b>
+                      {buildResult.themes.map((t) => (
+                        <div key={t.key} className="combo" style={{ borderLeftColor: "#5a8a4a", marginTop: 4 }}>
+                          <div><b>{t.label}</b> <span className="muted" style={{ fontSize: ".8rem" }}>· {t.count} carta(s)</span></div>
+                          <div className="muted" style={{ fontSize: ".8rem", marginTop: 2 }}>{t.cards.join(", ")}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {/* números clave */}
                   <div className="row" style={{ gap: 14, flexWrap: "wrap", fontSize: ".85rem" }}>
-                    <span><b>{buildResult.usable}</b> cartas usables (en color)</span>
-                    <span>faltan <b>{buildResult.to_99}</b> para 99</span>
+                    <span><b>{buildResult.usable}</b> cartas usables (sin básicas)</span>
+                    <span>faltan <b>{buildResult.to_99}</b> para 99 (con ~36 tierras)</span>
                     <span>curva media <b>{buildResult.report!.avg_cmc}</b></span>
                     <span>consistencia <b>{buildResult.report!.consistency.score}/100</b></span>
                     {buildResult.off_color && buildResult.off_color.length > 0 &&
                       <span className="muted">{buildResult.off_color.length} fuera de color</span>}
+                  </div>
+
+                  <div className="muted" style={{ fontSize: ".78rem", marginTop: -4 }}>
+                    Paso 3 — el resto de las sugerencias:
                   </div>
 
                   {/* bracket + game changers para subir */}
