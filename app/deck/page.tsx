@@ -316,6 +316,9 @@ export default function DeckPage() {
   const [binderMsg, setBinderMsg] = useState<string | null>(null);
   const [autoSave, setAutoSave] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [binderSort, setBinderSort] = useState<"name" | "color" | "cmc">("name");
+  const [binderDeckId, setBinderDeckId] = useState<string>("");   // deck destino
+  const [bulkAnalysis, setBulkAnalysis] = useState<{ deck: string; rows: { card: string; impact: number; adds: boolean; reason: string }[] } | null>(null);
   const [syncCode, setSyncCode] = useState("");
   const [otherCode, setOtherCode] = useState("");
   const [cloudMsg, setCloudMsg] = useState<string | null>(null);
@@ -608,6 +611,74 @@ export default function DeckPage() {
   function reviewSelected() {
     const names = binder.filter((c) => binderSel.has(c.name.toLowerCase())).map((c) => c.name);
     reviewBinder(names.length ? names : undefined);
+  }
+
+  // CMC numérico a partir del coste "2RR"/"1"/"" (generico + pips)
+  function cmcOf(cost?: string): number {
+    if (!cost || cost === "?" || cost === "tierra") return 0;
+    const num = parseInt(cost.match(/^\d+/)?.[0] || "0", 10);
+    const pips = (cost.match(/[WUBRGC]/gi) || []).length;
+    return num + pips;
+  }
+  // clave de color para ordenar (mono WUBRG, luego multicolor, incoloro al final)
+  function colorKey(colors?: string[]): string {
+    const cs = colors || [];
+    if (cs.length === 0) return "9";
+    if (cs.length > 1) return "8" + cs.join("");
+    return String("WUBRG".indexOf(cs[0])) ;
+  }
+  // vista ordenada del binder (no muta el guardado)
+  function sortedBinder() {
+    const arr = binder.slice();
+    if (binderSort === "name") {
+      arr.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (binderSort === "cmc") {
+      arr.sort((a, b) => cmcOf(binderRows[a.name.toLowerCase()]?.cost) - cmcOf(binderRows[b.name.toLowerCase()]?.cost)
+        || a.name.localeCompare(b.name));
+    } else if (binderSort === "color") {
+      arr.sort((a, b) => colorKey(binderRows[a.name.toLowerCase()]?.colors).localeCompare(colorKey(binderRows[b.name.toLowerCase()]?.colors))
+        || a.name.localeCompare(b.name));
+    }
+    return arr;
+  }
+
+  // agregar las cartas seleccionadas a un deck GUARDADO (elegido en el dropdown)
+  function addSelectedToDeck() {
+    const names = binder.filter((c) => binderSel.has(c.name.toLowerCase()));
+    if (names.length === 0) { setBinderMsg("Seleccioná al menos una carta."); return; }
+    const deck = savedDecks.find((d) => d.id === binderDeckId);
+    if (!deck) { setBinderMsg("Elegí un deck destino."); return; }
+    const base = deck.text.replace(/\s*$/, "");
+    const add = names.map((c) => `${c.qty} ${c.name}`).join("\n");
+    setSavedDecks(saveDeck(deck.name, `${base}\n${add}`, deck.colors, deck.id));
+    scheduleAutosave();
+    setBinderMsg(`Agregadas ${names.length} carta(s) a «${deck.name}».`);
+  }
+
+  // analizar en BULK las cartas seleccionadas contra el deck destino elegido
+  async function analyzeSelectedInDeck() {
+    const names = binder.filter((c) => binderSel.has(c.name.toLowerCase())).map((c) => c.name);
+    if (names.length === 0) { setBinderMsg("Seleccioná al menos una carta para analizar."); return; }
+    const deck = savedDecks.find((d) => d.id === binderDeckId);
+    if (!deck) { setBinderMsg("Elegí un deck destino para analizar."); return; }
+    setBinderBusy(true); setBinderMsg(null); setBulkAnalysis(null);
+    try {
+      const r = await fetch("/api/suggest", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cards: names, decks: [{ name: deck.name, text: deck.text }] }),
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      const rows = (d.cards || []).map((res: SuggestResp) => {
+        const dd = res.decks[0];
+        return { card: res.card, impact: dd?.impact ?? 0, adds: !!dd?.adds,
+                 reason: (dd?.reasons || [])[dd?.in_color ? 1 : 0] || dd?.verdict || "" };
+      }).sort((a: { impact: number }, b: { impact: number }) => b.impact - a.impact);
+      setBulkAnalysis({ deck: deck.name, rows });
+      setTimeout(() => document.getElementById("binder-suggest")?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 40);
+    } catch (e) {
+      setBinderMsg("No se pudo analizar: " + (e instanceof Error ? e.message : String(e)));
+    } finally { setBinderBusy(false); }
   }
   async function whereDoesItHelp(card: string) {
     const decks = listDecks();
@@ -1680,10 +1751,38 @@ export default function DeckPage() {
                 <button className="go" style={{ padding: "4px 10px" }} onClick={reviewSelected} disabled={binderBusy}>
                   {binderBusy ? "Revisando…" : binderSel.size > 0 ? `Revisar ${binderSel.size} seleccionada(s)` : "Revisar todas"}
                 </button>
+                <label className="muted" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  Ordenar:
+                  <select value={binderSort} onChange={(e) => setBinderSort(e.target.value as "name" | "color" | "cmc")}
+                    style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "3px 8px" }}>
+                    <option value="name">Alfabético</option>
+                    <option value="color">Color</option>
+                    <option value="cmc">Coste de maná</option>
+                  </select>
+                </label>
                 <span style={{ flex: 1 }} />
                 <button className="ghost" style={{ padding: "4px 10px", color: "#e88", borderColor: "#7a3030" }} onClick={binderRemoveSelected} disabled={binderSel.size === 0}>
                   <Icon name="x" size={12} /> Quitar seleccionada(s)
                 </button>
+              </div>
+
+              {/* deck destino: agregar o analizar en bulk las seleccionadas */}
+              <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+                <span className="muted">Deck destino:</span>
+                <select value={binderDeckId} onChange={(e) => setBinderDeckId(e.target.value)}
+                  style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 9px", maxWidth: 220 }}>
+                  <option value="">— elegí un deck —</option>
+                  {savedDecks.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+                <button className="ghost" style={{ padding: "4px 10px" }} onClick={analyzeSelectedInDeck}
+                  disabled={binderBusy || binderSel.size === 0 || !binderDeckId}>
+                  Analizar {binderSel.size || ""} en el deck
+                </button>
+                <button className="ghost" style={{ padding: "4px 10px" }} onClick={addSelectedToDeck}
+                  disabled={binderSel.size === 0 || !binderDeckId}>
+                  <Icon name="plus" size={12} /> Agregar {binderSel.size || ""} al deck
+                </button>
+                {savedDecks.length === 0 && <span className="muted" style={{ fontSize: ".78rem" }}>Guardá un deck arriba para habilitarlo.</span>}
               </div>
 
               <table>
@@ -1694,7 +1793,7 @@ export default function DeckPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {binder.map((c) => {
+                  {sortedBinder().map((c) => {
                     const info = binderRows[c.name.toLowerCase()];
                     const sel = binderSel.has(c.name.toLowerCase());
                     return (
@@ -1732,6 +1831,36 @@ export default function DeckPage() {
               </table>
             </>
           )}
+          {bulkAnalysis && (
+            <div id="binder-suggest" style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <b style={{ fontSize: "1.02rem" }}>Análisis en «{bulkAnalysis.deck}»</b>
+                <span className="muted" style={{ fontSize: ".8rem" }}>{bulkAnalysis.rows.length} cartas · ordenadas por impacto</span>
+                <button className="ghost" style={{ padding: "2px 8px", fontSize: ".75rem" }} onClick={() => setBulkAnalysis(null)}>cerrar</button>
+              </div>
+              <table style={{ marginTop: 8 }}>
+                <thead><tr><th>Carta</th><th>Impacto</th><th>Aporta</th><th>Por qué</th></tr></thead>
+                <tbody>
+                  {bulkAnalysis.rows.map((r) => (
+                    <tr key={r.card}>
+                      <td>{r.card}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {[1, 2, 3, 4, 5].map((n) => (
+                          <span key={n} style={{ color: n <= r.impact ? "var(--accent)" : "var(--border)" }}><Icon name="star" size={11} /></span>
+                        ))}
+                        <span className="muted" style={{ fontSize: ".74rem", marginLeft: 4 }}>{r.impact}/5</span>
+                      </td>
+                      <td>{r.adds
+                        ? <span style={{ background: "#2f6b3a", padding: "2px 7px", borderRadius: 6, fontSize: ".7rem" }}>sí</span>
+                        : <span style={{ background: "#3a3f4a", padding: "2px 7px", borderRadius: 6, fontSize: ".7rem" }}>no</span>}</td>
+                      <td className="muted" style={{ fontSize: ".8rem" }}>{r.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {suggest && (
             <div id="binder-suggest" style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
