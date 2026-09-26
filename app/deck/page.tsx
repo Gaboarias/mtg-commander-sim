@@ -71,7 +71,7 @@ type BuildReport = {
 type BuildResult = {
   ok: boolean; reason?: string;
   commander?: CmdCand; alternates?: CmdCand[];
-  pool_total?: number; usable?: number; off_color?: string[];
+  pool_total?: number; usable?: number; usable_cards?: string[]; off_color?: string[];
   deck_size?: number; to_99?: number; report?: BuildReport;
   bracket?: { estimate: number; label: string; game_changers: string[];
               next?: { to_bracket: number; need: number } | null; suggestions: string[] };
@@ -647,6 +647,24 @@ export default function DeckPage() {
     } catch (e) {
       setBinderMsg("No se pudo armar: " + (e instanceof Error ? e.message : String(e)));
     } finally { setBuildBusy(false); }
+  }
+
+  // arma y GUARDA un deck nuevo con el comandante sugerido + las cartas usables
+  function saveBuiltDeck() {
+    const b = buildResult;
+    if (!b || !b.ok || !b.commander) return;
+    const lines = ["Commander", `1 ${b.commander.name}`, "", "Deck"];
+    for (const name of (b as { usable_cards?: string[] }).usable_cards || []) lines.push(`1 ${name}`);
+    const text = lines.join("\n");
+    const name = `${b.commander.name} (del binder)`;
+    const decks = saveDeck(name, text, b.commander.identity);
+    setSavedDecks(decks);
+    scheduleAutosave();
+    // abrir el deck recién armado en el editor de arriba para revisarlo
+    setText(text);
+    resolve(text);
+    setBinderMsg(`Deck «${name}» guardado con ${(b.usable || 0) + 1} cartas. Abierto arriba para editar.`);
+    if (typeof document !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   // CMC numérico a partir del coste "2RR"/"1"/"" (generico + pips)
@@ -1887,6 +1905,16 @@ export default function DeckPage() {
                 <p className="muted" style={{ marginTop: 6 }}>{buildResult.reason}</p>
               ) : (
                 <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 10 }}>
+                  {/* armar y guardar el deck sugerido */}
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                    <button className="go" onClick={saveBuiltDeck}>
+                      <Icon name="plus" size={13} /> Armar y guardar este deck
+                    </button>
+                    <span className="muted" style={{ fontSize: ".78rem" }}>
+                      Crea un deck con el comandante y tus {buildResult.usable} cartas usables, y lo abre arriba.
+                    </span>
+                  </div>
+
                   {/* comandante + alternativas */}
                   <div className="combo" style={{ borderLeftColor: "var(--accent)" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>

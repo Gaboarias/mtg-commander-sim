@@ -1933,6 +1933,7 @@ def test_build_from_pool_suggests_commander_and_bracket():
     assert res["commander"]["identity"] == ["R"]
     assert "Counterspell" in res["off_color"]                   # azul fuera de rojo
     assert res["usable"] == 2                                    # chieftain + sol ring
+    assert set(res["usable_cards"]) == {"Goblin Chieftain", "Sol Ring"}
     assert res["to_99"] == 97
     assert res["bracket"]["estimate"] == 2                      # sin game changers en pool
     assert "Jeska's Will" in res["bracket"]["suggestions"]      # GC rojo sugerido

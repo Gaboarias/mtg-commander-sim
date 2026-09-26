@@ -592,6 +592,7 @@ def build_from_pool(pool_names, cache, gc_cards=None):
                         "coverage": c["coverage"]} for c in cands[1:4]],
         "pool_total": len(resolved),
         "usable": len(usable),
+        "usable_cards": [n for n, _c in usable],
         "off_color": off_color[:20],
         "deck_size": len(usable) + 1,
         "to_99": max(0, 99 - len(usable)),
