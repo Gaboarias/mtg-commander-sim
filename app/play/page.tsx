@@ -8,9 +8,6 @@ import { download, fileStamp } from "../download";
 import { Icon } from "../icons";
 import { Help } from "../Help";
 
-const PY_VERSION = "0.26.4";
-const PY_BASE = `https://cdn.jsdelivr.net/pyodide/v${PY_VERSION}/full/`;
-
 type RegDeck = { key: string; commander: string; identity: string[]; theme?: string };
 type Spec = { kind: "registered"; key: string; name: string } | { kind: "custom"; name: string; text: string };
 type Pickable = { id: string; label: string; tag: string; spec: Spec; mine: boolean };
@@ -76,47 +73,6 @@ type AbilityEvent = { turn: number; controller: string | null; card: string; kin
 type OppTurn = { turn: number; player: string; lines: string[] };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function loadScript(src: string) {
-  return new Promise<void>((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = src; s.onload = () => resolve(); s.onerror = () => reject(new Error("no se pudo cargar " + src));
-    document.head.appendChild(s);
-  });
-}
-
-const BOOTSTRAP = `
-import sys, json
-sys.path.insert(0, '.')
-import interactive
-_IG = {'g': None}
-def new_game(specs_json, datamap_json, seed, level):
-    specs = json.loads(specs_json)
-    datamap = json.loads(datamap_json or '{}')
-    _IG['g'] = interactive.from_specs(specs, datamap, 0, int(seed), level)
-    return json.dumps(_IG['g'].state())
-def act(kind, arg_json):
-    g = _IG['g']; a = json.loads(arg_json or '{}')
-    if kind == 'land': g.play_land(a['i'])
-    elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'), a.get('target_uids'), a.get('mode'))
-    elif kind == 'attack': g.attack(a.get('uids', []), a.get('target'), a.get('assign'), a.get('target_pw'))
-    elif kind == 'foretell': g.foretell(a.get('i'))
-    elif kind == 'activate_gy': g.activate_gy(a.get('i'), a.get('index', 0), a.get('target_uids'))
-    elif kind == 'end': g.end_turn()
-    elif kind == 'activate': g.activate(a.get('uid'), a.get('index', 0))
-    elif kind == 'ability': g.activate_ability(a.get('uid'), a.get('index', 0), a.get('target_uids'))
-    elif kind == 'respond': g.respond(a.get('i'), a.get('target_uids'), a.get('mode'))
-    elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
-    elif kind == 'finish_combat': g.finish_combat()
-    elif kind == 'react': g.react(a.get('action'), a.get('i'), a.get('uid'), a.get('index', 0), a.get('target_uids'))
-    elif kind == 'undo': g.undo()
-    elif kind == 'choose': g.resolve_choice(a.get('index'))
-    elif kind == 'mulligan': g.mulligan()
-    elif kind == 'keep': g.keep(a.get('bottom', []))
-    return json.dumps(g.state())
-def export_game():
-    return json.dumps(_IG['g'].export())
-`;
-
 export default function Play() {
   const reduce = useReducedMotion() ?? false;
   const [pickables, setPickables] = useState<Pickable[]>([]);
@@ -125,7 +81,12 @@ export default function Play() {
   const [level, setLevel] = useState("intermedio");
   const [seed, setSeed] = useState(1);
 
-  const pyRef = useRef<any>(null);
+  // motor en un Web Worker: los turnos de los bots corren fuera del hilo de UI,
+  // así la pantalla no se congela mientras resuelven.
+  const workerRef = useRef<Worker | null>(null);
+  const pendingRef = useRef<Map<number, { resolve: (v: string | null) => void; reject: (e: Error) => void }>>(new Map());
+  const msgIdRef = useRef(0);
+  const [thinking, setThinking] = useState(false);   // el motor está procesando
   const [status, setStatus] = useState<string>("");   // texto de carga
   const [booting, setBooting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -205,6 +166,9 @@ export default function Play() {
     return () => window.removeEventListener("keydown", onKey);
   }, [inspect, targeting, modePick]);
 
+  // terminar el worker del motor al desmontar la página
+  useEffect(() => () => { workerRef.current?.terminate(); workerRef.current = null; }, []);
+
   useEffect(() => {
     fetch("/api/catalog").then((r) => r.json()).then((d) => {
       examplesRef.current = (d.decks || []).map((x: RegDeck) => ({
@@ -224,21 +188,39 @@ export default function Play() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function ensurePyodide() {
-    if (pyRef.current) return pyRef.current;
+  function getWorker(): Worker {
+    if (workerRef.current) return workerRef.current;
+    const w = new Worker(new URL("./engine.worker.ts", import.meta.url));
+    w.onmessage = (e: MessageEvent) => {
+      const { id, ok, result, error } = e.data || {};
+      const p = pendingRef.current.get(id);
+      if (!p) return;
+      pendingRef.current.delete(id);
+      if (ok) p.resolve(result);
+      else p.reject(new Error(error || "error del motor"));
+    };
+    w.onerror = (e) => {
+      // rechazar todo lo pendiente ante un error del worker
+      for (const [, p] of pendingRef.current) p.reject(new Error(e.message || "error del worker"));
+      pendingRef.current.clear();
+    };
+    workerRef.current = w;
+    return w;
+  }
+
+  function callWorker(type: string, payload?: object): Promise<string | null> {
+    const w = getWorker();
+    const id = ++msgIdRef.current;
+    return new Promise<string | null>((resolve, reject) => {
+      pendingRef.current.set(id, { resolve, reject });
+      w.postMessage({ id, type, payload: payload || {} });
+    });
+  }
+
+  async function ensureEngine() {
     setStatus("Preparando el motor… la primera vez puede tardar unos segundos.");
-    if (!(window as any).loadPyodide) await loadScript(PY_BASE + "pyodide.js");
-    const py = await (window as any).loadPyodide({ indexURL: PY_BASE });
-    setStatus("Cargando reglas del juego…");
-    const res = await fetch("/api/pysrc");
-    const { modules } = await res.json();
-    for (const [name, src] of Object.entries(modules as Record<string, string>)) {
-      py.FS.writeFile(name, src);
-    }
-    py.runPython(BOOTSTRAP);
-    pyRef.current = py;
+    await callWorker("init");
     setStatus("");
-    return py;
   }
 
   function toggleFoe(id: string) {
@@ -281,30 +263,30 @@ export default function Play() {
         setInfo((p) => ({ ...seedInfo, ...p }));
       }
 
-      const py = await ensurePyodide();
-      const newGame = py.globals.get("new_game");
-      const raw = newGame(JSON.stringify(specs), JSON.stringify(datamap), seed, level);
-      newGame.destroy?.();
-      setState(JSON.parse(raw));
+      await ensureEngine();
+      const raw = await callWorker("new_game", {
+        specs: JSON.stringify(specs), datamap: JSON.stringify(datamap), seed, level,
+      });
+      if (raw) setState(JSON.parse(raw));
       setPicked(new Set());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBooting(false); }
   }
 
-  function doAct(kind: string, arg: object = {}) {
-    const py = pyRef.current;
-    if (!py) return;
+  async function doAct(kind: string, arg: object = {}) {
+    if (!workerRef.current || thinking) return;   // una acción a la vez (motor de 1 hilo)
+    setThinking(true);
     try {
-      const act = py.globals.get("act");
-      const raw = act(kind, JSON.stringify(arg));
-      act.destroy?.();
-      setState(JSON.parse(raw));
+      const raw = await callWorker("act", { kind, arg: JSON.stringify(arg) });
+      if (raw) setState(JSON.parse(raw));
       if (kind === "attack" || kind === "end") setPicked(new Set());
       if (kind === "defend") setAssign({});
       if (kind === "mulligan" || kind === "keep") setBottom([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setThinking(false);
     }
   }
 
@@ -312,12 +294,10 @@ export default function Play() {
     setPicked((s) => { const n = new Set(s); n.has(uid) ? n.delete(uid) : n.add(uid); return n; });
   }
 
-  function exportGame(fmt: "json" | "txt") {
-    const py = pyRef.current;
-    if (!py) return;
-    const fn = py.globals.get("export_game");
-    const raw = fn();
-    fn.destroy?.();
+  async function exportGame(fmt: "json" | "txt") {
+    if (!workerRef.current) return;
+    const raw = await callWorker("export");
+    if (!raw) return;
     const data = JSON.parse(raw);
     const stamp = fileStamp();
     if (fmt === "json") {
@@ -449,6 +429,17 @@ export default function Play() {
 
   return (
     <div className="wrap">
+      {thinking && (
+        <div aria-live="polite" style={{
+          position: "fixed", top: 12, right: 12, zIndex: 50,
+          display: "inline-flex", alignItems: "center", gap: 6,
+          background: "var(--panel-2)", border: "1px solid var(--border)",
+          borderRadius: 999, padding: "5px 12px", fontSize: ".8rem",
+          color: "var(--muted)", boxShadow: "var(--shadow)",
+        }}>
+          <Icon name="hourglass" size={13} /> pensando…
+        </div>
+      )}
       <AnimatePresence>
         {abilityToast && (
           <motion.div className="ability-toast" role="status"
