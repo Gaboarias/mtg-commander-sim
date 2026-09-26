@@ -5,7 +5,7 @@
   --panel-2: #24201a;
   --border: #3a3324;
   --text: #ece3cf;
-  --muted: #a99d84;
+  --muted: #bcb094;       /* más claro: mejor contraste del texto secundario */
   --accent: #d8b23a;      /* oro */
   --accent-2: #6f95ff;
   --r: #e5556b;           /* error/peligro */
@@ -35,7 +35,7 @@
   --panel-2: #ece0c4;
   --border: #cbb98f;
   --text: #302819;
-  --muted: #6f6145;
+  --muted: #5a4c31;       /* más oscuro: mejor contraste del texto secundario */
   --accent: #8a5a12;      /* bronce/oro oscuro para contraste */
   --accent-2: #2f5aa8;
   --r: #c0392b;           /* error/peligro (oscuro para contraste en claro) */
@@ -56,6 +56,18 @@
 }
 
 * { box-sizing: border-box; }
+
+/* etiqueta/pill de estado: fondo oscuro fijo -> SIEMPRE texto claro (contraste
+   correcto en modo claro y oscuro; las badges no deben heredar --text). */
+.pill {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: .72rem;
+  line-height: 1.5;
+  color: #f6f1e7;
+  white-space: nowrap;
+}
 
 /* foco de teclado visible y consistente (accesibilidad) */
 :focus-visible {

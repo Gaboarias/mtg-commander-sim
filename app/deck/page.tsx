@@ -302,7 +302,7 @@ function Tag({ r }: { r: Row }) {
   };
   const [bg, label] = map[r.source] || ["#3a3f4a", r.source];
   return (
-    <span style={{ background: bg, padding: "2px 7px", borderRadius: 6, fontSize: ".72rem" }}>
+    <span className="pill" style={{ background: bg }}>
       {label}
     </span>
   );
@@ -1420,7 +1420,7 @@ export default function DeckPage() {
                   <td>
                     <Tag r={c} />
                     {c.generic && (
-                      <span style={{ background: "#5a4a2a", padding: "2px 6px", borderRadius: 6, fontSize: ".68rem", marginLeft: 4 }}>
+                      <span className="pill" style={{ background: "#5a4a2a", fontSize: ".68rem", marginLeft: 4 }}>
                         aprox
                       </span>
                     )}
@@ -1570,7 +1570,7 @@ export default function DeckPage() {
 
               {analysis.recommendations.length > 0 && (
                 <>
-                  <h3 style={{ marginTop: 14, color: "#8ab4ff", display: "flex", alignItems: "center", gap: 6 }}><Icon name="arrow-right" size={16} /> Recomendaciones</h3>
+                  <h3 style={{ marginTop: 14, color: "var(--accent-2)", display: "flex", alignItems: "center", gap: 6 }}><Icon name="arrow-right" size={16} /> Recomendaciones</h3>
                   <ul className="abil">
                     {analysis.recommendations.map((r, i) => (
                       <li key={i}>
@@ -1608,6 +1608,24 @@ export default function DeckPage() {
                   iniciales arrancás con 2–5 tierras, o sea jugable sin mulligan.
                 </div>
               </div>
+              <details style={{ marginTop: 8 }}>
+                <summary style={{ cursor: "pointer", fontSize: ".82rem", color: "var(--accent-2)" }}>
+                  ¿Qué es la consistencia y cómo la mejoro?
+                </summary>
+                <div className="muted" style={{ fontSize: ".82rem", marginTop: 6, lineHeight: 1.5 }}>
+                  Es qué tan seguido el mazo hace lo que querés <b>turno a turno</b>: que
+                  tengas tierras para jugar, aceleres a tiempo y encuentres tus piezas
+                  clave. El puntaje (0–100) combina cuatro cosas: la probabilidad de una
+                  mano inicial jugable (2–5 tierras, es lo que más pesa), la cantidad de
+                  <b> ramp</b>, la de <b>tutores</b> y una <b>curva baja</b>.
+                  <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                    <li>Apuntá a ~36–38 tierras y buena fijación de color (duales, fetch, Command Tower).</li>
+                    <li>Sumá ~10 piezas de ramp (rocas, dorks, tierras que buscan) para no depender de robar tierras.</li>
+                    <li>Meté motores de robo/selección (cantrips, "impulse draw") y algún tutor para hallar tus cartas clave.</li>
+                    <li>Bajá la curva: demasiados hechizos de 5+ trababan el arranque.</li>
+                  </ul>
+                </div>
+              </details>
 
               <h3 style={{ marginTop: 14 }}>Curva de maná</h3>
               <div className="curve">
@@ -1908,7 +1926,7 @@ export default function DeckPage() {
                         <td>
                           {info ? <Tag r={info} /> : <span className="muted" style={{ fontSize: ".72rem" }}>sin revisar</span>}
                           {info?.generic && (
-                            <span style={{ background: "#5a4a2a", padding: "2px 6px", borderRadius: 6, fontSize: ".68rem", marginLeft: 4 }}>aprox</span>
+                            <span className="pill" style={{ background: "#5a4a2a", fontSize: ".68rem", marginLeft: 4 }}>aprox</span>
                           )}
                         </td>
                         <td style={{ whiteSpace: "nowrap" }}>
@@ -2021,7 +2039,7 @@ export default function DeckPage() {
                     <span><b>{buildResult.usable}</b> cartas usables (sin básicas)</span>
                     <span>faltan <b>{buildResult.to_99}</b> para 99 (con ~36 tierras)</span>
                     <span>curva media <b>{buildResult.report!.avg_cmc}</b></span>
-                    <span>consistencia <b>{buildResult.report!.consistency.score}/100</b></span>
+                    <span title="Qué tan seguido el mazo arranca jugable y encuentra sus piezas turno a turno. Se mejora con ~36–38 tierras + fijación, ~10 de ramp, robo/tutores y una curva baja.">consistencia <b>{buildResult.report!.consistency.score}/100</b> <span style={{ cursor: "help" }}>ⓘ</span></span>
                     {buildResult.off_color && buildResult.off_color.length > 0 &&
                       <span className="muted">{buildResult.off_color.length} fuera de color</span>}
                   </div>
@@ -2121,8 +2139,8 @@ export default function DeckPage() {
                         <span className="muted" style={{ fontSize: ".74rem", marginLeft: 4 }}>{r.impact}/5</span>
                       </td>
                       <td>{r.adds
-                        ? <span style={{ background: "#2f6b3a", padding: "2px 7px", borderRadius: 6, fontSize: ".7rem" }}>sí</span>
-                        : <span style={{ background: "#3a3f4a", padding: "2px 7px", borderRadius: 6, fontSize: ".7rem" }}>no</span>}</td>
+                        ? <span className="pill" style={{ background: "#2f6b3a" }}>sí</span>
+                        : <span className="pill" style={{ background: "#3a3f4a" }}>no</span>}</td>
                       <td className="muted" style={{ fontSize: ".8rem" }}>{r.reason}</td>
                     </tr>
                   ))}
@@ -2137,7 +2155,7 @@ export default function DeckPage() {
                 <b style={{ fontSize: "1.02rem" }}>{suggest.card}</b>
                 {suggest.colors.length > 0 && <ColorPips colors={suggest.colors} />}
                 {suggest.roles.length > 0 && <span className="muted">· hace: {suggest.roles.join(", ")}</span>}
-                {suggest.resolved === false && <span style={{ background: "#7a3030", padding: "2px 7px", borderRadius: 6, fontSize: ".7rem" }}>sin datos</span>}
+                {suggest.resolved === false && <span className="pill" style={{ background: "#7a3030" }}>sin datos</span>}
               </div>
               {suggest.decks.length === 0 ? (
                 <p className="muted">No tenés decks guardados para comparar.</p>
@@ -2160,8 +2178,8 @@ export default function DeckPage() {
                           </span>
                           <span className="muted" style={{ fontSize: ".78rem" }}>{impact}/5</span>
                           {d.adds
-                            ? <span style={{ background: "#2f6b3a", padding: "2px 7px", borderRadius: 6, fontSize: ".7rem" }}>aporta</span>
-                            : <span style={{ background: "#3a3f4a", padding: "2px 7px", borderRadius: 6, fontSize: ".7rem" }}>{d.in_color ? "marginal" : "no va"}</span>}
+                            ? <span className="pill" style={{ background: "#2f6b3a" }}>aporta</span>
+                            : <span className="pill" style={{ background: "#3a3f4a" }}>{d.in_color ? "marginal" : "no va"}</span>}
                         </div>
                         {d.reasons && d.reasons.length > 0 && (
                           <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: ".82rem" }} className="muted">
