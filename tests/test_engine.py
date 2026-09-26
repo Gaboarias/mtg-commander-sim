@@ -376,6 +376,34 @@ def test_human_attack_opens_damage_window_with_instant():
     assert st["phase"] == "main"
 
 
+def test_defense_without_instant_clears_mode_no_crash():
+    # Regresión: defender sin instantáneos aplica el daño directo y NO deja el modo
+    # "defense" con atacantes ya resueltos (que rompía state() en _defense_state).
+    import interactive, cards, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human(); op = ig.g.opponents(hu)[0]
+    # sin instantáneos en mano
+    hu.hand = [c for c in hu.hand if not (("instant" in c.types) or ("flash" in c.keywords))]
+    # simulamos que estamos defendiendo un ataque declarado
+    atk = ig.g.move_to_battlefield(cards.creature("Ogro", "2R", 3, 3), op)
+    atk.summoning_sick = False
+    ig.g._begin_combat(op)
+    declared = ig.g._declare_attackers(op, [(atk, hu)])
+    ig._attacker = op
+    ig._declared = declared
+    ig.mode = "defense"; ig.phase = "defense"
+    life0 = hu.life
+    st = ig.resolve_defense([])            # tomo el daño, sin trucos
+    import json; json.dumps(st)            # state() no explota (era el crash)
+    assert st["phase"] in ("main", "defense", "combat", "react", "choose", "over")
+    assert hu.life < life0                 # el daño del atacante se aplicó
+    # si quedó en defense, es por un ATAQUE nuevo (atacantes vivos), no basura
+    if st["phase"] == "defense":
+        assert all(a.attacking is not None for a in ig._declared)
+
+
 def test_human_attack_without_instant_skips_damage_window():
     # sin instantáneos, no hay nada que responder: el daño se aplica directo.
     import interactive, cards, decks

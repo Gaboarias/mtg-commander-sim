@@ -526,6 +526,10 @@ class InteractiveGame:
         """Abre la ventana de daño de combate (post-bloqueo): el humano puede lanzar
         instantáneos y luego pulsar 'Aplicar daño' (finish_combat). Si no tiene ningún
         instantáneo pagable, no hay nada que responder: aplica el daño directo."""
+        # salimos del modo de declaración (defense/None): a partir de acá o abrimos
+        # la ventana "combat" o resolvemos el daño de una.
+        self.mode = None
+        self._declared = []
         if not self._has_instant_response(self.human()):
             self.g._finish_combat([a for a in declared if a in a.controller.battlefield])
             self.g.sba()
