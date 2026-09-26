@@ -1900,6 +1900,12 @@ def test_binder_suggest_decks():
     assert verde["in_color"] and "ramp" in verde["fills"]     # encaja y cubre ramp
     assert not rojo["in_color"]                                # azul/verde fuera de rojo
     assert res["decks"][0]["name"] == "Verde"                  # rankeado primero
+    # nuevo: impacto 1–5, si aporta, y razones legibles
+    assert 1 <= verde["impact"] <= 5 and verde["impact"] >= 3  # cubre un hueco -> alto
+    assert verde["adds"] is True
+    assert any("ramp" in why.lower() for why in verde["reasons"])
+    assert rojo["impact"] == 1 and rojo["adds"] is False
+    assert any("fuera" in why.lower() for why in rojo["reasons"])
 
 
 def test_commander_spellbook_variant_parsing():

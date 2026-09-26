@@ -412,14 +412,37 @@ def _needs(report):
     return need
 
 
+def _ci_str(colors):
+    """Colores WUBRG como texto legible ('incolora' si no hay)."""
+    order = ["W", "U", "B", "R", "G"]
+    cs = [c for c in order if c in set(colors or [])]
+    return "".join(cs) if cs else "incolora"
+
+
+def _card_themes(craw):
+    """Temas (tokens, counters, sacrifice, …) que toca una carta, por su oracle."""
+    if not craw:
+        return set()
+    ot = _oracle(craw)
+    tl = (craw.get("type_line") or "").lower()
+    return {k for k, _lbl, f in _THEMES if f(ot, tl)}
+
+
+# umbral "ideal" por rol (para explicar el hueco que cubre)
+_ROLE_THRESH = {"ramp": 10, "draw": 10, "removal": 8, "wipe": 1, "protection": 3}
+
+
 def suggest_decks(card_name, decks, cache):
-    """¿En cuáles de `decks` sirve `card_name`? Puro y testeable: la resolución de
-    Scryfall se hace afuera y se pasa en `cache` {nombre_norm: dict}.
-    `decks`: [{"name", "parsed": {commander, cards:[(qty,name)]}}]."""
+    """¿En cuáles de `decks` sirve `card_name`, y CUÁNTO aporta? Puro y testeable:
+    la resolución de Scryfall se hace afuera y se pasa en `cache` {nombre_norm: dict}.
+    `decks`: [{"name", "parsed": {commander, cards:[(qty,name)]}}].
+    Cada deck vuelve con: in_color, fills, reasons[], impact (1–5), adds (bool)."""
     craw = cache.get(_norm(card_name))
-    card_roles, _ = _roles(craw) if craw else (set(), False)
-    card_roles &= set(_ROLE_ES)                       # solo roles “de necesidad”
+    all_roles, _ = _roles(craw) if craw else (set(), False)
+    need_roles = all_roles & set(_ROLE_ES)            # roles “de necesidad”
     card_colors = set((craw or {}).get("color_identity") or [])
+    card_themes = _card_themes(craw)
+    resolved = craw is not None
 
     out = []
     for d in decks:
@@ -439,21 +462,56 @@ def suggest_decks(card_name, decks, cache):
 
         entries = [(q, cn, cache.get(_norm(cn))) for q, cn in parsed["cards"]]
         report = analyze(entries, cmd)
-        fills = sorted(card_roles & _needs(report))
-        score = (2 if in_color else 0) + (len(fills) if in_color else 0)
+        fills = sorted(need_roles & _needs(report))
+        deck_theme_keys = {t["key"] for t in report.get("themes", [])}
+        theme_hits = card_themes & deck_theme_keys
+
+        reasons = []
+        if not resolved:
+            reasons.append("No encontramos la carta (revisá el nombre); análisis limitado.")
 
         if not in_color:
-            verdict = "Fuera de color"
-        elif fills:
-            verdict = "Encaja y cubre " + ", ".join(_ROLE_ES[f] for f in fills)
+            reasons.append(
+                f"Fuera de la identidad de color del mazo: la carta es {_ci_str(card_colors)} "
+                f"y el mazo es {_ci_str(ident)}. No es legal en él.")
+            impact = 1
         else:
-            verdict = "Encaja en color (no cubre un hueco claro)"
+            reasons.append(
+                f"En color: {_ci_str(card_colors)} entra en la identidad {_ci_str(ident)} del mazo.")
+            for role in fills:
+                have = report["roles"].get(role, 0)
+                reasons.append(
+                    f"Cubre un hueco de {_ROLE_ES[role]}: el mazo tiene {have}, "
+                    f"conviene ~{_ROLE_THRESH.get(role, 8)}+.")
+            for k in sorted(theme_hits):
+                lbl = next((t["label"] for t in report["themes"] if t["key"] == k), k)
+                reasons.append(f"Refuerza el tema «{lbl}» del mazo.")
+            impact = 2 + min(2, len(fills)) + (1 if theme_hits else 0)
+            impact = min(5, impact)
+            if not fills and not theme_hits:
+                reasons.append(
+                    "Encaja en color pero el mazo ya está cubierto en esos roles: "
+                    "aporte marginal, entra solo si querés esta carta puntual.")
+
+        adds = in_color and impact >= 3
+        if not in_color:
+            verdict = "Fuera de color"
+        elif fills or theme_hits:
+            parts = [_ROLE_ES[f] for f in fills] + [
+                next((t["label"] for t in report["themes"] if t["key"] == k), k)
+                for k in sorted(theme_hits)]
+            verdict = "Aporta: " + ", ".join(parts)
+        else:
+            verdict = "Encaja en color (aporte marginal)"
 
         out.append({"name": d["name"], "in_color": in_color,
                     "fills": [_ROLE_ES[f] for f in fills],
-                    "verdict": verdict, "score": score})
-    out.sort(key=lambda x: x["score"], reverse=True)
-    return {"card": card_name, "roles": sorted(_ROLE_ES[r] for r in card_roles),
+                    "verdict": verdict, "score": impact,
+                    "impact": impact, "adds": adds, "reasons": reasons})
+    out.sort(key=lambda x: x["impact"], reverse=True)
+    return {"card": card_name, "resolved": resolved,
+            "roles": sorted(_ROLE_ES[r] for r in need_roles),
+            "themes": sorted(card_themes),
             "colors": sorted(card_colors), "decks": out}
 
 

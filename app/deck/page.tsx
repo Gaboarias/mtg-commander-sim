@@ -58,8 +58,8 @@ type Resolved = {
   illegal?: string[];
 };
 type SimResult = { n: number; opponent: string; results: { deck: string; wins: number; pct: number }[] };
-type Suggestion = { name: string; in_color: boolean; fills: string[]; verdict: string; score: number };
-type SuggestResp = { card: string; roles: string[]; colors: string[]; decks: Suggestion[] };
+type Suggestion = { name: string; in_color: boolean; fills: string[]; verdict: string; score: number; impact?: number; adds?: boolean; reasons?: string[] };
+type SuggestResp = { card: string; roles: string[]; colors: string[]; themes?: string[]; resolved?: boolean; decks: Suggestion[] };
 type PricedCard = { name: string; price: number | null };
 type Combo = { id: string; cards: string[]; produces: string[]; missing: string[]; missing_priced?: PricedCard[] };
 type Recommendation = { text: string; cards: PricedCard[]; subtotal?: number | null };
@@ -593,6 +593,9 @@ export default function DeckPage() {
   function binderClearSel() { setBinderSel(new Set()); }
   function binderRemoveSelected() {
     const names = binder.filter((c) => binderSel.has(c.name.toLowerCase())).map((c) => c.name);
+    if (names.length === 0) return;
+    if (typeof window !== "undefined" &&
+        !window.confirm(`¿Quitar ${names.length} carta(s) del binder? Esto no se puede deshacer.`)) return;
     setBinder(removeManyFromBinder(names));
     setBinderSel(new Set());
   }
@@ -602,9 +605,13 @@ export default function DeckPage() {
   }
   async function whereDoesItHelp(card: string) {
     const decks = listDecks();
-    if (decks.length === 0) { setError("Guardá al menos un deck para ver dónde te sirve."); return; }
+    if (decks.length === 0) {
+      setBinderMsg("Guardá al menos un deck (arriba, en «Mis decks») para poder comparar dónde te sirve una carta.");
+      return;
+    }
     setSuggesting(card);
     setSuggest(null);
+    setBinderMsg(null);
     try {
       const r = await fetch("/api/suggest", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -613,8 +620,12 @@ export default function DeckPage() {
       const d = await r.json();
       if (d.error) throw new Error(d.error);
       setSuggest(d as SuggestResp);
+      setTimeout(() => {
+        if (typeof document !== "undefined")
+          document.getElementById("binder-suggest")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }, 40);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setBinderMsg("No se pudo analizar: " + (e instanceof Error ? e.message : String(e)));
     } finally { setSuggesting(null); }
   }
 
@@ -1625,12 +1636,13 @@ export default function DeckPage() {
               <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
                 <span className="muted">{binder.length} cartas · {binderSel.size} seleccionadas</span>
                 <button className="ghost" style={{ padding: "4px 10px" }} onClick={binderSelectAll}>Seleccionar todas</button>
-                <button className="ghost" style={{ padding: "4px 10px" }} onClick={binderClearSel} disabled={binderSel.size === 0}>Limpiar</button>
-                <button className="ghost" style={{ padding: "4px 10px" }} onClick={reviewSelected} disabled={binderBusy}>
-                  {binderBusy ? "Revisando…" : binderSel.size > 0 ? "Revisar seleccionadas" : "Revisar todas"}
+                <button className="ghost" style={{ padding: "4px 10px" }} onClick={binderClearSel} disabled={binderSel.size === 0}>Deseleccionar todas</button>
+                <button className="go" style={{ padding: "4px 10px" }} onClick={reviewSelected} disabled={binderBusy}>
+                  {binderBusy ? "Revisando…" : binderSel.size > 0 ? `Revisar ${binderSel.size} seleccionada(s)` : "Revisar todas"}
                 </button>
-                <button className="ghost" style={{ padding: "4px 10px", color: "#d98" }} onClick={binderRemoveSelected} disabled={binderSel.size === 0}>
-                  <Icon name="x" size={12} /> Quitar seleccionadas
+                <span style={{ flex: 1 }} />
+                <button className="ghost" style={{ padding: "4px 10px", color: "#e88", borderColor: "#7a3030" }} onClick={binderRemoveSelected} disabled={binderSel.size === 0}>
+                  <Icon name="x" size={12} /> Quitar seleccionada(s)
                 </button>
               </div>
 
@@ -1681,16 +1693,47 @@ export default function DeckPage() {
             </>
           )}
           {suggest && (
-            <div style={{ marginTop: 12 }}>
-              <b>{suggest.card}</b>
-              <span className="muted"> · {suggest.colors.length ? suggest.colors.join("") : "incolora"}{suggest.roles.length ? ` · ${suggest.roles.join(", ")}` : ""}</span>
+            <div id="binder-suggest" style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <b style={{ fontSize: "1.02rem" }}>{suggest.card}</b>
+                {suggest.colors.length > 0 && <ColorPips colors={suggest.colors} />}
+                {suggest.roles.length > 0 && <span className="muted">· hace: {suggest.roles.join(", ")}</span>}
+                {suggest.resolved === false && <span style={{ background: "#7a3030", padding: "2px 7px", borderRadius: 6, fontSize: ".7rem" }}>sin datos</span>}
+              </div>
               {suggest.decks.length === 0 ? (
                 <p className="muted">No tenés decks guardados para comparar.</p>
-              ) : suggest.decks.map((d) => (
-                <div key={d.name} className="combo" style={{ borderLeftColor: d.in_color ? (d.fills.length ? "var(--accent)" : "#5a6172") : "#7a3030" }}>
-                  <div><b>{d.name}</b> <span className="muted">· {d.verdict}</span></div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+                  {suggest.decks.map((d) => {
+                    const impact = d.impact ?? d.score ?? 0;
+                    const barColor = !d.in_color ? "#7a3030" : impact >= 4 ? "var(--accent)" : impact >= 3 ? "#5a8a4a" : "#5a6172";
+                    return (
+                      <div key={d.name} className="combo" style={{ borderLeftColor: barColor }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <b>{d.name}</b>
+                          {/* ranking de impacto 1–5 */}
+                          <span title={`Impacto ${impact}/5`} style={{ letterSpacing: 1 }}>
+                            {[1, 2, 3, 4, 5].map((n) => (
+                              <span key={n} style={{ color: n <= impact ? "var(--accent)" : "var(--border)" }}>
+                                <Icon name="star" size={12} />
+                              </span>
+                            ))}
+                          </span>
+                          <span className="muted" style={{ fontSize: ".78rem" }}>{impact}/5</span>
+                          {d.adds
+                            ? <span style={{ background: "#2f6b3a", padding: "2px 7px", borderRadius: 6, fontSize: ".7rem" }}>aporta</span>
+                            : <span style={{ background: "#3a3f4a", padding: "2px 7px", borderRadius: 6, fontSize: ".7rem" }}>{d.in_color ? "marginal" : "no va"}</span>}
+                        </div>
+                        {d.reasons && d.reasons.length > 0 && (
+                          <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: ".82rem" }} className="muted">
+                            {d.reasons.map((why, k) => <li key={k}>{why}</li>)}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
+              )}
             </div>
           )}
         </div>
