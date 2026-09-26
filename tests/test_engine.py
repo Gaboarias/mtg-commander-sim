@@ -344,6 +344,57 @@ def test_interactive_attack_target_choice():
     assert st is not None
 
 
+def _instant0(name="Chispazo"):
+    import cardsdb
+    return cardsdb.build_card_from_data({
+        "name": name, "type_line": "Instant", "mana_cost": "{0}",
+        "oracle_text": "You gain 2 life."})
+
+
+def test_human_attack_opens_damage_window_with_instant():
+    # En el combate propio del humano, si tiene un instantáneo, tras declarar
+    # atacantes y bloquear la IA se abre el PASO DE DAÑO (stage "damage") y el daño
+    # recién se aplica con finish_combat.
+    import interactive, cards, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    st = ig.state()
+    if st["phase"] != "main":
+        return                                        # el setup no dio turno humano
+    hu = ig.human(); op = ig.g.opponents(hu)[0]
+    atk = ig.g.move_to_battlefield(cards.creature("Golpe", "1R", 4, 4), hu)
+    atk.summoning_sick = False
+    hu.hand.append(_instant0())
+    life0 = op.life
+    st = ig.attack([atk.uid], target_index=ig.players.index(op))
+    assert st["phase"] == "combat" and st["combat"]["stage"] == "damage"
+    assert st["combat"]["attacking"] is True
+    assert op.life == life0                           # el daño aún NO se aplicó
+    st = ig.finish_combat()
+    assert op.life == life0 - 4                        # ahora sí
+    assert st["phase"] == "main"
+
+
+def test_human_attack_without_instant_skips_damage_window():
+    # sin instantáneos, no hay nada que responder: el daño se aplica directo.
+    import interactive, cards, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    st = ig.state()
+    if st["phase"] != "main":
+        return
+    hu = ig.human(); op = ig.g.opponents(hu)[0]
+    hu.hand = [c for c in hu.hand if not (("instant" in c.types) or ("flash" in c.keywords))]
+    atk = ig.g.move_to_battlefield(cards.creature("Golpe", "1R", 4, 4), hu)
+    atk.summoning_sick = False
+    life0 = op.life
+    st = ig.attack([atk.uid], target_index=ig.players.index(op))
+    assert st["phase"] == "main"                       # sin ventana de daño
+    assert op.life == life0 - 4
+
+
 def test_modal_damage_targets_chosen_player():
     # Un modo de daño "a target player" debe exponer los rivales como objetivos
     # (target_spec opp_player) y pegarle al rival ELEGIDO, no siempre al más débil.
@@ -402,17 +453,21 @@ def test_interactive_defense_window():
             if st["phase"] == "choose":      # decisión pendiente (descarte, etc.)
                 ig.resolve_choice(0)
                 continue
+            if st["phase"] == "combat":      # paso de daño (post-bloqueo): aplico
+                ig.finish_combat()
+                continue
             if st["phase"] == "defense":
                 c = st["combat"]
-                assert c and c["attackers"] and "from" in c
+                assert c and c["attackers"] and "from" in c and c["stage"] == "declare"
                 json.dumps(st)
                 life0 = st["players"][0]["life"]
                 st2 = ig.resolve_defense([])       # tomo el daño
                 # con varios rivales, al resolver una defensa puede abrirse otra
-                # ventana (otro oponente ataca): resolvemos todas hasta salir.
+                # ventana (otro oponente ataca) o el paso de daño: resolvemos todo.
                 guard = 0
-                while st2["phase"] == "defense" and guard < 10:
-                    st2 = ig.resolve_defense([])
+                while st2["phase"] in ("defense", "combat") and guard < 15:
+                    st2 = (ig.finish_combat() if st2["phase"] == "combat"
+                           else ig.resolve_defense([]))
                     guard += 1
                 assert st2["phase"] in ("main", "over")
                 assert st2["players"][0]["life"] <= life0

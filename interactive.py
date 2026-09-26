@@ -77,9 +77,11 @@ class InteractiveGame:
         self.phase = "mulligan"     # mulligan | main | defense | over
         self.attacked = False
         self.winner = None
-        self.mode = None            # None | "defense" | "react"
+        self.mode = None            # None | "defense" | "combat" | "react"
         self._attacker = None       # jugador que ataca (durante defensa)
         self._declared = []         # atacantes declarados (Permanent)
+        self._combat_declared = []  # atacantes en la ventana de daño (post-bloqueo)
+        self._combat_resume = None  # cómo seguir tras aplicar el daño de combate
         self.mulls = 0              # mulligans que llevás (para el londrino)
         self._undo = []             # pila de snapshots para deshacer jugadas del turno
         self._react_armed = False   # ventana de reacción activa (durante main del bot)
@@ -456,8 +458,9 @@ class InteractiveGame:
         return self._auto_targets(card)
 
     def respond(self, i, target_uids=None, mode=None):
-        """Lanza un instantáneo / carta con destello desde la mano en defensa."""
-        if self.mode != "defense":
+        """Lanza un instantáneo / carta con destello desde la mano en una ventana de
+        combate (defensa antes de bloquear, o el paso de daño tras los bloqueos)."""
+        if self.mode not in ("defense", "combat"):
             return self.state()
         me = self.human()
         if 0 <= i < len(me.hand):
@@ -500,16 +503,59 @@ class InteractiveGame:
             if d is me:
                 continue
             self.g._ai_block(d, declared)
+        self.g.sba()
+        if len(self.g.alive()) <= 1:
+            self.mode = None
+            self._finish()
+            return self.state()
+        # bloqueos declarados: se abre el PASO DE DAÑO, donde el humano puede lanzar
+        # trucos antes de que se resuelva el daño (regla: prioridad tras bloquear).
+        return self._enter_combat_damage(declared,
+                                         resume=lambda: self._resume_after_defense(p))
+
+    def _resume_after_defense(self, p):
+        """Tras aplicar el daño del combate en un turno rival: completa el turno del
+        atacante (main 2 + fin), reanudable por reacción."""
+        self._declared = []
+        if self._ai_steps(p, "main2"):
+            return self.state()
+        self._advance_to_human()
+        return self.state()
+
+    def _enter_combat_damage(self, declared, resume):
+        """Abre la ventana de daño de combate (post-bloqueo): el humano puede lanzar
+        instantáneos y luego pulsar 'Aplicar daño' (finish_combat). Si no tiene ningún
+        instantáneo pagable, no hay nada que responder: aplica el daño directo."""
+        if not self._has_instant_response(self.human()):
+            self.g._finish_combat([a for a in declared if a in a.controller.battlefield])
+            self.g.sba()
+            if len(self.g.alive()) <= 1:
+                self._finish()
+                return self.state()
+            return resume()
+        self._combat_declared = declared
+        self._combat_resume = resume
+        self.mode = "combat"
+        self.phase = "combat"
+        return self.state()
+
+    def finish_combat(self):
+        """Aplica el daño de combate tras la ventana post-bloqueo y sigue."""
+        if self.mode != "combat":
+            return self.state()
+        declared = [a for a in self._combat_declared
+                    if a in a.controller.battlefield]
+        resume = self._combat_resume
+        self._combat_declared = []
+        self._combat_resume = None
+        self.mode = None
         self.g._finish_combat(declared)
         self.g.sba()
-        self.mode = None
-        self._declared = []
         if len(self.g.alive()) <= 1:
             self._finish()
             return self.state()
-        # completar el turno del atacante (main 2 + fin), reanudable por reacción
-        if self._ai_steps(p, "main2"):
-            return self.state()
+        if resume is not None:
+            return resume()
         self._advance_to_human()
         return self.state()
 
@@ -922,9 +968,28 @@ class InteractiveGame:
                 pm = self._find_perm(uid)
                 if pm is not None and pm.can_attack():
                     chosen.append((pm, target))
-        self.g._resolve_combat(p, chosen)
-        self.g.sba()
         self.attacked = True
+        declared = self.g._declare_attackers(p, chosen)
+        self.g.sba()
+        if not declared or len(self.g.alive()) <= 1:
+            if len(self.g.alive()) <= 1:
+                self._finish()
+                return self.state()
+            return self._after_human_combat(p)
+        # los rivales bloquean; después se abre el PASO DE DAÑO para que el humano
+        # pueda lanzar un truco antes de que se resuelva el daño.
+        for defender in self.g.opponents(p):
+            self.g._ai_block(defender, declared)
+        self.g.sba()
+        if len(self.g.alive()) <= 1:
+            self._finish()
+            return self.state()
+        return self._enter_combat_damage(declared,
+                                         resume=lambda: self._after_human_combat(p))
+
+    def _after_human_combat(self, p):
+        """Tras el daño del combate propio del humano: maneja combate adicional y
+        deja al humano en su fase principal."""
         # fase de combate adicional (Aggravated Assault, etc.): permite atacar de nuevo
         if getattr(self.g, "extra_combats", 0) > 0 and len(self.g.alive()) > 1:
             self.g.extra_combats -= 1
@@ -932,6 +997,7 @@ class InteractiveGame:
             self.g.log(f"{p.name}: podés atacar otra vez (combate adicional)")
         if len(self.g.alive()) <= 1:
             self._finish()
+        self.phase = "main"
         return self.state()
 
     def activate(self, uid, index=0):
@@ -1264,11 +1330,46 @@ class InteractiveGame:
             if (("instant" in c.types) or ("flash" in c.keywords))
             and c.cost is not None and me.can_pay(c.cost)]
         return {
+            "stage": "declare",
             "from": self._attacker.name if self._attacker else "",
             "attackers": attackers,
             "blockers": blockers,
             "responses": responses,
             "incoming_damage": sum(a["power"] for a in attackers),
+        }
+
+    def _combat_damage_state(self):
+        """Datos del paso de daño (post-bloqueo): atacantes con sus bloqueadores y los
+        instantáneos que el humano puede lanzar antes de que se resuelva el daño."""
+        me = self.human()
+        declared = [a for a in self._combat_declared
+                    if a in a.controller.battlefield]
+        attacking = bool(declared) and declared[0].controller is me
+        atk = [{
+            "uid": a.uid, "name": a.name, "power": a.power, "toughness": a.toughness,
+            "from": a.controller.name,
+            "vs_pw": (getattr(a.attacking, "name", None)
+                      if hasattr(a.attacking, "card") else None),
+            "blocked_by": [{"uid": b.uid, "name": b.name,
+                            "power": b.power, "toughness": b.toughness}
+                           for b in a.blocked_by],
+        } for a in declared]
+        responses = [{
+            "i": i, "name": c.name, "cost": _cost_str(c),
+            "target_spec": getattr(c, "target_spec", None),
+            "target_count": getattr(c, "target_count", 1),
+            "targets": self._targets_for(c),
+            "modes": self._modes_for(c), "mode_pick": getattr(c, "mode_pick", 1),
+        } for i, c in enumerate(me.hand)
+            if (("instant" in c.types) or ("flash" in c.keywords))
+            and c.cost is not None and me.can_pay(c.cost)]
+        return {
+            "stage": "damage",
+            "attacking": attacking,
+            "from": "Vos" if attacking else (self._attacker.name if self._attacker else ""),
+            "attackers": atk,
+            "responses": responses,
+            "can_finish": True,
         }
 
     def _react_state(self):
@@ -1344,7 +1445,9 @@ class InteractiveGame:
             "winner": self.winner,
             "players": players,
             "legal": self.legal(),
-            "combat": self._defense_state() if self.mode == "defense" else None,
+            "combat": (self._defense_state() if self.mode == "defense"
+                       else self._combat_damage_state() if self.mode == "combat"
+                       else None),
             "react": self._react_state() if self.mode == "react" else None,
             "choice": self._choice_state(),
             "mulligan": ({"mulls": self.mulls, "to_bottom": max(0, self.mulls - 1),

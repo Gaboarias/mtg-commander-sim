@@ -45,11 +45,14 @@ type Inspect = {
   name: string; cost?: string; types?: string[]; power?: number | null;
   toughness?: number | null; keywords?: string[]; abilities?: string[];
 };
-type CombatAtk = { uid: number; name: string; power: number; toughness: number; commander: boolean; from: string; vs_pw?: string | null; flying?: boolean };
+type CombatAtk = { uid: number; name: string; power: number; toughness: number; commander?: boolean; from: string; vs_pw?: string | null; flying?: boolean; blocked_by?: { uid: number; name: string; power: number; toughness: number }[] };
 type Combat = {
-  from: string; incoming_damage: number;
+  stage?: "declare" | "damage";
+  attacking?: boolean;
+  can_finish?: boolean;
+  from: string; incoming_damage?: number;
   attackers: CombatAtk[];
-  blockers: { uid: number; name: string; power: number; toughness: number; can_block_flyers?: boolean }[];
+  blockers?: { uid: number; name: string; power: number; toughness: number; can_block_flyers?: boolean }[];
   responses: { i: number; name: string; cost: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number }[];
 };
 type Mulligan = { mulls: number; to_bottom: number; lands: number };
@@ -103,6 +106,7 @@ def act(kind, arg_json):
     elif kind == 'ability': g.activate_ability(a.get('uid'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'respond': g.respond(a.get('i'), a.get('target_uids'), a.get('mode'))
     elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
+    elif kind == 'finish_combat': g.finish_combat()
     elif kind == 'react': g.react(a.get('action'), a.get('i'), a.get('uid'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'undo': g.undo()
     elif kind == 'choose': g.resolve_choice(a.get('index'))
@@ -584,7 +588,7 @@ export default function Play() {
             )}
           </div>
 
-          {state.combat && (
+          {state.combat && state.combat.stage !== "damage" && (
             <motion.div className="card defense"
               initial={reduce ? false : { opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -616,10 +620,10 @@ export default function Play() {
                 </div>
               )}
 
-              {state.combat.blockers.length > 0 ? (
+              {(state.combat.blockers?.length ?? 0) > 0 ? (
                 <div className="def-blockers">
                   <span className="act-label">Tus bloqueadores:</span>
-                  {state.combat.blockers.map((b) => (
+                  {(state.combat.blockers ?? []).map((b) => (
                     <div key={b.uid} className="blk-row">
                       <span>{b.name} <b>{b.power}/{b.toughness}</b>{b.can_block_flyers ? <span className="muted"> · puede bloquear voladores</span> : null}</span>
                       <select value={assign[b.uid] ?? ""}
@@ -654,6 +658,50 @@ export default function Play() {
               <p className="muted" style={{ fontSize: ".8rem" }}>
                 Antes de resolver el daño podés lanzar un instantáneo y asignar bloqueos.
                 El registro completo queda en el relato de abajo.
+              </p>
+            </motion.div>
+          )}
+
+          {state.combat && state.combat.stage === "damage" && (
+            <motion.div className="card defense"
+              initial={reduce ? false : { opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 24 }}>
+              <h2 className="def-title">
+                <Icon name="swords" size={18} />{" "}
+                {state.combat.attacking ? "Tu ataque — paso de daño" : "Bloqueos declarados — paso de daño"}
+              </h2>
+              <div className="def-attackers">
+                {state.combat.attackers.map((a) => (
+                  <div key={a.uid} className="atk-chip">
+                    {a.name} <b>{a.power}/{a.toughness}</b>
+                    {a.vs_pw ? <span className="muted" style={{ color: "var(--accent)" }}> → {a.vs_pw}</span> : null}
+                    {a.blocked_by && a.blocked_by.length > 0
+                      ? <span className="muted"> · bloqueado por {a.blocked_by.map((b) => `${b.name} (${b.power}/${b.toughness})`).join(", ")}</span>
+                      : <span className="muted"> · sin bloquear</span>}
+                  </div>
+                ))}
+              </div>
+
+              {state.combat.responses.length > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Responder antes del daño (instantáneo):</span>
+                  {state.combat.responses.map((r) => (
+                    <button key={r.i} className="ghost" onClick={() => respondCard(r)} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Icon name="bolt" size={13} /> {r.name}{r.target_spec ? <Icon name="target" size={12} /> : null} <span className="muted">{r.cost}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="act-block">
+                <button className="go" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                  onClick={() => doAct("finish_combat", {})}>
+                  <Icon name="check" size={14} /> Aplicar daño
+                </button>
+              </div>
+              <p className="muted" style={{ fontSize: ".8rem" }}>
+                Última ventana para lanzar instantáneos antes de que se resuelva el daño de combate.
               </p>
             </motion.div>
           )}

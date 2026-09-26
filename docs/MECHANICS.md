@@ -24,8 +24,14 @@ de reglas exhaustivo. Donde se aproxima, se indica.
   un instantáneo/destello pagable; o cuando tiene un **contrahechizo** con que
   responder a cualquier hechizo (`_has_counter_response`). Un disparo/edicto que lo
   afecta también abre la ventana. Criaturas u otros hechizos que no lo tocan ya no
-  interrumpen. *(Instantáneos en pasos de combate: pendiente — el combate aún no es
-  reanudable paso a paso.)*
+  interrumpen.
+- **Ventanas de combate**: al defender, además de la ventana previa al bloqueo
+  (modo `defense`), tras declarar bloqueos se abre el **paso de daño** (modo
+  `combat`, `_enter_combat_damage`): el humano puede lanzar instantáneos y luego
+  `finish_combat()` aplica el daño. En su **propio ataque**, tras declarar
+  atacantes y bloquear la IA, se abre el mismo paso de daño antes de resolver.
+  Si el humano no tiene ningún instantáneo pagable, el paso se salta (el daño se
+  aplica directo) para no agregar un clic vacío.
 - Headless se resuelve de forma síncrona (determinismo preservado); interactivo
   usa `pending_choice` + `ReactionPause`.
 
