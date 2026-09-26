@@ -1938,6 +1938,27 @@ def test_build_from_pool_suggests_commander_and_bracket():
     assert res["bracket"]["estimate"] == 2                      # sin game changers en pool
     assert "Jeska's Will" in res["bracket"]["suggestions"]      # GC rojo sugerido
     assert res["report"]["recommendations"]                     # análisis profundo presente
+    assert "cuts" in res["report"]                              # sugerencias de recorte
+
+
+def test_cut_candidates_flag_low_impact_cards():
+    an = _analyze_mod()
+
+    def c(name, tl, ot="", ci=None, cmc=0):
+        return {"name": name, "type_line": tl, "oracle_text": ot,
+                "color_identity": ci or [], "cmc": cmc, "mana_cost": ""}
+
+    entries = [
+        (1, "Krenko", c("Krenko", "Legendary Creature — Goblin", "create Goblin tokens", ["R"], 4)),
+        (1, "Sol Ring", c("Sol Ring", "Artifact", "add {C}{C}", [], 1)),          # ramp: se queda
+        (1, "Colossal Dreadmaw", c("Colossal Dreadmaw", "Creature — Dinosaur", "Trample", ["G"], 6)),  # vainilla cara
+        (1, "Vanilla Bear", c("Vanilla Bear", "Creature — Bear", "", ["G"], 2)),  # vainilla chica
+    ]
+    rep = an.analyze(entries, "Krenko")
+    cut_names = {x["name"] for x in rep["cuts"]}
+    assert "Colossal Dreadmaw" in cut_names and "Vanilla Bear" in cut_names
+    assert "Sol Ring" not in cut_names and "Krenko" not in cut_names   # útiles/comandante no
+    assert all("reason" in x for x in rep["cuts"])
 
 
 def test_commander_spellbook_variant_parsing():

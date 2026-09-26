@@ -193,6 +193,7 @@ def analyze(entries, commander_name=None):
         owned.add(_norm(commander_name))
     recommendations = _recommend(lands, roles, counts, avg_cmc, demand, sources, owned)
     consistency = _consistency(total, lands, roles, avg_cmc)
+    cuts = _cut_candidates(entries, commander_name, lands)
 
     return {
         "commander": commander_name,
@@ -208,7 +209,39 @@ def analyze(entries, commander_name=None):
         "weaknesses": weaknesses,
         "recommendations": recommendations,
         "consistency": consistency,
+        "cuts": cuts,
     }
+
+
+def _cut_candidates(entries, commander_name, lands):
+    """Cartas 'flojas' que conviene sacar para hacerle lugar a las mejoras. Puntúa
+    cada no-tierra: sin rol ni tema y/o CMC alto => mejor candidata a cortar."""
+    cmd = _norm(commander_name) if commander_name else None
+    scored = []
+    for _qty, name, card in entries:
+        if card is None or _norm(name) == cmd:
+            continue
+        tl = (card.get("type_line") or "").lower()
+        if "land" in tl:
+            continue
+        roles, _il = _roles(card)
+        themes = _card_themes(card)
+        useful = bool(roles & set(_ROLE_ES)) or bool(themes)
+        cmc = int(card.get("cmc") or 0)
+        cut = (0 if useful else 3) + (2 if cmc >= 6 else 1 if cmc >= 5 else 0)
+        if "creature" in tl and not useful and cmc <= 3:
+            cut += 1                       # criatura vanilla chica: fácil de cortar
+        if cut >= 3:
+            why = []
+            if not useful:
+                why.append("no cubre rol ni tema del mazo")
+            if cmc >= 5:
+                why.append(f"CMC alto ({cmc})")
+            scored.append({"name": card.get("name") or name, "cmc": cmc,
+                           "_cut": cut, "reason": ", ".join(why) or "aporte bajo"})
+    scored.sort(key=lambda x: (x["_cut"], x["cmc"]), reverse=True)
+    return [{"name": s["name"], "cmc": s["cmc"], "reason": s["reason"]}
+            for s in scored[:8]]
 
 
 def _pips_from_produced(card):

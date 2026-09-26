@@ -112,6 +112,36 @@ export function removeManyFromBinder(names: string[]): BinderCard[] {
   return listBinder();
 }
 
+// ---- Caché de cartas resueltas (color/coste/estado) ---------------------- //
+// Guarda lo que devuelve el resolver por nombre, para no re-analizar cada vez.
+const CARD_CACHE_KEY = "mtgsim:cardcache";
+const CARD_CACHE_MAX = 2000;
+
+export type CachedCard = {
+  name: string; cost?: string; type?: string; pt?: string;
+  colors?: string[]; source?: string; implemented?: boolean;
+  generic?: boolean; legal?: boolean;
+};
+
+export function getCardCache(): Record<string, CachedCard> {
+  const m = read<Record<string, CachedCard>>(CARD_CACHE_KEY, {});
+  return m && typeof m === "object" ? m : {};
+}
+
+// mezcla filas resueltas al caché (clave = nombre en minúsculas); recorta si crece.
+export function mergeCardCache(rows: CachedCard[]): Record<string, CachedCard> {
+  const m = getCardCache();
+  for (const r of rows || []) {
+    if (r && r.name) m[r.name.toLowerCase()] = r;
+  }
+  const keys = Object.keys(m);
+  if (keys.length > CARD_CACHE_MAX) {
+    for (const k of keys.slice(0, keys.length - CARD_CACHE_MAX)) delete m[k];
+  }
+  write(CARD_CACHE_KEY, m);
+  return m;
+}
+
 // ---- Sync anónimo (código en el navegador) ------------------------------- //
 export function getSyncCode(): string {
   let code = read<string>(SYNC_KEY, "");

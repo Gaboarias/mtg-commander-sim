@@ -14,6 +14,8 @@ import {
   addManyToBinder,
   removeFromBinder,
   removeManyFromBinder,
+  getCardCache,
+  mergeCardCache,
   getSyncCode,
   mergeDecks,
   setBinder as saveBinder,
@@ -67,6 +69,7 @@ type BuildReport = {
   strengths: string[]; weaknesses: string[];
   recommendations: { text: string; cards: string[] }[];
   consistency: { land_prob: number; score: number };
+  cuts?: { name: string; cmc: number; reason: string }[];
 };
 type BuildResult = {
   ok: boolean; reason?: string;
@@ -93,6 +96,7 @@ type Analysis = {
   recommendations: Recommendation[];
   consistency: { land_prob: number; score: number };
   combos: { included: Combo[]; almost: Combo[]; error: string | null };
+  cuts?: { name: string; cmc: number; reason: string }[];
 };
 
 // Plantillas de arranque (nunca la de Kang). Se elige una al azar al abrir el
@@ -365,6 +369,7 @@ export default function DeckPage() {
     setProfileState(getProfile());
     setSavedDecks(listDecks());
     setBinder(listBinder());
+    setBinderRows(getCardCache() as Record<string, Row>);   // caché persistente
     const code = getSyncCode();
     setSyncCode(code);
     const acct = getUser();
@@ -565,10 +570,11 @@ export default function DeckPage() {
       setBinder(addManyToBinder(entries));
       scheduleAutosave();
       // guardo los detalles (identidad/coste/estado) que ya vinieron resueltos
+      const withCmd = d.commander ? [...rows, d.commander as Row] : rows;
+      mergeCardCache(withCmd);         // persistir en el caché de cartas
       setBinderRows((m) => {
         const n = { ...m };
-        for (const c of rows) n[c.name.toLowerCase()] = c;
-        if (d.commander) n[(d.commander_name || d.commander.name).toLowerCase()] = d.commander;
+        for (const c of withCmd) n[c.name.toLowerCase()] = c;
         return n;
       });
       const impl = rows.filter((c) => c.implemented).length;
@@ -582,8 +588,14 @@ export default function DeckPage() {
   // revisar si las cartas "funcionan": resuelve las cartas dadas (o el binder entero)
   // y guarda coste, identidad y estado (con habilidad / carta real / sin encontrar).
   async function reviewBinder(names?: string[]) {
-    const target = (names && names.length ? names : binder.map((c) => c.name));
-    if (target.length === 0) return;
+    const all = (names && names.length ? names : binder.map((c) => c.name));
+    if (all.length === 0) return;
+    // no re-analizar lo que ya está en caché: sólo resolvemos lo que falta
+    const target = all.filter((n) => !binderRows[n.toLowerCase()]);
+    if (target.length === 0) {
+      if (all.length > 1) setBinderMsg(`Ya estaban revisadas (desde caché): ${all.length} cartas.`);
+      return;
+    }
     setBinderBusy(true); setBinderMsg(null);
     try {
       const list = target.map((n) => `1 ${n}`).join("\n");
@@ -594,6 +606,7 @@ export default function DeckPage() {
       const d = await r.json();
       if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
       const rows: Row[] = d.cards || [];
+      mergeCardCache(rows);            // persistir en el caché de cartas
       setBinderRows((m) => {
         const n = { ...m };
         for (const c of rows) n[c.name.toLowerCase()] = c;
@@ -1564,6 +1577,11 @@ export default function DeckPage() {
                       </li>
                     ))}
                   </ul>
+                  {analysis.cuts && analysis.cuts.length > 0 && (
+                    <p className="muted" style={{ fontSize: ".82rem", marginTop: 2 }}>
+                      Para hacerle lugar, los recortes más obvios: {analysis.cuts.map((c) => c.name).join(", ")}.
+                    </p>
+                  )}
                 </>
               )}
 
@@ -1971,6 +1989,14 @@ export default function DeckPage() {
                           <li key={k}>{rec.text}{rec.cards.length > 0 && <span className="muted"> — p.ej. {rec.cards.slice(0, 4).join(", ")}</span>}</li>
                         ))}
                       </ul>
+                      {buildResult.report!.cuts && buildResult.report!.cuts.length > 0 && (
+                        <div style={{ marginTop: 6, fontSize: ".82rem" }}>
+                          <span className="muted">Para hacerle lugar, considerá sacar: </span>
+                          {buildResult.report!.cuts.map((cut, k) => (
+                            <span key={k} title={cut.reason}>{k > 0 ? ", " : ""}{cut.name}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
 
