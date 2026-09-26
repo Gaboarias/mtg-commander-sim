@@ -135,6 +135,38 @@ def test_ai_blocks_with_tokens_vs_big_threats():
     assert len({b.uid for _a, b in res2}) == 2       # gang-block con los dos tokens
 
 
+def test_activate_ability_during_defense():
+    # El humano puede ACTIVAR habilidades de sus permanentes durante la ventana de
+    # defensa (pump, hacer una ficha para bloquear, etc.), no solo lanzar instantáneos.
+    import interactive, cards, decks
+    from engine import parse_cost
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human(); op = ig.g.opponents(hu)[0]
+
+    def pump(g, ctrl, perm, targets=None):
+        g.add_counters(perm, "+1/+1", 1)
+    guy = cards.creature("Pumper", "1G", 1, 1)
+    guy.activated_abilities = ({"cost": parse_cost("0"), "tap": False,
+        "sacrifice_self": False, "sacrifice_other": None, "pay_life": 0, "discard": 0,
+        "label": "Crece", "effect": pump, "target_spec": None, "target_count": 1,
+        "is_copy_ability": False, "sorcery_speed": False},)
+    pm = ig.g.move_to_battlefield(guy, hu); pm.summoning_sick = False
+    atk = ig.g.move_to_battlefield(cards.creature("Ogro", "2R", 3, 3), op)
+    atk.summoning_sick = False
+    ig.g._begin_combat(op)
+    declared = ig.g._declare_attackers(op, [(atk, hu)])
+    ig._attacker = op; ig._declared = declared; ig.mode = "defense"; ig.phase = "defense"
+    st = ig.state()
+    ab = st["combat"]["abilities"]
+    assert any(a["uid"] == pm.uid and a["label"] == "Crece" for a in ab)   # ofrecida
+    p0 = pm.power
+    ig.activate_in_combat(pm.uid, 0)
+    assert pm.power == p0 + 1         # se activó durante la defensa
+    assert ig.mode == "defense"       # sigue en la ventana para poder bloquear
+
+
 def test_menace_needs_two_blockers():
     a = _mk_player("a")
     b = _mk_player("b")

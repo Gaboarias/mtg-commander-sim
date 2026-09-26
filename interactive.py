@@ -1339,8 +1339,71 @@ class InteractiveGame:
             "attackers": attackers,
             "blockers": blockers,
             "responses": responses,
+            "abilities": self._instant_abilities(),        # activar habilidades ahora
+            "gy_abilities": self._instant_gy_abilities(),
             "incoming_damage": sum(a["power"] for a in attackers),
         }
+
+    def _instant_abilities(self):
+        """Habilidades activadas de los permanentes del humano usables AHORA
+        (pagables, sin girar las ya giradas). Para ventanas de respuesta/combate."""
+        me = self.human()
+        out = []
+        for pm in me.battlefield:
+            for j, ab in enumerate(getattr(pm.card, "activated_abilities", ()) or ()):
+                if ab.get("sorcery_speed"):        # a velocidad de conjuro: no en combate
+                    continue
+                if ab.get("tap") and pm.tapped:
+                    continue
+                if not me.can_pay(ab.get("cost")):
+                    continue
+                spec = ab.get("target_spec")
+                out.append({"uid": pm.uid, "name": pm.name, "index": j,
+                            "label": ab.get("label", "Habilidad"),
+                            "cost": _cost_str_cost(ab.get("cost")),
+                            "target_spec": spec, "target_count": ab.get("target_count", 1),
+                            "targets": self._targets_for_spec(spec) if spec else []})
+        return out
+
+    def _instant_gy_abilities(self):
+        me = self.human()
+        out = []
+        for i, c in enumerate(me.graveyard):
+            for j, ab in enumerate(getattr(c, "gy_abilities", ()) or ()):
+                if ab.get("cost") is None or me.can_pay(ab.get("cost")):
+                    out.append({"i": i, "index": j, "name": c.name,
+                                "label": ab.get("label", "Habilidad"),
+                                "cost": _cost_str_cost(ab.get("cost"))})
+        return out
+
+    def activate_in_combat(self, uid, index=0, target_uids=None):
+        """Activa una habilidad de un permanente del humano DURANTE la defensa o el
+        paso de daño (pump, hacer una ficha para bloquear, remoción activada…).
+        Se queda en la misma ventana para que el humano siga o bloquee/aplique daño."""
+        if self.mode not in ("defense", "combat"):
+            return self.state()
+        pm = next((p for p in self.human().battlefield if p.uid == uid), None)
+        if pm is not None:
+            abs_ = getattr(pm.card, "activated_abilities", ()) or ()
+            spec = abs_[index].get("target_spec") if 0 <= index < len(abs_) else None
+            tgt = (self._chosen_targets(pm.card, target_uids, spec=spec) if target_uids
+                   else self._auto_targets(pm.card)) if spec else None
+            self.g.activate_ability(pm, index, targets=tgt)
+            self.g.sba()
+            if len(self.g.alive()) <= 1:
+                self.mode = None
+                self._finish()
+        return self.state()
+
+    def activate_gy_in_combat(self, i, index=0, target_uids=None):
+        """Activa una habilidad DESDE EL CEMENTERIO durante defensa/daño."""
+        if self.mode not in ("defense", "combat"):
+            return self.state()
+        hu = self.human()
+        if 0 <= i < len(hu.graveyard):
+            self.g.activate_gy_ability(hu, hu.graveyard[i], index)
+            self.g.sba()
+        return self.state()
 
     def _combat_damage_state(self):
         """Datos del paso de daño (post-bloqueo): atacantes con sus bloqueadores y los
@@ -1373,6 +1436,8 @@ class InteractiveGame:
             "from": "Vos" if attacking else (self._attacker.name if self._attacker else ""),
             "attackers": atk,
             "responses": responses,
+            "abilities": self._instant_abilities(),
+            "gy_abilities": self._instant_gy_abilities(),
             "can_finish": True,
         }
 

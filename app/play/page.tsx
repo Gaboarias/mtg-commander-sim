@@ -51,6 +51,8 @@ type Combat = {
   attackers: CombatAtk[];
   blockers?: { uid: number; name: string; power: number; toughness: number; can_block_flyers?: boolean }[];
   responses: { i: number; name: string; cost: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number }[];
+  abilities?: { uid: number; name: string; index: number; label: string; cost: string; target_spec?: string | null }[];
+  gy_abilities?: { i: number; index: number; name: string; label: string; cost: string }[];
 };
 type Mulligan = { mulls: number; to_bottom: number; lands: number };
 type ChoiceOpt = { i: number; name: string; is_land?: boolean; ok?: boolean };
@@ -611,6 +613,27 @@ export default function Play() {
                 </div>
               )}
 
+              {(state.combat.abilities?.length ?? 0) > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Activar habilidad:</span>
+                  {(state.combat.abilities ?? []).map((ab) => (
+                    <button key={ab.uid + "-" + ab.index} className="ghost" onClick={() => doAct("combat_ability", { uid: ab.uid, index: ab.index })} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Icon name="sparkles" size={13} /> {ab.name}: {ab.label}{ab.target_spec ? <Icon name="target" size={12} /> : null} <span className="muted">{ab.cost}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {(state.combat.gy_abilities?.length ?? 0) > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Desde el cementerio:</span>
+                  {(state.combat.gy_abilities ?? []).map((ab) => (
+                    <button key={"gy" + ab.i + "-" + ab.index} className="ghost" onClick={() => doAct("combat_gy_ability", { i: ab.i, index: ab.index })} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Icon name="grave" size={13} /> {ab.name}: {ab.label} <span className="muted">{ab.cost}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {(state.combat.blockers?.length ?? 0) > 0 ? (
                 <div className="def-blockers">
                   <span className="act-label">Tus bloqueadores:</span>
@@ -680,6 +703,27 @@ export default function Play() {
                   {state.combat.responses.map((r) => (
                     <button key={r.i} className="ghost" onClick={() => respondCard(r)} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                       <Icon name="bolt" size={13} /> {r.name}{r.target_spec ? <Icon name="target" size={12} /> : null} <span className="muted">{r.cost}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {(state.combat.abilities?.length ?? 0) > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Activar habilidad:</span>
+                  {(state.combat.abilities ?? []).map((ab) => (
+                    <button key={ab.uid + "-" + ab.index} className="ghost" onClick={() => doAct("combat_ability", { uid: ab.uid, index: ab.index })} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Icon name="sparkles" size={13} /> {ab.name}: {ab.label}{ab.target_spec ? <Icon name="target" size={12} /> : null} <span className="muted">{ab.cost}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {(state.combat.gy_abilities?.length ?? 0) > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Desde el cementerio:</span>
+                  {(state.combat.gy_abilities ?? []).map((ab) => (
+                    <button key={"gy" + ab.i + "-" + ab.index} className="ghost" onClick={() => doAct("combat_gy_ability", { i: ab.i, index: ab.index })} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Icon name="grave" size={13} /> {ab.name}: {ab.label} <span className="muted">{ab.cost}</span>
                     </button>
                   ))}
                 </div>

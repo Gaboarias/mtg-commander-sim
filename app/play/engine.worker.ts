@@ -29,6 +29,8 @@ def act(kind, arg_json):
     elif kind == 'respond': g.respond(a.get('i'), a.get('target_uids'), a.get('mode'))
     elif kind == 'defend': g.resolve_defense(a.get('pairs', []))
     elif kind == 'finish_combat': g.finish_combat()
+    elif kind == 'combat_ability': g.activate_in_combat(a.get('uid'), a.get('index', 0), a.get('target_uids'))
+    elif kind == 'combat_gy_ability': g.activate_gy_in_combat(a.get('i'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'react': g.react(a.get('action'), a.get('i'), a.get('uid'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'undo': g.undo()
     elif kind == 'choose': g.resolve_choice(a.get('index'))
