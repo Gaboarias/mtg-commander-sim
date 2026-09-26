@@ -720,6 +720,13 @@ class Policy:
         used = set()
         threats = sorted(incoming, key=lambda a: -a.power)
         lethal = life_incoming >= me.life
+        # golpe serio aunque no letal: te saca >=1/3 de la vida, o te deja bajo (<=12)
+        pressured = (life_incoming * 3 >= me.life) or (me.life - life_incoming <= 12)
+
+        def expendable(b):
+            # fichas y criaturas chiquitas: fodder ideal para chump/gang
+            return b.is_token or (b.power <= 1 and not b.card.keywords)
+
         for atk in threats:
             avail = [b for b in blockers if b.uid not in used and can_block(b, atk)]
             need = 2 if atk.has("menace") else 1     # amenaza: hacen falta 2+
@@ -731,14 +738,32 @@ class Policy:
                 result.append((atk, safe))
                 used.add(safe.uid)
                 continue
-            # 2) solo bajo amenaza letal: chump/trade (respetando menace = 2+).
-            #    con arrolladora, chump-blockear no evita el daño derramado, así que
-            #    solo bloqueo si puedo MATARLO (trade), no para chumpear.
-            if lethal:
-                picks = sorted(avail, key=lambda x: x.toughness, reverse=True)[:need]
-                if atk.has("trample") and not any(kills(b, atk) for b in picks):
+            big = atk.power >= 3 or atk.has("flying") or atk.has("trample")
+            # 2) GANG para MATAR una amenaza grande, perdiendo lo mínimo (fodder primero).
+            if big:
+                pool = sorted(avail, key=lambda x: (not expendable(x), x.power))
+                pick, dmg = [], 0
+                for b in pool:
+                    pick.append(b)
+                    dmg += b.power
+                    if len(pick) >= need and dmg >= atk.toughness:
+                        break
+                kills_it = dmg >= atk.toughness or any(x.has("deathtouch") and x.power > 0 for x in pick)
+                # vale la pena si lo mata y solo arriesgamos fodder, o estamos presionados
+                if kills_it and len(pick) >= need and (
+                        all(expendable(b) or survives(b, atk) for b in pick) or pressured):
+                    for b in pick:
+                        result.append((atk, b))
+                        used.add(b.uid)
                     continue
-                for b in picks:
-                    result.append((atk, b))
-                    used.add(b.uid)
+            # 3) CHUMP con fodder (tokens) ante una amenaza grande bajo presión/letal.
+            #    con arrolladora, el chump no frena el derrame salvo que lo mate.
+            if (lethal or pressured) and big:
+                fodder = [b for b in avail if expendable(b)]
+                chump = fodder[:need] if len(fodder) >= need else avail[:need]
+                if len(chump) >= need and not (
+                        atk.has("trample") and sum(b.power for b in chump) < atk.toughness):
+                    for b in chump:
+                        result.append((atk, b))
+                        used.add(b.uid)
         return result

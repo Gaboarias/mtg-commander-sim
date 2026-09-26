@@ -108,6 +108,33 @@ def test_trample_excess_to_player():
 
 
 # -- amenaza (menace) ------------------------------------------------------ #
+def test_ai_blocks_with_tokens_vs_big_threats():
+    # La IA usa tokens para chump/gang ante amenazas grandes (antes solo bloqueaba
+    # si mataba-y-sobrevivía o si el golpe era letal -> los tokens nunca defendían).
+    me = _mk_player("me"); foe = _mk_player("foe")
+    g = _game([me, foe])
+    # dos tokens 1/1 del defensor
+    t1 = cards.make_token(g, me, "Goblin", 1, 1)
+    t2 = cards.make_token(g, me, "Goblin", 1, 1)
+    # atacante grande NO letal (vida alta), pero amenaza real (5/5)
+    big = g.move_to_battlefield(creature("Giant", "4R", 5, 5), foe)
+    big.summoning_sick = False; big.attacking = me
+    me.life = 10                                     # bajo presión (golpe de 5 a 10 de vida)
+    res = me.policy.declare_blockers(g, me, [big])
+    blockers = [b for _a, b in res]
+    assert len(blockers) >= 1                       # ahora SÍ defiende con token(s)
+    assert all(b in (t1, t2) for b in blockers)      # y usa los tokens como fodder
+    # gang para MATAR: dos tokens 2/2 matan a un 3/3 y la IA los combina
+    me2 = _mk_player("m2"); foe2 = _mk_player("f2")
+    g2 = _game([me2, foe2])
+    a = cards.make_token(g2, me2, "Zombie", 2, 2)
+    b2 = cards.make_token(g2, me2, "Zombie", 2, 2)
+    atk = g2.move_to_battlefield(creature("Bruiser", "2R", 3, 3), foe2)
+    atk.summoning_sick = False; atk.attacking = me2
+    res2 = me2.policy.declare_blockers(g2, me2, [atk])
+    assert len({b.uid for _a, b in res2}) == 2       # gang-block con los dos tokens
+
+
 def test_menace_needs_two_blockers():
     a = _mk_player("a")
     b = _mk_player("b")
