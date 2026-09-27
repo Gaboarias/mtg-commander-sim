@@ -55,6 +55,8 @@ type Resolved = {
   game_changers?: string[];
   bracket_estimate?: number;
   bracket_label?: string;
+  bracket_reasons?: string[];
+  bracket_signals?: Record<string, string[]>;
   bracket_declared?: number | null;
   price_total?: number;
   illegal?: string[];
@@ -81,7 +83,8 @@ type BuildResult = {
   pool_total?: number; usable?: number; usable_cards?: string[]; off_color?: string[];
   deck_size?: number; to_99?: number; report?: BuildReport;
   bracket?: { estimate: number; label: string; game_changers: string[];
-              next?: { to_bracket: number; need: number } | null; suggestions: string[] };
+              next?: { to_bracket: number; need: number } | null; suggestions: string[];
+              reasons?: string[]; signals?: Record<string, string[]> };
 };
 type PricedCard = { name: string; price: number | null };
 type Combo = { id: string; cards: string[]; produces: string[]; missing: string[]; missing_priced?: PricedCard[] };
@@ -1508,12 +1511,38 @@ export default function DeckPage() {
                   <span className="muted">ninguno detectado</span>
                 )}
               </div>
+              {(resolved.bracket_reasons || []).length > 0 && (
+                <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: ".82rem" }}>
+                  {(resolved.bracket_reasons || []).map((r, i) => (
+                    <li key={i} className="muted">{r}</li>
+                  ))}
+                </ul>
+              )}
+              {resolved.bracket_signals && (
+                <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                  {([
+                    ["mass_land_denial", "Negación de tierras"],
+                    ["extra_turns", "Turnos extra"],
+                    ["tutors", "Tutores"],
+                    ["fast_mana", "Fast mana"],
+                  ] as const).map(([key, lbl]) => {
+                    const arr = resolved.bracket_signals?.[key] || [];
+                    if (!arr.length) return null;
+                    return (
+                      <span key={key} className="pill" title={arr.join(", ")}>
+                        {lbl}: {arr.length}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
           <p className="muted" style={{ marginTop: 12, fontSize: ".8rem" }}>
-            Nuestra lista de Game Changers es una selección de la oficial de WotC (que
-            va cambiando). El bracket es solo una guía por cuántos Game Changers tenés:
-            no mira combos ni cartas que dejan a la mesa sin tierras.
+            La estimación mira los pilares del sistema de brackets de WotC: Game
+            Changers, negación masiva de tierras, turnos extra encadenados, densidad de
+            tutores y fast mana. Nuestra lista es una selección de la oficial (que
+            cambia); tomalo como guía, no como veredicto.
           </p>
         </div>
       )}
@@ -2052,6 +2081,9 @@ export default function DeckPage() {
                   {buildResult.bracket && (
                     <div className="combo" style={{ borderLeftColor: "#5a6172" }}>
                       <div><b>Bracket estimado: {buildResult.bracket.estimate}</b> — {buildResult.bracket.label}</div>
+                      {(buildResult.bracket.reasons || []).map((r, i) => (
+                        <div key={i} className="muted" style={{ fontSize: ".8rem", marginTop: 3 }}>{r}</div>
+                      ))}
                       {buildResult.bracket.game_changers.length > 0 && (
                         <div className="muted" style={{ fontSize: ".8rem", marginTop: 3 }}>
                           Game Changers que ya tenés: {buildResult.bracket.game_changers.join(", ")}

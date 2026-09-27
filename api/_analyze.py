@@ -666,7 +666,14 @@ def build_from_pool(pool_names, cache, gc_cards=None, commander=None):
             if gci is not None and not (gci <= ident):
                 continue          # sólo game changers que entran en tu identidad
             gc_sugs.append(raw)
-    est_b, est_lbl = gc.bracket_hint(len(gc_in_pool)) if gc else (2, "Base")
+    pool_names = [n for n, _c in resolved]
+    if gc:
+        est_b, est_lbl, binfo = gc.estimate_bracket(pool_names)
+        bracket_reasons = binfo["reasons"]
+        bracket_signals = binfo["found"]
+    else:
+        est_b, est_lbl = (2, "Base")
+        bracket_reasons, bracket_signals = [], {}
     thr = {2: 1, 3: 4, 4: 7}
     nxt = None
     if est_b in thr:
@@ -690,6 +697,7 @@ def build_from_pool(pool_names, cache, gc_cards=None, commander=None):
         "report": report,
         "bracket": {"estimate": est_b, "label": est_lbl,
                     "game_changers": gc_in_pool, "next": nxt,
+                    "reasons": bracket_reasons, "signals": bracket_signals,
                     "suggestions": gc_sugs[:12]},
     }
 

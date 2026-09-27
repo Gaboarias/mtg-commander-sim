@@ -2039,6 +2039,35 @@ def test_build_from_pool_suggests_commander_and_bracket():
     assert any("ESPECIALES" in x["text"] for x in res["report"]["recommendations"])
 
 
+def test_estimate_bracket_reads_all_pillars():
+    import gamechangers as gc
+
+    # Base: sin señales de alto impacto (Sol Ring NO cuenta como fast mana)
+    b, lbl, info = gc.estimate_bracket(["Krenko, Mob Boss", "Goblin Chieftain",
+                                        "Sol Ring", "Lightning Bolt"])
+    assert b == 2 and lbl == "Base"
+    assert info["counts"]["fast_mana"] == 0
+
+    # Un solo Game Changer -> Mejorado (3)
+    b, _lbl, _i = gc.estimate_bracket(["Rhystic Study", "Sol Ring"])
+    assert b == 3
+
+    # Negación masiva de tierras empuja a Optimizado (4) sin ningún GC
+    b, _lbl, info = gc.estimate_bracket(["Armageddon", "Lightning Bolt"])
+    assert b == 4 and info["counts"]["mass_land_denial"] == 1
+
+    # Turnos extra encadenados (>=2) -> Optimizado (4)
+    b, _lbl, _i = gc.estimate_bracket(["Time Warp", "Temporal Manipulation"])
+    assert b == 4
+
+    # Muchos GC + fast mana + tutores -> cEDH (5)
+    b, _lbl, _i = gc.estimate_bracket([
+        "Rhystic Study", "Mana Drain", "Fierce Guardianship", "Cyclonic Rift",
+        "Mana Crypt", "Mana Vault", "Chrome Mox",
+        "Demonic Tutor", "Vampiric Tutor", "Imperial Seal"])
+    assert b == 5
+
+
 def test_cut_candidates_flag_low_impact_cards():
     an = _analyze_mod()
 

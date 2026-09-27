@@ -177,7 +177,7 @@ def resolve_decklist(text):
     # Game Changers + estimacion de bracket (#4)
     all_names = ([cmd_name] if cmd_name else []) + [n for _, n in parsed["cards"]]
     gcs = gamechangers.find_in(all_names)
-    est_bracket, est_label = gamechangers.bracket_hint(len(gcs))
+    est_bracket, est_label, bracket_info = gamechangers.estimate_bracket(all_names)
     m = re.search(r"bracket[:\s]+([1-5])", text or "", re.IGNORECASE)
     declared_bracket = int(m.group(1)) if m else None
 
@@ -193,6 +193,8 @@ def resolve_decklist(text):
         "game_changers": gcs,
         "bracket_estimate": est_bracket,
         "bracket_label": est_label,
+        "bracket_reasons": bracket_info["reasons"],
+        "bracket_signals": bracket_info["found"],
         "bracket_declared": declared_bracket,
         "price_total": round(price_total, 2),
         "illegal": illegal,
