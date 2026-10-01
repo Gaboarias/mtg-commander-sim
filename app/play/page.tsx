@@ -41,6 +41,7 @@ type CardInfo = { art?: string; type?: string; oracle?: string };
 type Inspect = {
   name: string; cost?: string; types?: string[]; power?: number | null;
   toughness?: number | null; keywords?: string[]; abilities?: string[];
+  is_token?: boolean; subtypes?: string[];
 };
 type CombatAtk = { uid: number; name: string; power: number; toughness: number; commander?: boolean; from: string; vs_pw?: string | null; flying?: boolean; blocked_by?: { uid: number; name: string; power: number; toughness: number }[] };
 type Combat = {
@@ -340,10 +341,11 @@ export default function Play() {
       .catch(() => {});
   }, [state]);
 
-  function inspectCard(x: { name: string; cost?: string; types?: string[]; power?: number | null; toughness?: number | null; keywords?: string[]; abilities?: string[] }) {
+  function inspectCard(x: { name: string; cost?: string; types?: string[]; power?: number | null; toughness?: number | null; keywords?: string[]; abilities?: string[]; is_token?: boolean; subtypes?: string[] }) {
     setInspect({
       name: x.name, cost: x.cost, types: x.types, power: x.power,
       toughness: x.toughness, keywords: x.keywords, abilities: x.abilities,
+      is_token: x.is_token, subtypes: x.subtypes,
     });
   }
 
@@ -1247,35 +1249,56 @@ export default function Play() {
         </div>
       )}
 
-      {inspect && (
+      {inspect && (() => {
+        // Las fichas (tokens) se describen SIEMPRE con los datos reales del motor:
+        // buscar por nombre en Scryfall colisiona (p. ej. "Treasure" trae la ficha
+        // doble Dinosaurio//Treasure, con poder y trample que esta ficha no tiene).
+        const tok = !!inspect.is_token;
+        const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+        const engineType = [
+          ...(inspect.types || []).map(cap),
+        ].join(" ") + ((inspect.subtypes && inspect.subtypes.length)
+          ? ` — ${inspect.subtypes.join(" ")}` : "");
+        const typeText = tok
+          ? `Ficha${engineType ? " " + engineType : ""}`
+          : (info[inspect.name]?.type || (inspect.types || []).join(" "));
+        const showArt = !tok && art[inspect.name];
+        const oracle = tok ? "" : info[inspect.name]?.oracle;
+        return (
         <div className="inspect-back" onClick={() => setInspect(null)}>
           <div className="inspect" onClick={(e) => e.stopPropagation()}>
             <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setInspect(null)}><Icon name="x" size={16} /></button>
-            {art[inspect.name] ? (
+            {showArt ? (
               <div className="inspect-art" style={{ backgroundImage: `url(${art[inspect.name]})` }} />
             ) : (
               <div className="inspect-art ph"><span>{inspect.name}</span></div>
             )}
             <h3>{inspect.name} {inspect.cost ? <span className="muted">{inspect.cost}</span> : null}</h3>
             <p className="muted" style={{ margin: "2px 0" }}>
-              {info[inspect.name]?.type || (inspect.types || []).join(" ")}
+              {typeText}
               {inspect.power != null ? ` · ${inspect.power}/${inspect.toughness}` : ""}
             </p>
-            {info[inspect.name]?.oracle ? (
-              <p className="oracle">{info[inspect.name]?.oracle}</p>
+            {(inspect.keywords && inspect.keywords.length > 0) && (
+              <p className="muted" style={{ margin: "2px 0", fontSize: ".82rem" }}>
+                {inspect.keywords.map(cap).join(", ")}
+              </p>
+            )}
+            {oracle ? (
+              <p className="oracle">{oracle}</p>
             ) : (inspect.abilities && inspect.abilities.length > 0) ? (
               <ul className="abil">{inspect.abilities.map((a, k) => <li key={k}>{a}</li>)}</ul>
             ) : (
-              <p className="muted">Sin habilidades (carta básica).</p>
+              <p className="muted">{tok ? "Ficha sin habilidades." : "Sin habilidades (carta básica)."}</p>
             )}
-            {!info[inspect.name] && (
+            {!tok && !info[inspect.name] && (
               <p className="muted" style={{ fontSize: ".75rem" }}>
                 Carta de ejemplo (casera): se muestran sus habilidades del motor.
               </p>
             )}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       <footer>
         Los rivales los juega el sistema, en la dificultad que elijas. Tus decks

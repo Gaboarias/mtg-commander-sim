@@ -9,7 +9,7 @@ export type Perm = {
   is_token: boolean; attacking: boolean; sick: boolean;
   is_planeswalker?: boolean; loyalty?: number | null;
   loyalty_abilities?: { i: number; cost: number }[]; activated?: boolean;
-  keywords?: string[]; types?: string[]; abilities?: string[];
+  keywords?: string[]; types?: string[]; subtypes?: string[]; abilities?: string[];
 };
 export type PlayerState = {
   name: string; life: number; lost: boolean; hand: number; library: number;
@@ -161,7 +161,7 @@ export function Seat({
           <AnimatePresence>
             {nonlands.map((pm) => (
               <CardMini
-                key={pm.uid} perm={pm} art={art[pm.name]} reduce={reduce}
+                key={pm.uid} perm={pm} art={pm.is_token ? undefined : art[pm.name]} reduce={reduce}
                 selectable={selectableUids?.has(pm.uid)}
                 selected={selectedUids?.has(pm.uid)}
                 onClick={onCard && selectableUids?.has(pm.uid) ? () => onCard(pm.uid) : undefined}
@@ -175,7 +175,7 @@ export function Seat({
         <motion.div layout={!reduce} className="row-cards lands">
           <AnimatePresence>
             {lands.map((pm) => (
-              <CardMini key={pm.uid} perm={pm} art={art[pm.name]} reduce={reduce}
+              <CardMini key={pm.uid} perm={pm} art={pm.is_token ? undefined : art[pm.name]} reduce={reduce}
                 onInspect={onInspect ? () => onInspect(pm) : undefined} />
             ))}
           </AnimatePresence>

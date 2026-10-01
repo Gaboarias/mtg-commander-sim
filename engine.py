@@ -667,6 +667,7 @@ class Game:
             "sick": pm.summoning_sick,
             "keywords": sorted(pm.keywords),
             "types": sorted(pm.card.types),
+            "subtypes": sorted(pm.card.subtypes),
             "abilities": _carddesc.describe(pm.card),
         }
 
