@@ -4069,6 +4069,35 @@ def test_saga_chapter_runs_fragment_effect():
     assert small.counters.get("+1/+1", 0) == 0
 
 
+def test_excava_attack_reanimates_with_finality():
+    # Disparo "al atacar" que reanima del cementerio con tope de CMV y contador de
+    # finalidad (al morir, se exilia). Respeta el tope de maná.
+    import cardsdb, cards
+    g, me, op = _duel()
+    me.graveyard = [
+        cards.creature("Bicho", "1G", 2, 2),             # cmv 2 (elegible)
+        cardsdb.build_card_from_data({"name": "Caro", "type_line": "Creature — Beast",
+                                      "mana_cost": "{5}{G}", "power": "6", "toughness": "6"}),  # cmv 6
+    ]
+    exc = cardsdb.build_card_from_data({
+        "name": "Excava", "type_line": "Creature — Dinosaur", "mana_cost": "{2}{W}{B}",
+        "power": "3", "toughness": "3", "keywords": ["Flying", "Haste"],
+        "oracle_text": "Flying, haste\nWhenever Excava attacks, return up to one target "
+                       "artifact, creature, or non-Aura enchantment card with mana value 3 "
+                       "or less from your graveyard to the battlefield with a finality "
+                       "counter on it."})
+    assert "attacks" in exc.triggers
+    perm = g.move_to_battlefield(exc, me)
+    exc.triggers["attacks"](g, perm)
+    g.sba()
+    revived = [p for p in me.battlefield if p.name == "Bicho"]
+    assert len(revived) == 1 and revived[0].counters.get("finality") == 1
+    assert not any(p.name == "Caro" for p in me.battlefield)   # cmv 6 excede el tope
+    g.to_graveyard(revived[0], "test")
+    assert any(c.name == "Bicho" for c in me.exile)            # finalidad -> exilio
+    assert not any(c.name == "Bicho" for c in me.graveyard)
+
+
 def test_saga_mass_edict_and_discard_and_mill():
     # Patrones comunes de capítulos de Saga: edict masivo, descarte global, self-mill.
     import cardsdb, cards

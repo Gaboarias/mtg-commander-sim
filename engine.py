@@ -1016,8 +1016,10 @@ class Game:
             ctrl.command.append(perm.card)
             self.log(f"{perm.name} vuelve a la zona de mando")
             return
-        # reemplazo "si moriría, exíliala en su lugar" (odio de cementerio)
-        if perm.card.is_creature() and self._dies_to_exile(perm):
+        # reemplazo "si moriría, exíliala en su lugar" (odio de cementerio) o
+        # contador de finalidad (finality counter): se exilia en vez de ir al GY.
+        if perm.card.is_creature() and (self._dies_to_exile(perm)
+                                        or perm.counters.get("finality")):
             ctrl.exile.append(perm.card)
             self.log(f"{perm.name} es exiliada en vez de ir al cementerio")
             return

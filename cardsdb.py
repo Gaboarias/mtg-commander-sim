@@ -520,6 +520,59 @@ def _short_label(s, n=52):
 def _fragment_effect(seg: str):
     """Parsea un fragmento de texto a (effect(g,ctrl,targets), target_spec, count).
     Reusa los helpers de remoción/monto/robar. effect=None si no se reconoce."""
+    # reanimación: "return [up to N] target <tipos> card... [with mana value N or less]
+    # from your graveyard to the battlefield [with a finality counter] [... flying]"
+    mre = re.search(r"return (?:up to \w+ )?target ([\w ,/'-]+?) cards?"
+                    r"(?: with (?:mana value|converted mana cost) (\d+) or less)?"
+                    r" from your graveyard to the battlefield", seg, re.I)
+    if mre:
+        _tt = mre.group(1).lower()
+        _cap = int(mre.group(2)) if mre.group(2) else None
+        _fin = "finality counter" in seg.lower()
+        _fly = bool(re.search(r"with flying", seg[mre.end():], re.I))
+
+        def _ok(c, _t=_tt):
+            hit = False
+            if "creature" in _t and c.is_creature():
+                hit = True
+            if "artifact" in _t and "artifact" in c.types:
+                hit = True
+            if "enchantment" in _t and "enchantment" in c.types:
+                if "aura" in _t:                       # "non-Aura enchantment"
+                    hit = hit or ("Aura" not in getattr(c, "subtypes", set()))
+                else:
+                    hit = True
+            if "permanent" in _t and bool(c.types & _PERMANENT_TYPES):
+                hit = True
+            if "land" in _t and c.is_land():
+                hit = True
+            return hit
+
+        def reanimate(game, ctrl, targets, _cap2=_cap, _fin2=_fin, _fly2=_fly):
+            pool = [c for c in ctrl.graveyard if _ok(c)
+                    and (_cap2 is None or (c.cost.cmc if c.cost else 0) <= _cap2)]
+            if not pool:
+                return
+            pool.sort(key=lambda c: (c.is_creature(),
+                                     (c.power + c.toughness) if c.is_creature() else 0),
+                      reverse=True)
+
+            def _do(card):
+                if card not in ctrl.graveyard:
+                    return
+                ctrl.graveyard.remove(card)
+                perm = game.move_to_battlefield(card, ctrl)
+                if perm is not None:
+                    if _fin2:
+                        perm.counters["finality"] = perm.counters.get("finality", 0) + 1
+                    if _fly2:
+                        perm.temp_keywords.add("flying")
+                    game.log(f"{ctrl.name} revive {card.name} del cementerio"
+                             + (" (contador de finalidad)" if _fin2 else ""))
+            _pick_card_from_zone(game, ctrl, pool, _do,
+                                 "Elegí una carta del cementerio para reanimar",
+                                 allow_none=True)
+        return reanimate, None, 1
     # copiar una habilidad activada/disparada (Strionic Resonator / Lithoform Engine):
     # como el motor resuelve las habilidades al instante, copiamos la última resuelta.
     if re.search(r"copy target (?:activated|triggered)", seg, re.I) or \
@@ -1761,7 +1814,8 @@ def _human_target_choice(game, ctrl, kind, prompt, options, apply_one,
         apply_one(options[0][1])
 
 
-def _pick_card_from_zone(game, ctrl, cards_list, apply_one, prompt, kind="reanimate"):
+def _pick_card_from_zone(game, ctrl, cards_list, apply_one, prompt, kind="reanimate",
+                         allow_none=False):
     """Elegir UNA carta de una zona (cementerio/exilio) para recuperar/revivir.
     El humano ve las cartas (imagen + nombre) en el modal y elige; el bot toma la
     primera (el que llama la lista ordenada de mejor a peor)."""
@@ -1777,7 +1831,7 @@ def _pick_card_from_zone(game, ctrl, cards_list, apply_one, prompt, kind="reanim
             "prompt": prompt,
             "options": [{"i": i, "name": c.name, "is_land": c.is_land(), "ok": True}
                         for i, c in enumerate(cands)],
-            "allow_none": False,
+            "allow_none": bool(allow_none),
             "_apply": _apply,
         }
     else:
