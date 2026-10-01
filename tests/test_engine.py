@@ -4069,6 +4069,41 @@ def test_saga_chapter_runs_fragment_effect():
     assert small.counters.get("+1/+1", 0) == 0
 
 
+def test_planeswalker_minus_animates_lands():
+    # Habilidad de lealtad que anima tierras: "untap up to two target lands you
+    # control. They become 5/5 Elemental creatures with flying and haste until end
+    # of turn." Deben pasar a 5/5 voladoras con prisa, seguir siendo tierras, y
+    # revertir al final del turno.
+    import cardsdb, cards
+    g, me, op = _duel()
+    l1 = g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me)
+    l1.tapped = True
+    l2 = g.move_to_battlefield(cards.land("Island", ["U"], basic=True), me)
+    l3 = g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), me)
+    nissa = cardsdb.build_card_from_data({
+        "name": "Nissa", "type_line": "Legendary Planeswalker — Nissa",
+        "mana_cost": "{3}{G}{G}", "loyalty": "5",
+        "oracle_text": "+2: Scry 2.\n0: Look at the top card of your library.\n"
+                       "−6: Untap up to two target lands you control. They become 5/5 "
+                       "Elemental creatures with flying and haste until end of turn. "
+                       "They're still lands."})
+    idx = next(i for i, (c, e) in enumerate(nissa.loyalty_abilities) if c == -6)
+    assert nissa.loyalty_abilities[idx][1] is not None       # la -6 tiene efecto real
+    pw = g.move_to_battlefield(nissa, me)
+    pw.counters["loyalty"] = 6
+    nissa.loyalty_abilities[idx][1](g, me, pw)
+    g.sba()
+    anim = [l for l in (l1, l2, l3) if l.is_creature()]
+    assert len(anim) == 2                                     # "up to two"
+    for l in anim:
+        assert l.power == 5 and l.toughness == 5
+        assert l.has("flying") and l.has("haste")
+        assert l.has_subtype("Elemental") and l.card.is_land()  # sigue siendo tierra
+        assert not l.tapped                                   # se enderezó
+    g.end_turn(me)
+    assert not any(l.is_creature() for l in (l1, l2, l3))     # revierte al fin del turno
+
+
 def test_magecraft_cast_or_copy_trigger():
     # Magecraft ("whenever you cast OR COPY an instant or sorcery spell") y el
     # disparo genérico "cast a spell" (Birgi) ahora se cablean.

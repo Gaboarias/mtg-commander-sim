@@ -1992,6 +1992,21 @@ def _loyalty_effect(text: str):
             cards.make_token(game, ctrl, "Token", _p, _t)
         return eff
 
+    # animar tierras: "untap up to N target lands you control. They become X/Y
+    # <Sub> creatures with <kw> until end of turn. They're still lands." (Nissa…)
+    ma = re.search(r"up to (\w+) target lands?.{0,80}?become (\d+)/(\d+) "
+                   r"(\w+) creatures?(?: with ([\w, ]+?))?(?: until end of turn|\.)", t)
+    if ma and _count_word(ma.group(1)):
+        n = _count_word(ma.group(1))
+        px, ty = int(ma.group(2)), int(ma.group(3))
+        sub = ma.group(4).capitalize()
+        kws = [v for pat, v in _TOKEN_KEYWORDS if re.search(pat, ma.group(5) or "")]
+        do_untap = "untap" in t
+
+        def eff(game, ctrl, perm, _n=n, _p=px, _tf=ty, _s=sub, _k=kws, _u=do_untap):
+            _animate_lands(game, ctrl, _n, _p, _tf, _s, _k, _u)
+        return eff
+
     # efectos con objetivo (destruir / exiliar / rebote / -X/-X / tap / poner
     # contadores): reusar el parser de fragmentos y AUTO-elegir el objetivo, para
     # que la habilidad de lealtad haga algo real en vez de solo mover la lealtad.
@@ -2033,6 +2048,53 @@ def _choose_loyalty_targets(game, ctrl, spec, n, apply_targets):
         _human_target_choice(game, ctrl, "etb_target",
                              "Elegí el objetivo de la habilidad de lealtad", cands, _do)
     _route_choice(game, ctrl, _prompt, lambda: apply_targets(auto))
+
+
+def _animate_lands(game, ctrl, n, power, tough, sub, kws, do_untap):
+    """Convierte hasta `n` tierras propias en criaturas X/Y hasta el fin del turno
+    (temporal: temp_creature + temp_pt + temp_subtypes + temp_keywords). El humano
+    elige cuáles (modal, encadenado); el bot toma las primeras. Opcionalmente las
+    endereza. Siguen siendo tierras."""
+    def _do(land):
+        if do_untap:
+            land.tapped = False
+        land.temp_creature = True
+        land.temp_pt = [power, tough]            # base de tierra es 0/0 -> X/Y
+        if sub:
+            land.temp_subtypes.add(sub)
+        for k in kws:
+            land.temp_keywords.add(k)
+        game.log(f"{land.name} se vuelve una criatura {power}/{tough} {sub}")
+
+    lands = [pm for pm in ctrl.battlefield if pm.card.is_land()]
+    if not lands:
+        return
+    if ctrl is getattr(game, "interactive_human", None):
+        st = {"left": max(1, n)}
+
+        def _prompt():
+            if st["left"] <= 0:
+                return
+            pool = [pm for pm in ctrl.battlefield if pm.card.is_land()
+                    and not pm.temp_creature]
+            if not pool:
+                return
+            cands = [(pm.name + (" (girada)" if pm.tapped else ""), pm) for pm in pool]
+
+            def _pick(land):
+                _do(land)
+                st["left"] -= 1
+                _prompt()
+            _human_target_choice(
+                game, ctrl, "etb_target",
+                f"Elegí una tierra para animar ({st['left']} restante(s), o ninguna)",
+                cands, _pick, allow_none=True)
+        _route_choice(game, ctrl, _prompt, lambda: [_do(l) for l in lands[:max(1, n)]])
+    else:
+        # bot: prioriza tierras ya enderezadas/sin animar, hasta n
+        picks = sorted(lands, key=lambda pm: pm.tapped)[:max(1, n)]
+        for l in picks:
+            _do(l)
 
 
 def _auto_loyalty_targets(game, ctrl, spec, n):

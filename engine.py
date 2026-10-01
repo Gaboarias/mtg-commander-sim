@@ -221,6 +221,7 @@ class Permanent:
         self.perma_keywords = set()      # keywords persistentes (soulbond, etc.)
         self.set_base_pt = None          # P/T FIJADA por un efecto ("es un 1/1 …")
         self.added_subtypes = set()      # subtipos otorgados (p. ej. Spirit) "además"
+        self.temp_subtypes = set()       # subtipos "hasta el fin del turno" (tierras animadas)
         self.goaded = False              # goad: debe atacar en su próximo turno
         self.must_attack = False
         self.cant_block = False
@@ -302,6 +303,8 @@ class Permanent:
         if s in {x.lower() for x in self.card.subtypes}:
             return True
         if s in {x.lower() for x in self.added_subtypes}:
+            return True
+        if s in {x.lower() for x in self.temp_subtypes}:
             return True
         if self.counters.get("everything", 0) > 0:
             return True
@@ -2504,7 +2507,8 @@ class Game:
             for perm in pl.battlefield:
                 perm.temp_pt = [0, 0]
                 perm.temp_keywords = set()
-                perm.temp_creature = False       # el vehículo deja de ser criatura
+                perm.temp_creature = False       # el vehículo/tierra deja de ser criatura
+                perm.temp_subtypes = set()       # subtipos temporales (tierras animadas)
         # el goad/obligación de atacar del jugador activo se agota tras su combate
         for perm in p.battlefield:
             perm.goaded = False
