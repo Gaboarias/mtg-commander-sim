@@ -93,6 +93,8 @@ class InteractiveGame:
         self.g.pending_choice = None
         # y pausa el turno del bot cuando el humano puede responder a un hechizo
         self.g.reaction_check = self._offer_reaction
+        # cascada: cuando el humano cascadea un hechizo con objetivo, elige a mano
+        self.g.cascade_target_hook = self._cascade_choose
         self._ai_mulligans()        # los rivales hacen mulligan solos
         # el humano decide en la fase "mulligan" (ver mulligan()/keep())
 
@@ -752,6 +754,45 @@ class InteractiveGame:
         if ts == "stack_spell":
             return [self.g.stack[u] for u in uids if 0 <= u < len(self.g.stack)]
         return None
+
+    def _cascade_choose(self, card, ctrl):
+        """Hook de cascada: el humano eligió cascadear un hechizo con objetivo.
+        Arma un pending_choice con los objetivos legales; al confirmar, resuelve
+        el hechizo gratis contra el objetivo elegido y lo manda al cementerio.
+        Si no hay objetivo legal, lo resuelve igual (auto) para no trabar el flujo."""
+        spec = getattr(card, "target_spec", None)
+        opts = self._targets_for_spec(spec)
+
+        def _resolve(targets):
+            if getattr(card, "on_cast_resolve", None):
+                card.on_cast_resolve(self.g, ctrl, targets or [])
+            ctrl.graveyard.append(card)
+
+        if not opts:
+            _resolve(self._auto_targets(card))
+            return
+
+        keys = [o.get("uid", o.get("idx")) for o in opts]
+        options = []
+        for i, o in enumerate(opts):
+            extra = f" · {o['from']}" if o.get("from") else ""
+            options.append({"i": i, "name": f"{o['name']}{extra}"})
+
+        def _apply(idx):
+            if idx is None or not (0 <= idx < len(keys)):
+                tgts = self._auto_targets(card)
+            else:
+                tgts = self._chosen_targets(card, [keys[idx]], spec=spec)
+            _resolve(tgts)
+
+        self.g.pending_choice = {
+            "kind": "cascade_target",
+            "prompt": f"Cascada: elegí el objetivo de {card.name}",
+            "options": options,
+            "card": card.name,
+            "allow_none": False,
+            "_apply": _apply,
+        }
 
     # -- acciones del humano --------------------------------------------- #
     def play_land(self, i):

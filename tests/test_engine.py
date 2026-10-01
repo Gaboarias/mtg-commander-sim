@@ -3958,6 +3958,63 @@ def test_cascade_creature_triggers_on_enter():
     assert any(p.name == "Small" for p in me.battlefield)
 
 
+def test_cascade_human_picks_target_manually():
+    # Cuando el HUMANO cascadea un hechizo con objetivo del lanzador (target_spec
+    # en la carta, p. ej. "Destroy target creature"), el motor pausa con un
+    # pending_choice "cascade_target" y el humano decide a qué apunta.
+    import interactive, cards, cardsdb, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human(); op = ig.g.opponents(hu)[0]
+
+    chico = ig.g.move_to_battlefield(cards.creature("Chico", "1R", 2, 2), op)
+    grande = ig.g.move_to_battlefield(cards.creature("Grande", "4G", 5, 5), op)
+
+    rem = cardsdb.build_card_from_data({
+        "name": "Fulgor", "type_line": "Instant", "mana_cost": "{1}{B}",
+        "oracle_text": "Destroy target creature."})
+    assert getattr(rem, "target_spec", None) == "opp_creature"
+    hu.library = [cards.land("Forest", ["G"], basic=True) for _ in range(4)] + [rem]
+
+    casc = cardsdb.build_card_from_data({
+        "name": "Bloom", "type_line": "Sorcery", "mana_cost": "{4}{G}",
+        "oracle_text": "Cascade", "keywords": ["Cascade"]})
+    casc.on_cast_resolve(ig.g, hu, [])
+
+    pc = ig.g.pending_choice
+    assert pc is not None and pc["kind"] == "cascade_target"
+    names = [o["name"] for o in pc["options"]]
+    assert any(n.startswith("Chico") for n in names) and any(n.startswith("Grande") for n in names)
+    # elijo "Grande" a mano (no es a quién apuntaría el auto)
+    idx = next(o["i"] for o in pc["options"] if o["name"].startswith("Grande"))
+    ig.resolve_choice(idx)
+
+    assert grande not in op.battlefield                    # destruí la que elegí
+    assert chico in op.battlefield                         # la otra quedó
+    assert any(c.name == "Fulgor" for c in hu.graveyard)   # el hechizo fue al cementerio
+
+
+def test_cascade_bot_no_target_prompt():
+    # Un bot que cascadea un hechizo con objetivo NO abre pending_choice (no hay
+    # modal para la IA): resuelve sin trabar el motor headless.
+    import interactive, cards, cardsdb, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    bot = ig.g.opponents(ig.human())[0]
+    ig.g.move_to_battlefield(cards.creature("Víctima", "1R", 2, 2), ig.human())
+    rem = cardsdb.build_card_from_data({
+        "name": "Fulgor", "type_line": "Instant", "mana_cost": "{1}{B}",
+        "oracle_text": "Destroy target creature."})
+    bot.library = [cards.land("Island", ["U"], basic=True) for _ in range(4)] + [rem]
+    casc = cardsdb.build_card_from_data({
+        "name": "Bloom", "type_line": "Sorcery", "mana_cost": "{4}{G}",
+        "oracle_text": "Cascade", "keywords": ["Cascade"]})
+    casc.on_cast_resolve(ig.g, bot, [])
+    assert ig.g.pending_choice is None                     # la IA no pausa
+
+
 def test_self_death_trigger_creates_token_not_on_etb():
     import cardsdb
     g, me, op = _duel()

@@ -1177,6 +1177,7 @@ export default function Play() {
           discard: "Descartar (mano de más de 7)", may: "¿Querés hacerlo?",
           legend: "Regla de legendarios", x: "Elegí X",
           reanimate: "Elegí una carta del cementerio", exile_pick: "Elegí una carta del exilio",
+          cascade_target: "Cascada: elegí el objetivo",
         };
         const title = titles[ch.kind] || "Elegí una carta";
         const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno" : "No llevarme ninguna";

@@ -207,9 +207,18 @@ def _cascade_effect(cmc):
             if _is_permanent_card(hit):
                 game.move_to_battlefield(hit, ctrl)
             else:
-                if getattr(hit, "on_cast_resolve", None):
-                    hit.on_cast_resolve(game, ctrl, [])
-                ctrl.graveyard.append(hit)
+                hook = getattr(game, "cascade_target_hook", None)
+                spec = getattr(hit, "target_spec", None)
+                cnt = getattr(hit, "target_count", 1) or 0
+                if (hook is not None and spec and cnt >= 1
+                        and ctrl is getattr(game, "interactive_human", None)):
+                    # el humano elige el objetivo del hechizo cascadeado
+                    # (el hook arma pending_choice y resuelve al confirmar)
+                    hook(hit, ctrl)
+                else:
+                    if getattr(hit, "on_cast_resolve", None):
+                        hit.on_cast_resolve(game, ctrl, [])
+                    ctrl.graveyard.append(hit)
         game.rng.shuffle(exiled)
         for c in exiled:
             ctrl.library.insert(0, c)      # al fondo
