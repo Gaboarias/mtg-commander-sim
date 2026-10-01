@@ -128,6 +128,7 @@ class Card:
     produces: Optional[Callable] = None            # (perm, player) -> dict[color,int] OPCIONES
     on_etb: Optional[Callable] = None              # (game, controller, perm) -> None
     on_death: Optional[Callable] = None            # (game, controller, perm) -> None
+    on_leave: Optional[Callable] = None            # (game, controller, perm) -> None (deja el campo)
     on_cast_resolve: Optional[Callable] = None     # (game, controller, targets) -> None
     triggers: dict = field(default_factory=dict)   # {evento: (game, perm, **kw)}
     activated: Optional[Callable] = None           # declarado, sin invocar todavia
@@ -995,6 +996,8 @@ class Game:
         if perm not in ctrl.battlefield:
             return
         ctrl.battlefield.remove(perm)
+        if perm.card.on_leave:                # "cuando deja el campo" (muerte/exilio)
+            perm.card.on_leave(self, ctrl, perm)
         if getattr(perm, "_blitz", False):    # blitz: su muerte roba una carta
             ctrl.draw(1, self)
             self.log(f"{ctrl.name} roba una carta (blitz de {perm.name})")

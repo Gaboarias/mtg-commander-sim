@@ -4016,6 +4016,59 @@ def test_skyclave_etb_exiles_permanent_with_mv_cap():
     assert any(p.name == "Bicho" for p in op.battlefield)   # el CMV 2 quedó
 
 
+def test_skyclave_leave_makes_illusion_token():
+    # Al dejar el campo, el dueño de la carta exiliada crea una ficha X/X (X = CMV).
+    import cardsdb, cards
+    g, me, op = _duel()
+    g.move_to_battlefield(cardsdb.build_card_from_data(
+        {"name": "Trinket", "type_line": "Artifact", "mana_cost": "{3}"}), op)  # cmv 3
+    sky = cardsdb.build_card_from_data({
+        "name": "Skyclave Apparition", "type_line": "Creature — Kor Spirit",
+        "mana_cost": "{1}{W}{W}", "power": "2", "toughness": "2",
+        "oracle_text": "When this creature enters, exile up to one target nonland, "
+                       "nontoken permanent you don't control with mana value 4 or less.\n"
+                       "When this creature leaves the battlefield, the exiled card's owner "
+                       "creates an X/X blue Illusion creature token, where X is the mana "
+                       "value of the exiled card."})
+    assert sky.on_leave is not None
+    perm = g.move_to_battlefield(sky, me)              # bot exilia Trinket (cmv 3)
+    assert any(c.name == "Trinket" for c in op.exile)
+    g.to_graveyard(perm, "test")                       # deja el campo -> Ilusión
+    ills = [p for p in op.battlefield if p.is_token and p.name == "Illusion"]
+    assert len(ills) == 1 and ills[0].power == 3 and ills[0].toughness == 3
+
+
+def test_wave_of_reckoning_symmetric_wipe():
+    # "Each creature deals damage equal to its toughness to itself" mata a todas.
+    import cardsdb, cards
+    g, me, op = _duel()
+    g.move_to_battlefield(cards.creature("A", "1G", 2, 2), me)
+    g.move_to_battlefield(cards.creature("B", "4G", 5, 5), op)
+    wave = cardsdb.build_card_from_data({
+        "name": "Wave of Reckoning", "type_line": "Sorcery", "mana_cost": "{3}{W}{W}",
+        "oracle_text": "Each creature deals damage equal to its toughness to itself."})
+    assert wave.on_cast_resolve is not None
+    wave.on_cast_resolve(g, me, [])
+    g.sba()
+    assert not me.battlefield and not op.battlefield   # ambas murieron
+
+
+def test_saga_chapter_runs_fragment_effect():
+    # Un capítulo cubierto solo por _fragment_effect (poner contadores) ahora SÍ
+    # hace algo (antes solo logueaba): elige auto la criatura propia más grande.
+    import cardsdb, cards
+    g, me, op = _duel()
+    small = g.move_to_battlefield(cards.creature("Chico", "1G", 1, 1), me)
+    big = g.move_to_battlefield(cards.creature("Grande", "3G", 4, 4), me)
+    saga = cardsdb.build_card_from_data({
+        "name": "Contador Saga", "type_line": "Enchantment — Saga", "mana_cost": "{2}{G}",
+        "oracle_text": "(As this Saga enters and after your draw step, add a lore counter.)\n"
+                       "I — Put two +1/+1 counters on target creature."})
+    perm = g.move_to_battlefield(saga, me)             # dispara capítulo I
+    assert big.counters.get("+1/+1") == 2              # fue a la más grande (auto)
+    assert small.counters.get("+1/+1", 0) == 0
+
+
 def test_skyclave_etb_human_opens_target_picker():
     # Cuando lo controla el humano, el ETB abre el selector de objetivo (no auto).
     import interactive, cards, cardsdb, decks

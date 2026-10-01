@@ -1590,6 +1590,61 @@ def _parse_gy_triggers(oracle: str):
 _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
 
 
+def _auto_targets_for_saga(game, ctrl, spec, count):
+    """Objetivos elegidos automáticamente (deterministas) para un capítulo de Saga.
+    El capítulo es un disparo forzado; apuntamos a lo más razonable sin pausar."""
+    n = max(1, count or 1)
+    if spec == "own_creature":
+        pool = sorted(ctrl.creatures(), key=lambda p: (p.power + p.toughness), reverse=True)
+        return pool[:n]
+    if spec == "opp_creature":
+        pool = sorted(game.legal_creature_targets(ctrl),
+                      key=lambda p: (p.power, p.toughness), reverse=True)
+        return pool[:n]
+    if spec == "opp_player":
+        opps = game.opponents(ctrl)
+        return [min(opps, key=lambda o: o.life)] if opps else []
+    if spec == "own_perm":
+        return list(ctrl.battlefield)[:n]
+    typ_pred = {
+        "any_artifact": lambda p: "artifact" in p.card.types,
+        "any_enchantment": lambda p: "enchantment" in p.card.types,
+        "any_art_ench": lambda p: bool(p.card.types & {"artifact", "enchantment"}),
+        "any_planeswalker": lambda p: "planeswalker" in p.card.types,
+        "any_nonland": lambda p: not p.card.is_land(),
+        "any_perm": lambda p: True,
+    }
+    pred = typ_pred.get(spec)
+    if pred:
+        pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield
+                if pred(pm) and game.can_target(ctrl, pm)]
+        pool.sort(key=lambda p: (p.is_creature(), p.power if p.is_creature() else 0),
+                  reverse=True)
+        return pool[:n]
+    return []
+
+
+def _chapter_effect(body: str):
+    """Efecto de un capítulo de Saga. Primero el parser de monto (que ya abre UI de
+    objetivo para remoción puntual); si no, el parser por fragmento / dirigido con
+    objetivo AUTO (el capítulo es forzado). None si no se reconoce."""
+    eff = _generic_amount_effect(body)
+    if eff is not None:
+        return eff
+    for parser in (_fragment_effect, _targeted_special):
+        res = parser(body)
+        if res and res[0] is not None:
+            feff, spec, count = res
+            if spec is None:
+                return (lambda g, ctrl, *_a, _f=feff: _f(g, ctrl, []))
+
+            def run(g, ctrl, *_a, _f=feff, _s=spec, _n=count):
+                tgs = _auto_targets_for_saga(g, ctrl, _s, _n)
+                _f(g, ctrl, tgs)
+            return run
+    return None
+
+
 def _parse_saga(oracle: str):
     """Parsea los capítulos de un Saga: líneas 'I —', 'II, III —', etc.
     Devuelve ({n_capítulo: efecto(g,ctrl)}, último_capítulo) o None."""
@@ -1600,7 +1655,7 @@ def _parse_saga(oracle: str):
             continue
         nums = [_ROMAN.get(r.strip().lower()) for r in m.group(1).split(",")]
         body = m.group(2)
-        eff = _generic_amount_effect(body)
+        eff = _chapter_effect(body)
         if eff is None:
             eff = (lambda g, ctrl, *_a, _l=_short_label(body):
                    g.log(f"{ctrl.name}: {_l}"))
@@ -2523,6 +2578,22 @@ def _generic_amount_effect(oracle: str):
             for o in game.opponents(ctrl):
                 game.deal_damage(None, o, _n)
             game.log(f"{ctrl.name}: {_n} de daño a cada oponente")
+        return eff
+
+    # barrida simétrica: "each creature deals damage equal to its (power|toughness)
+    # to itself" (p. ej. Wave of Reckoning). Cada criatura se autodaña ese monto.
+    m = re.search(r"each creature deals damage equal to its (power|toughness) to itself", t)
+    if m:
+        which = m.group(1)
+
+        def eff(game, ctrl, *_a, _w=which):
+            for pl in game.players:
+                for pm in list(pl.creatures()):
+                    amt = pm.toughness if _w == "toughness" else pm.power
+                    if amt > 0:
+                        game.deal_damage(pm, pm, amt)
+            game.sba()
+            game.log(f"{ctrl.name}: cada criatura se hace daño igual a su {_w}")
         return eff
 
     # drenaje: "each opponent loses N life" (+ opcional "you gain that much/N life")
@@ -3530,6 +3601,60 @@ def build_card_from_data(data: dict) -> Card:
         geff = _generic_amount_effect(data.get("oracle_text", ""))
         if geff is not None:
             card.on_etb = geff
+
+    # Skyclave Apparition y similares: ETB exilia un permanente rival con tope de
+    # CMV y, al DEJAR el campo, el dueño crea una ficha X/X (X = CMV exiliado).
+    _sky_t = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "").lower())
+    _sky_etb = re.search(r"exile (?:up to \w+ )?target .*?permanent .*?"
+                         r"with (?:mana value|converted mana cost) (\d+) or less", _sky_t)
+    _sky_leave = re.search(r"leaves the battlefield.*?creates? an x/x (.*?) creature token"
+                           r".*?mana value of the exiled card", _sky_t)
+    if "creature" in types and _sky_etb and _sky_leave:
+        _cap = int(_sky_etb.group(1))
+        _subw = [w for w in (_sky_leave.group(1) or "").split()
+                 if w not in ("green", "white", "blue", "black", "red", "colorless", "and")]
+        _ill = _subw[-1].capitalize() if _subw else "Illusion"
+
+        def _skyclave_etb(game, ctrl, perm, _cap2=_cap):
+            def _cmv(pm):
+                return pm.card.cost.cmc if getattr(pm.card, "cost", None) else 0
+            pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield
+                    if not pm.card.is_land() and not pm.is_token and _cmv(pm) <= _cap2]
+            if not pool:
+                game.log(f"{ctrl.name}: no hay permanente rival válido para exiliar")
+                return
+            pool.sort(key=lambda pm: _cmv(pm), reverse=True)
+            cands = [(f"{pm.name} (CMV {_cmv(pm)}) · {pm.controller.name}", pm)
+                     for pm in pool]
+
+            def _do(victim):
+                owner = victim.controller
+                if victim not in owner.battlefield:
+                    return
+                mv = victim.card.cost.cmc if getattr(victim.card, "cost", None) else 0
+                owner.battlefield.remove(victim)
+                if not victim.is_token and victim.card is not owner.commander_card:
+                    owner.exile.append(victim.card)
+                perm._skyclave_exiled = (owner, mv)     # recordar para la salida
+                game.log(f"{ctrl.name} exilia {victim.name} (CMV {mv}) de {owner.name}")
+                game.sba()
+
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí un permanente del rival para exiliar (o ninguno)",
+                                 cands, _do, allow_none=True)
+
+        def _skyclave_leave(game, ctrl, perm, _sub=_ill):
+            info = getattr(perm, "_skyclave_exiled", None)
+            if not info:
+                return
+            owner, mv = info
+            perm._skyclave_exiled = None
+            cards.make_token(game, owner, _sub, mv, mv, subtypes=(_sub,))
+            game.log(f"{owner.name} crea una ficha {_sub} {mv}/{mv} "
+                     f"(por la carta exiliada de {perm.name})")
+
+        card.on_etb = _skyclave_etb
+        card.on_leave = _skyclave_leave
 
     # populate ("Populate" / "then populate"): copia tu mejor ficha de criatura.
     # Se ejecuta al resolverse el hechizo (encadenado con el efecto previo si lo hay).
