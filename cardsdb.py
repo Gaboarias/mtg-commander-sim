@@ -959,25 +959,56 @@ def _parse_activated(oracle: str, name: str = ""):
                         "effect": eff_self, "target_spec": None,
                         "target_count": 1, "is_copy_ability": False})
             continue
-        # quitar contadores de SÍ MISMA: "remove a/N <X> counter(s) from this/it/~"
-        # (Dark Depths, etc.). Usa el PERMANENTE fuente, como la rama de monstrosity.
-        mrc = re.search(r"remove (a|an|\d+|two|three|four|five|\w+) (\w+) counters? from",
-                        body, re.I)
+        # quitar contadores: "remove a/N <X> counter(s) from <destino>".
+        #   destino = this/it/~/<nombre>  -> de SÍ MISMA (usa el permanente fuente).
+        #   destino = target permanent/... -> de un objetivo elegido.
+        mrc = re.search(r"remove (a|an|\d+|two|three|four|five|\w+) "
+                        r"(?:([a-z]+) )?counters? from ([\w' ]+)", body, re.I)
         if mrc and (_rn := _count_word(mrc.group(1))):
-            _cn = mrc.group(2).lower()
+            _cn = (mrc.group(2) or "counters").lower()
+            _from = re.sub(r"[^a-z]", "", mrc.group(3).lower())
+            _self = (_from in ("this", "thispermanent", "thiscreature", "thisland",
+                               "thisartifact", "thisenchantment", "it", "itself", "")
+                     or (name_key and name_key and name_key in _from))
 
-            def eff_rc(g, c, perm, tg, _n=_rn, _k=_cn):
-                if perm is not None:
+            def _strip(perm, _n=_rn, _k=_cn):
+                if _k in ("counter", "counters"):      # genérico: cualquier tipo
+                    left = _n
+                    for kk in sorted(perm.counters, key=lambda x: -perm.counters[x]):
+                        if left <= 0:
+                            break
+                        take = min(left, perm.counters[kk])
+                        perm.counters[kk] -= take
+                        left -= take
+                else:
                     perm.counters[_k] = max(0, perm.counters.get(_k, 0) - _n)
-                    g.log(f"{perm.name}: quita {_n} contador(es) {_k} "
-                          f"(quedan {perm.counters[_k]})")
+
+            if _self:
+                def eff_self_rc(g, c, perm, tg, _s=_strip):
+                    if perm is not None:
+                        _s(perm)
+                        g.log(f"{perm.name}: quita contadores")
+                        g.sba()
+                out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                            "sacrifice_other": sac_other, "pay_life": pay_life,
+                            "discard": discard, "label": _short_label(body),
+                            "effect": eff_self_rc, "target_spec": None,
+                            "target_count": 1, "is_copy_ability": False})
+                continue
+            if _from.startswith("target"):
+                def eff_tgt_rc(g, c, tg=None, _s=_strip):
+                    for t_ in (tg or []):
+                        if hasattr(t_, "counters"):
+                            _s(t_)
+                            g.log(f"{c.name}: quita contadores de {t_.name}")
                     g.sba()
-            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
-                        "sacrifice_other": sac_other, "pay_life": pay_life,
-                        "discard": discard, "label": _short_label(body),
-                        "effect": eff_rc, "target_spec": None,
-                        "target_count": 1, "is_copy_ability": False})
-            continue
+                out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                            "sacrifice_other": sac_other, "pay_life": pay_life,
+                            "discard": discard, "label": _short_label(body),
+                            "effect": (lambda g, c, perm, tg, _e=eff_tgt_rc: _e(g, c, tg)),
+                            "target_spec": "any_perm", "target_count": 1,
+                            "is_copy_ability": False})
+                continue
         eff, spec, count = _fragment_effect(body)
         if eff is None:
             # efecto no modelado: EXPONER igual la habilidad con un respaldo visible,

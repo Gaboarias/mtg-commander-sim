@@ -4099,6 +4099,37 @@ def test_dark_depths_remove_counters_makes_marit_lage():
     assert ml[0].has_subtype("Avatar") and ml[0].is_token
 
 
+def test_remove_counters_from_target_and_dark_depths_combo():
+    # "Sacrifice ~: Remove three counters from target permanent" (Vampire Hexmage):
+    # ability DIRIGIDA (any_perm). Vaciar los contadores de Dark Depths así también
+    # dispara Marit Lage (consistente: cualquier fuente que baje a 0).
+    import cardsdb, cards
+    dd = cardsdb.build_card_from_data({
+        "name": "Dark Depths", "type_line": "Legendary Snow Land", "mana_cost": "",
+        "oracle_text": "Dark Depths enters with ten ice counters on it.\n"
+                       "{3}: Remove an ice counter from Dark Depths.\n"
+                       "When Dark Depths has no ice counters on it, sacrifice it. If you "
+                       "do, create Marit Lage, a legendary 20/20 black Avatar creature "
+                       "token with flying and indestructible."})
+    hexmage = cardsdb.build_card_from_data({
+        "name": "Vampire Hexmage", "type_line": "Creature — Vampire Shaman",
+        "mana_cost": "{B}{B}", "power": "2", "toughness": "2",
+        "oracle_text": "First strike, deathtouch\nSacrifice Vampire Hexmage: Remove "
+                       "three counters from target permanent."})
+    ab = hexmage.activated_abilities[0]
+    assert ab["target_spec"] == "any_perm"                # dirigida, NO a sí misma
+    g, me, op = _duel()
+    ddp = g.move_to_battlefield(dd, me)
+    hp = g.move_to_battlefield(hexmage, me)
+    for _ in range(4):                                    # 10 -> 7 -> 4 -> 1 -> 0
+        ab["effect"](g, me, hp, [ddp])
+        g.sba()
+        if ddp not in me.battlefield:
+            break
+    assert ddp not in me.battlefield
+    assert any(p.name == "Marit Lage" for p in me.battlefield)
+
+
 def test_nissa_plus_scry_and_zero_put_top():
     # +2 Scry 2 (se cablea sin error) y 0: poner el tope si es tierra o criatura
     # con CMV <= lealtad.
