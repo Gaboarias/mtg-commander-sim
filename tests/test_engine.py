@@ -4085,15 +4085,19 @@ def test_excava_attack_reanimates_with_finality():
         "oracle_text": "Flying, haste\nWhenever Excava attacks, return up to one target "
                        "artifact, creature, or non-Aura enchantment card with mana value 3 "
                        "or less from your graveyard to the battlefield with a finality "
-                       "counter on it."})
+                       "counter on it. It's a 1/1 Spirit creature with flying in addition "
+                       "to its other types."})
     assert "attacks" in exc.triggers
     perm = g.move_to_battlefield(exc, me)
     exc.triggers["attacks"](g, perm)
     g.sba()
     revived = [p for p in me.battlefield if p.name == "Bicho"]
     assert len(revived) == 1 and revived[0].counters.get("finality") == 1
+    r = revived[0]
+    assert r.power == 1 and r.toughness == 1                   # pasa a 1/1
+    assert r.has_subtype("Spirit") and r.has("flying")        # Spirit con flying
     assert not any(p.name == "Caro" for p in me.battlefield)   # cmv 6 excede el tope
-    g.to_graveyard(revived[0], "test")
+    g.to_graveyard(r, "test")
     assert any(c.name == "Bicho" for c in me.exile)            # finalidad -> exilio
     assert not any(c.name == "Bicho" for c in me.graveyard)
 

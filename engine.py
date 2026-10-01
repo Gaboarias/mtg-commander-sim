@@ -219,6 +219,8 @@ class Permanent:
         self.temp_keywords = set()       # keywords otorgadas "hasta el fin del turno"
         self.temp_creature = False       # vehículo tripulado (crew): criatura este turno
         self.perma_keywords = set()      # keywords persistentes (soulbond, etc.)
+        self.set_base_pt = None          # P/T FIJADA por un efecto ("es un 1/1 …")
+        self.added_subtypes = set()      # subtipos otorgados (p. ej. Spirit) "además"
         self.goaded = False              # goad: debe atacar en su próximo turno
         self.must_attack = False
         self.cant_block = False
@@ -265,7 +267,11 @@ class Permanent:
 
     def _base_pt(self):
         pt, _off = self._mutation()
-        return pt if pt else (self.card.power, self.card.toughness)
+        if pt:
+            return pt
+        if self.set_base_pt is not None:         # "es un 1/1 …" fija la P/T base
+            return self.set_base_pt
+        return (self.card.power, self.card.toughness)
 
     @property
     def power(self) -> int:
@@ -294,6 +300,8 @@ class Permanent:
         con 'everything' es de todos los tipos de tierra."""
         s = sub.lower()
         if s in {x.lower() for x in self.card.subtypes}:
+            return True
+        if s in {x.lower() for x in self.added_subtypes}:
             return True
         if self.counters.get("everything", 0) > 0:
             return True
@@ -668,7 +676,7 @@ class Game:
             "sick": pm.summoning_sick,
             "keywords": sorted(pm.keywords),
             "types": sorted(pm.card.types),
-            "subtypes": sorted(pm.card.subtypes),
+            "subtypes": sorted(set(pm.card.subtypes) | pm.added_subtypes),
             "abilities": _carddesc.describe(pm.card),
         }
 

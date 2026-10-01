@@ -530,6 +530,16 @@ def _fragment_effect(seg: str):
         _cap = int(mre.group(2)) if mre.group(2) else None
         _fin = "finality counter" in seg.lower()
         _fly = bool(re.search(r"with flying", seg[mre.end():], re.I))
+        # "It's a 1/1 Spirit creature with flying in addition to its other types"
+        _mbec = re.search(r"it'?s? an? (\d+)/(\d+) (\w+) creature"
+                          r"(?: with ([\w ,]+?))?(?: in addition|\.|$)",
+                          seg[mre.end():], re.I)
+        _becomes = None
+        if _mbec:
+            _bk = [v for pat, v in _TOKEN_KEYWORDS
+                   if re.search(pat, _mbec.group(4) or "", re.I)]
+            _becomes = (int(_mbec.group(1)), int(_mbec.group(2)),
+                        _mbec.group(3).capitalize(), _bk)
 
         def _ok(c, _t=_tt):
             hit = False
@@ -548,7 +558,8 @@ def _fragment_effect(seg: str):
                 hit = True
             return hit
 
-        def reanimate(game, ctrl, targets, _cap2=_cap, _fin2=_fin, _fly2=_fly):
+        def reanimate(game, ctrl, targets, _cap2=_cap, _fin2=_fin, _fly2=_fly,
+                      _bec=_becomes):
             pool = [c for c in ctrl.graveyard if _ok(c)
                     and (_cap2 is None or (c.cost.cmc if c.cost else 0) <= _cap2)]
             if not pool:
@@ -566,9 +577,17 @@ def _fragment_effect(seg: str):
                     if _fin2:
                         perm.counters["finality"] = perm.counters.get("finality", 0) + 1
                     if _fly2:
-                        perm.temp_keywords.add("flying")
+                        perm.perma_keywords.add("flying")
+                    if _bec:                       # "es un 1/1 Spirit con flying…"
+                        px, ty, sub, bks = _bec
+                        perm.set_base_pt = (px, ty)
+                        perm.added_subtypes.add(sub)
+                        perm.temp_creature = True   # garantiza que sea criatura
+                        for k in bks:
+                            perm.perma_keywords.add(k)
                     game.log(f"{ctrl.name} revive {card.name} del cementerio"
-                             + (" (contador de finalidad)" if _fin2 else ""))
+                             + (" (contador de finalidad)" if _fin2 else "")
+                             + (f", ahora {_bec[0]}/{_bec[1]} {_bec[2]}" if _bec else ""))
             _pick_card_from_zone(game, ctrl, pool, _do,
                                  "Elegí una carta del cementerio para reanimar",
                                  allow_none=True)
@@ -964,7 +983,7 @@ def _attack_trigger_effect(oracle: str):
     """'Whenever ~ attacks, <efecto>' -> callback de trigger (g, perm, **kw) o None.
     Cubre p. ej. Laelia (al atacar, exiliar el tope y poder jugarla)."""
     t = re.sub(r"\s+", " ", (oracle or "")).strip()
-    m = re.search(r"whenever [^.]{0,50}? attacks,?\s*(.{0,180})", t, re.I)
+    m = re.search(r"whenever [^.]{0,50}? attacks,?\s*(.{0,400})", t, re.I)
     if not m:
         return None
     body = m.group(1)
