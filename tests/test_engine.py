@@ -4069,6 +4069,29 @@ def test_saga_chapter_runs_fragment_effect():
     assert small.counters.get("+1/+1", 0) == 0
 
 
+def test_saga_chapter_human_picks_target():
+    # Capítulo de Saga con objetivo (contadores) controlado por el humano: abre el
+    # modal y aplica al elegido, no al auto.
+    import interactive, cards, cardsdb, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    chico = ig.g.move_to_battlefield(cards.creature("Chico", "1G", 1, 1), hu)
+    grande = ig.g.move_to_battlefield(cards.creature("Grande", "3G", 4, 4), hu)
+    saga = cardsdb.build_card_from_data({
+        "name": "Contador Saga", "type_line": "Enchantment — Saga", "mana_cost": "{2}{G}",
+        "oracle_text": "(As this Saga enters and after your draw step, add a lore counter.)\n"
+                       "I — Put two +1/+1 counters on target creature."})
+    ig.g.move_to_battlefield(saga, hu)                 # capítulo I -> modal
+    pc = ig.g.pending_choice
+    assert pc is not None and pc["kind"] == "etb_target"
+    idx = next(o["i"] for o in pc["options"] if o["name"].startswith("Chico"))
+    ig.resolve_choice(idx)
+    assert chico.counters.get("+1/+1") == 2            # fue al elegido a mano
+    assert grande.counters.get("+1/+1", 0) == 0        # no al auto (más grande)
+
+
 def test_skyclave_etb_human_opens_target_picker():
     # Cuando lo controla el humano, el ETB abre el selector de objetivo (no auto).
     import interactive, cards, cardsdb, decks

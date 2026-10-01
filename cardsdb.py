@@ -1590,22 +1590,24 @@ def _parse_gy_triggers(oracle: str):
 _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
 
 
-def _auto_targets_for_saga(game, ctrl, spec, count):
-    """Objetivos elegidos automáticamente (deterministas) para un capítulo de Saga.
-    El capítulo es un disparo forzado; apuntamos a lo más razonable sin pausar."""
-    n = max(1, count or 1)
+def _saga_candidates(game, ctrl, spec):
+    """Objetivos legales (etiqueta, objeto) para un capítulo de Saga con `spec`,
+    ordenados de mejor a peor (el bot toma los primeros)."""
+    def cl(pm):
+        return (f"{pm.name} {pm.power}/{pm.toughness} · {pm.controller.name}"
+                if pm.is_creature() else f"{pm.name} · {pm.controller.name}")
     if spec == "own_creature":
         pool = sorted(ctrl.creatures(), key=lambda p: (p.power + p.toughness), reverse=True)
-        return pool[:n]
+        return [(f"{p.name} {p.power}/{p.toughness}", p) for p in pool]
     if spec == "opp_creature":
         pool = sorted(game.legal_creature_targets(ctrl),
                       key=lambda p: (p.power, p.toughness), reverse=True)
-        return pool[:n]
+        return [(cl(p), p) for p in pool]
     if spec == "opp_player":
-        opps = game.opponents(ctrl)
-        return [min(opps, key=lambda o: o.life)] if opps else []
+        return [(f"{o.name} ({o.life} de vida)", o)
+                for o in sorted(game.opponents(ctrl), key=lambda o: o.life)]
     if spec == "own_perm":
-        return list(ctrl.battlefield)[:n]
+        return [(cl(p), p) for p in ctrl.battlefield]
     typ_pred = {
         "any_artifact": lambda p: "artifact" in p.card.types,
         "any_enchantment": lambda p: "enchantment" in p.card.types,
@@ -1620,14 +1622,44 @@ def _auto_targets_for_saga(game, ctrl, spec, count):
                 if pred(pm) and game.can_target(ctrl, pm)]
         pool.sort(key=lambda p: (p.is_creature(), p.power if p.is_creature() else 0),
                   reverse=True)
-        return pool[:n]
+        return [(cl(p), p) for p in pool]
     return []
+
+
+def _saga_run_targeted(game, ctrl, feff, spec, count):
+    """Ejecuta el efecto dirigido de un capítulo. El HUMANO elige objetivo (modal,
+    hasta `count`, opcional); el bot toma automáticamente los mejores (determinista)."""
+    n = max(1, count or 1)
+    cands = _saga_candidates(game, ctrl, spec)
+    if not cands:
+        return
+    if ctrl is getattr(game, "interactive_human", None):
+        st = {"left": n}
+
+        def _prompt():
+            if st["left"] <= 0:
+                return
+            pool = _saga_candidates(game, ctrl, spec)   # recomputar: el tablero cambió
+            if not pool:
+                return
+
+            def _do(obj, _f=feff):
+                _f(game, ctrl, [obj])
+                st["left"] -= 1
+                _prompt()                               # encadena la siguiente elección
+            _human_target_choice(
+                game, ctrl, "etb_target",
+                f"Saga: elegí objetivo ({st['left']} restante(s), o ninguno)",
+                pool, _do, allow_none=True)
+        _prompt()
+    else:
+        feff(game, ctrl, [obj for _l, obj in cands[:n]])
 
 
 def _chapter_effect(body: str):
     """Efecto de un capítulo de Saga. Primero el parser de monto (que ya abre UI de
-    objetivo para remoción puntual); si no, el parser por fragmento / dirigido con
-    objetivo AUTO (el capítulo es forzado). None si no se reconoce."""
+    objetivo para remoción puntual); si no, el parser por fragmento / dirigido. Los
+    efectos con objetivo abren el modal para el humano y auto-apuntan para el bot."""
     eff = _generic_amount_effect(body)
     if eff is not None:
         return eff
@@ -1639,8 +1671,7 @@ def _chapter_effect(body: str):
                 return (lambda g, ctrl, *_a, _f=feff: _f(g, ctrl, []))
 
             def run(g, ctrl, *_a, _f=feff, _s=spec, _n=count):
-                tgs = _auto_targets_for_saga(g, ctrl, _s, _n)
-                _f(g, ctrl, tgs)
+                _saga_run_targeted(g, ctrl, _f, _s, _n)
             return run
     return None
 
