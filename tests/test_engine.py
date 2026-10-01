@@ -4099,6 +4099,42 @@ def test_dark_depths_remove_counters_makes_marit_lage():
     assert ml[0].has_subtype("Avatar") and ml[0].is_token
 
 
+def test_staff_of_the_storyteller_tokens_and_counter_cost():
+    # Disparo "whenever you create one or more creature tokens -> put a story
+    # counter" + coste "Remove a story counter: Draw a card".
+    import cardsdb, cards
+    staff = cardsdb.build_card_from_data({
+        "name": "Staff of the Storyteller", "type_line": "Artifact", "mana_cost": "{2}{W}",
+        "oracle_text": "When this artifact enters, create a 1/1 white Spirit creature "
+                       "token with flying.\nWhenever you create one or more creature "
+                       "tokens, put a story counter on this artifact.\n{W}, {T}, Remove a "
+                       "story counter from this artifact: Draw a card."})
+    assert "token_created" in staff.triggers
+    ab = next(a for a in staff.activated_abilities if a.get("rm_counter"))
+    assert ab["rm_counter"] == {"name": "story", "n": 1}
+    g, me, op = _duel()
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Plains", ["W"], basic=True), me)
+    me.library = [cards.creature("C%d" % i, "1G", 1, 1) for i in range(3)]
+    perm = g.move_to_battlefield(staff, me)
+    g.resolve_stack(); g.sba()
+    assert sum(1 for p in me.battlefield if p.name == "Spirit") == 1
+    assert perm.counters.get("story") == 1               # el token del ETB dio 1
+    cards.make_token(g, me, "Soldier", 1, 1)             # otro token -> otro contador
+    g.resolve_stack(); g.sba()
+    assert perm.counters.get("story") == 2
+    # activar: paga {W}{T} + quita 1 contador story -> roba
+    i_draw = next(i for i, a in enumerate(staff.activated_abilities) if a.get("rm_counter"))
+    h0 = len(me.hand)
+    assert g.activate_ability(perm, i_draw) is True
+    g.resolve_stack(); g.sba()
+    assert len(me.hand) == h0 + 1 and perm.counters.get("story") == 1
+    # sin contadores no se puede activar (quitamos el último primero)
+    perm.counters["story"] = 0
+    perm.tapped = False
+    assert g.activate_ability(perm, i_draw) is False
+
+
 def test_graveyard_shuffle_multiselect():
     # 2a habilidad de Perpetual Timepiece: coste "Exile this artifact" + "shuffle
     # any number of target cards from your graveyard into your library".

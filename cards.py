@@ -83,10 +83,17 @@ def make_token(game, player, name, power, toughness, kw=(), subtypes=(), counter
         tags={"creature"},
     )
     last = None
+    made = 0
     for _ in range(game.token_multiplier(player)):     # dobladores de fichas
         last = game.move_to_battlefield(_copy.deepcopy(tok), player, is_token=True)
-        if last is not None and counters:              # ficha "con N contadores +1/+1"
-            game.add_counters(last, "+1/+1", counters)
+        if last is not None:
+            made += 1
+            if counters:                               # ficha "con N contadores +1/+1"
+                game.add_counters(last, "+1/+1", counters)
+    if made:
+        # "whenever you create one or more creature tokens, …" (Staff of the
+        # Storyteller, etc.). Una creación = un evento (no por ficha).
+        game.emit("token_created", player=player, n=made)
     return last
 
 

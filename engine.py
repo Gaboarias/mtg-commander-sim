@@ -525,7 +525,7 @@ class StackObject:
 
 class Game:
     SELF_SCOPED = {"upkeep", "end_step", "draw", "landfall", "cast", "begin_combat",
-                   "gain_life"}
+                   "gain_life", "token_created"}
     # descripción amigable de cada evento, para el resumen de habilidades
     EVENT_KIND = {
         "etb": "cuando algo entra al campo", "landfall": "al jugar una tierra",
@@ -1648,7 +1648,14 @@ class Game:
             return False   # pagar vida no puede dejarte en 0 o menos
         if disc > 0 and len(ctrl.hand) < disc:
             return False
+        rmc = ab.get("rm_counter")
+        if rmc and perm.counters.get(rmc["name"], 0) < rmc["n"]:
+            return False   # sin contadores suficientes para pagar el coste
         ctrl.pay(ab.get("cost"))
+        if rmc:
+            perm.counters[rmc["name"]] = perm.counters.get(rmc["name"], 0) - rmc["n"]
+            self.log(f"{ctrl.name} quita {rmc['n']} contador(es) {rmc['name']} "
+                     f"de {perm.name} (coste)")
         if ab.get("tap"):
             perm.tapped = True
         # pagar los costes adicionales (todos son parte del coste, no van a la pila)

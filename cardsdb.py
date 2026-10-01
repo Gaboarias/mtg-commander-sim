@@ -875,6 +875,7 @@ def _parse_activated(oracle: str, name: str = ""):
         syms = []
         sac_self = False
         exile_self = False
+        rm_counter = None  # {"name": str, "n": int} — quitar contadores de SÍ MISMA (coste)
         sac_other = None   # {"count": n, "type": "..."} — sacrificar OTRAS permanentes
         pay_life = 0
         discard = 0        # nº de cartas a descartar (-1 = toda la mano)
@@ -889,6 +890,15 @@ def _parse_activated(oracle: str, name: str = ""):
                 tail = key[len("exile"):]
                 if tail.startswith(("this", "it", "~")) or (name_key and tail == name_key):
                     exile_self = True
+                    continue
+            # "Remove a/N <X> counter(s) from this/~/<nombre>" como coste
+            mrc_cost = re.match(r"remove (a|an|\d+|two|three|four|five|\w+) "
+                                r"([a-z]+) counters? from ([\w' ]+)", rest)
+            if mrc_cost and _count_word(mrc_cost.group(1)):
+                _frm = re.sub(r"[^a-z]", "", mrc_cost.group(3))
+                if _frm.startswith(("this", "it", "~")) or (name_key and name_key in _frm):
+                    rm_counter = {"name": mrc_cost.group(2).lower(),
+                                  "n": _count_word(mrc_cost.group(1))}
                     continue
             if key.startswith("sacrifice"):
                 tail = key[len("sacrifice"):]
@@ -920,8 +930,9 @@ def _parse_activated(oracle: str, name: str = ""):
         if bad:
             continue
         # se acepta una habilidad sin maná/{T} solo si tiene un coste real (sacrificio,
-        # exiliarse, pagar vida, descartar) — p. ej. "Sacrifice a creature: Add {C}{C}".
-        if not syms and not (sac_self or exile_self or sac_other or pay_life or discard):
+        # exiliarse, quitar contadores, pagar vida, descartar).
+        if not syms and not (sac_self or exile_self or rm_counter or sac_other
+                             or pay_life or discard):
             continue
         tap = any(s.upper() == "T" for s in syms)
         mana = "".join("{%s}" % s for s in syms if s.upper() != "T")
@@ -942,7 +953,7 @@ def _parse_activated(oracle: str, name: str = ""):
             eff = (lambda g, c, tg=None, _n=(amt or 1):
                    (setattr(c, "mana_pool", c.mana_pool + _n),
                     g.log(f"{c.name} agrega {_n} maná")))
-            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self, "rm_counter": rm_counter,
                         "sacrifice_other": sac_other, "pay_life": pay_life,
                         "discard": discard, "label": _short_label(body),
                         "effect": (lambda g, c, perm, tg, _e=eff: _e(g, c, tg)),
@@ -959,7 +970,7 @@ def _parse_activated(oracle: str, name: str = ""):
                 if perm is not None:
                     g.add_counters(perm, "+1/+1", _n)
                     perm.monstrous = True
-            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self, "rm_counter": rm_counter,
                         "sacrifice_other": sac_other, "pay_life": pay_life,
                         "discard": discard, "label": _short_label(body),
                         "effect": eff_self, "target_spec": None,
@@ -995,7 +1006,7 @@ def _parse_activated(oracle: str, name: str = ""):
                         _s(perm)
                         g.log(f"{perm.name}: quita contadores")
                         g.sba()
-                out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
+                out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self, "rm_counter": rm_counter,
                             "sacrifice_other": sac_other, "pay_life": pay_life,
                             "discard": discard, "label": _short_label(body),
                             "effect": eff_self_rc, "target_spec": None,
@@ -1008,7 +1019,7 @@ def _parse_activated(oracle: str, name: str = ""):
                             _s(t_)
                             g.log(f"{c.name}: quita contadores de {t_.name}")
                     g.sba()
-                out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
+                out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self, "rm_counter": rm_counter,
                             "sacrifice_other": sac_other, "pay_life": pay_life,
                             "discard": discard, "label": _short_label(body),
                             "effect": (lambda g, c, perm, tg, _e=eff_tgt_rc: _e(g, c, tg)),
@@ -1042,7 +1053,7 @@ def _parse_activated(oracle: str, name: str = ""):
                 labels = [(f"{pm.name} · {pm.controller.name}", pm) for pm in cands]
                 _human_target_choice(g, ctrl, "etb_target",
                                      "Elegí la tierra a copiar", labels, _do)
-            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self, "rm_counter": rm_counter,
                         "sacrifice_other": sac_other, "pay_life": pay_life,
                         "discard": discard, "label": _short_label(body),
                         "effect": eff_copy, "target_spec": None,
@@ -1071,7 +1082,7 @@ def _parse_activated(oracle: str, name: str = ""):
         is_copy = bool(re.search(r"copy target (?:activated|triggered)", body, re.I)
                        or re.search(r"copy (?:that|the target) (?:activated |triggered )?ability",
                                     body, re.I))
-        out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
+        out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self, "rm_counter": rm_counter,
                     "sacrifice_other": sac_other, "pay_life": pay_life,
                     "discard": discard,
                     "label": _short_label(body),
@@ -1243,6 +1254,29 @@ def _event_trigger_effect(oracle: str):
                 if drawer is not None and drawer is not perm.controller:
                     _e(game, perm.controller)
             out["opp_draw"] = cbod
+
+    # "whenever you create one or more (creature) tokens, <efecto>" (Staff of the
+    # Storyteller: pon un contador 'story' en este artefacto; y similares).
+    mtok = re.search(r"whenever you create one or more (?:creature )?tokens?,?\s*"
+                     r"(.{0,120})", t, re.I)
+    if mtok and "token_created" not in out:
+        body = mtok.group(1)
+        mcnt = re.search(r"put (a|an|one|\w+) ([a-z]+) counters? on "
+                         r"(?:this|~|itself|it)\b", body, re.I)
+        if mcnt and _count_word(mcnt.group(1)):
+            _cn = _count_word(mcnt.group(1))
+            _ck = mcnt.group(2).lower()
+
+            def cbt(game, perm, _n=_cn, _k=_ck, **_kw):
+                perm.counters[_k] = perm.counters.get(_k, 0) + _n
+                game.log(f"{perm.name} recibe {_n} contador(es) {_k}")
+            out["token_created"] = cbt
+        else:
+            efft = _generic_amount_effect(body)
+            if efft is not None:
+                def cbt2(game, perm, _e=efft, **_kw):
+                    _e(game, perm.controller)
+                out["token_created"] = cbt2
 
     # "whenever you gain life, <efecto>" (soul sisters, Ajani's Pridemate, Heliod…).
     if "gain_life" not in out:
