@@ -4099,6 +4099,33 @@ def test_dark_depths_remove_counters_makes_marit_lage():
     assert ml[0].has_subtype("Avatar") and ml[0].is_token
 
 
+def test_thespians_stage_copies_dark_depths_combo():
+    # Thespian's Stage copia Dark Depths (sin copiar contadores): queda con 0 hielo
+    # y la sba la sacrifica creando Marit Lage. Cierra el combo.
+    import cardsdb, cards
+    dd = cardsdb.build_card_from_data({
+        "name": "Dark Depths", "type_line": "Legendary Snow Land", "mana_cost": "",
+        "oracle_text": "Dark Depths enters with ten ice counters on it.\n"
+                       "{3}: Remove an ice counter from Dark Depths.\n"
+                       "When Dark Depths has no ice counters on it, sacrifice it. If you "
+                       "do, create Marit Lage, a legendary 20/20 black Avatar creature "
+                       "token with flying and indestructible."})
+    stage = cardsdb.build_card_from_data({
+        "name": "Thespian's Stage", "type_line": "Land", "mana_cost": "",
+        "oracle_text": "{T}: Add {C}.\n{2}, {T}: Thespian's Stage becomes a copy of "
+                       "target land, except it has this ability."})
+    copy_ab = next(a for a in stage.activated_abilities if "copy" in a["label"].lower())
+    g, me, op = _duel()
+    ddp = g.move_to_battlefield(dd, me)
+    sp = g.move_to_battlefield(stage, me)
+    assert not sp.counters.get("ice")                    # la Stage no tiene hielo
+    copy_ab["effect"](g, me, sp, [ddp])
+    g.sba()
+    assert sp not in me.battlefield                      # la copia se sacrificó
+    ml = [p for p in me.battlefield if p.name == "Marit Lage"]
+    assert len(ml) == 1 and ml[0].power == 20 and ml[0].has("indestructible")
+
+
 def test_remove_counters_from_target_and_dark_depths_combo():
     # "Sacrifice ~: Remove three counters from target permanent" (Vampire Hexmage):
     # ability DIRIGIDA (any_perm). Vaciar los contadores de Dark Depths así también

@@ -1009,6 +1009,39 @@ def _parse_activated(oracle: str, name: str = ""):
                             "target_spec": "any_perm", "target_count": 1,
                             "is_copy_ability": False})
                 continue
+        # "~ becomes a copy of target land, except it has this ability" (Thespian's
+        # Stage). Copia la carta OBJETIVO sobre el permanente fuente SIN copiar los
+        # contadores ni re-disparar el ETB -> si copia Dark Depths, queda con 0
+        # contadores de hielo y la sba la sacrifica creando Marit Lage.
+        if re.search(r"becomes? a copy of target land", body, re.I):
+            def eff_copy(g, ctrl, perm, tg):
+                import copy as _copylib
+                cands = [pm for pl in g.players for pm in pl.battlefield
+                         if pm.card.is_land() and pm is not perm]
+                if not cands:
+                    return
+                keep = tuple(a for a in (perm.card.activated_abilities or ())
+                             if "copy of target land" in a.get("label", "").lower())
+
+                def _do(target):
+                    newcard = _copylib.deepcopy(target.card)
+                    # "except it has this ability": conserva la habilidad de copiar
+                    newcard.activated_abilities = (
+                        tuple(newcard.activated_abilities or ()) + keep)
+                    perm.card = newcard
+                    g.log(f"{perm.name} se vuelve una copia de {target.name}")
+                    g.sba()
+                # bot: prioriza una tierra que sea combo (sac al quedar sin contadores)
+                cands.sort(key=lambda pm: getattr(pm.card, "sac_when_no_counter", None) is None)
+                labels = [(f"{pm.name} · {pm.controller.name}", pm) for pm in cands]
+                _human_target_choice(g, ctrl, "etb_target",
+                                     "Elegí la tierra a copiar", labels, _do)
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                        "sacrifice_other": sac_other, "pay_life": pay_life,
+                        "discard": discard, "label": _short_label(body),
+                        "effect": eff_copy, "target_spec": None,
+                        "target_count": 1, "is_copy_ability": False})
+            continue
         eff, spec, count = _fragment_effect(body)
         if eff is None:
             # efecto no modelado: EXPONER igual la habilidad con un respaldo visible,
