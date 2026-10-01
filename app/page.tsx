@@ -20,7 +20,7 @@ type SlowCard = { name: string; pct: number; reason?: string };
 type DeckNote = { deck: string; commander_avg_turn: number | null; commander_pct: number; slow_cards: SlowCard[] };
 type Notes = { avg_rounds: number; decided_pct: number; decks: DeckNote[] };
 type GameRow = { seed: number; winner: string; turns: number };
-type MatchResult = { players: number; n: number; results: Res[]; notes?: Notes; games?: GameRow[]; level?: string };
+type MatchResult = { players: number; n: number; requested?: number; timed_out?: boolean; results: Res[]; notes?: Notes; games?: GameRow[]; level?: string };
 
 function Pips({ ids }: { ids: string[] }) {
   if (!ids || ids.length === 0) return null;
@@ -272,6 +272,13 @@ export default function Home() {
           <h2>
             Resultados · {result.players} decks · {result.n} partidas · dificultad {level}
           </h2>
+          {result.timed_out && (
+            <p className="muted" style={{ marginTop: -6, fontSize: ".82rem" }}>
+              ⏱️ Se alcanzó el límite de tiempo: corrimos <b>{result.n}</b> de las{" "}
+              {result.requested} partidas pedidas (mesas pesadas tardan más). Las
+              estadísticas son sobre esas {result.n}.
+            </p>
+          )}
           {result.results.map((r, i) => (
             <div className="bar-row" key={r.deck}>
               <div className="bar-head">

@@ -273,6 +273,7 @@ def _slow_reason(card, land_count, avg_rounds):
 def match(specs, n=120, level="intermedio"):
     """Simula una mesa de 2 a 6 decks. Devuelve winrate por deck + notas
     (analitica en bulk) + partidas (para exportar)."""
+    import time
     from collections import Counter
     from engine import Game
 
@@ -289,6 +290,11 @@ def match(specs, n=120, level="intermedio"):
     cmd_turns = {l: [] for l in labels}
     cast_counts = {l: Counter() for l in labels}
 
+    # presupuesto de tiempo: la función serverless corta a los 60s. Paramos antes
+    # (y devolvemos lo simulado hasta ahí) para no dar 504 con mesas pesadas.
+    start = time.monotonic()
+    budget = 50.0
+    ran = 0
     for i in range(n):
         players = run.build_players_from_defs(deck_defs, level=level)
         g = Game(players, seed=i, max_turns=max_turns)
@@ -301,15 +307,22 @@ def match(specs, n=120, level="intermedio"):
             if st["commander_turn"] is not None:
                 cmd_turns[p.name].append(st["commander_turn"])
             cast_counts[p.name].update(st["cast_counts"])
+        ran = i + 1
+        # corta tras cada partida si ya nos pasamos del presupuesto (al menos 1)
+        if ran < n and time.monotonic() - start > budget:
+            break
+
+    d = max(1, ran)                      # divisor seguro (partidas realmente corridas)
+    timed_out = ran < n
 
     results = [{"deck": lbl, "wins": wins.get(lbl, 0),
-                "pct": round(100 * wins.get(lbl, 0) / n, 1)} for lbl in labels]
+                "pct": round(100 * wins.get(lbl, 0) / d, 1)} for lbl in labels]
     results.sort(key=lambda r: -r["pct"])
     results.append({"deck": "sin definir", "wins": wins.get("EMPATE", 0),
-                    "pct": round(100 * wins.get("EMPATE", 0) / n, 1)})
+                    "pct": round(100 * wins.get("EMPATE", 0) / d, 1)})
 
     # notas por deck: turno del comandante y cartas que rara vez se juegan
-    avg_rounds = turns_total / n / nplayers if n else 0
+    avg_rounds = turns_total / d / nplayers if d else 0
     deck_notes = []
     for lbl in labels:
         cts = cmd_turns[lbl]
@@ -322,7 +335,7 @@ def match(specs, n=120, level="intermedio"):
             if c.is_land() or c.cost is None or c.name in seen_names:
                 continue
             seen_names.add(c.name)
-            rates.append((c, round(100 * cast_counts[lbl].get(c.name, 0) / n)))
+            rates.append((c, round(100 * cast_counts[lbl].get(c.name, 0) / d)))
         rates.sort(key=lambda x: x[1])
         slow = [{"name": c.name, "pct": p,
                  "reason": _slow_reason(c, land_count, avg_rounds)}
@@ -330,16 +343,17 @@ def match(specs, n=120, level="intermedio"):
         deck_notes.append({
             "deck": lbl,
             "commander_avg_turn": cmd_avg,
-            "commander_pct": round(100 * len(cts) / n),
+            "commander_pct": round(100 * len(cts) / d),
             "slow_cards": slow,
         })
 
     notes = {
-        "avg_rounds": round(turns_total / n / nplayers, 1),
-        "decided_pct": round(100 * (n - wins.get("EMPATE", 0)) / n),
+        "avg_rounds": round(turns_total / d / nplayers, 1),
+        "decided_pct": round(100 * (ran - wins.get("EMPATE", 0)) / d),
         "decks": deck_notes,
     }
-    return {"n": n, "players": nplayers, "level": level, "results": results,
+    return {"n": ran, "requested": n, "timed_out": timed_out,
+            "players": nplayers, "level": level, "results": results,
             "notes": notes, "games": games}
 
 
