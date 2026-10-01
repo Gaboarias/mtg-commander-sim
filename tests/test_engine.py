@@ -4069,6 +4069,43 @@ def test_saga_chapter_runs_fragment_effect():
     assert small.counters.get("+1/+1", 0) == 0
 
 
+def test_saga_mass_edict_and_discard_and_mill():
+    # Patrones comunes de capítulos de Saga: edict masivo, descarte global, self-mill.
+    import cardsdb, cards
+    g, me, op = _duel()
+    g.move_to_battlefield(cards.creature("A", "1G", 2, 2), me)
+    g.move_to_battlefield(cards.creature("B", "1G", 3, 3), op)
+    cardsdb._chapter_effect("Each player sacrifices a creature.")(g, me)
+    g.sba()
+    assert len(me.creatures()) == 0 and len(op.creatures()) == 0
+
+    g, me, op = _duel()
+    me.hand = [cards.land("X", ["W"], basic=True) for _ in range(3)]
+    op.hand = [cards.land("Y", ["U"], basic=True) for _ in range(3)]
+    cardsdb._chapter_effect("Each player discards a card.")(g, me)
+    assert len(me.hand) == 2 and len(op.hand) == 2
+
+    g, me, op = _duel()
+    me.library = [cards.creature("C", "1G", 1, 1) for _ in range(5)]
+    cardsdb._chapter_effect("Put the top two cards of your library into your graveyard.")(g, me)
+    assert len(me.graveyard) == 2 and len(me.library) == 3
+
+
+def test_saga_team_pump_and_counter_with_keyword():
+    import cardsdb, cards
+    g, me, op = _duel()
+    c = g.move_to_battlefield(cards.creature("D", "1G", 2, 2), me)
+    cardsdb._chapter_effect("Creatures you control get +1/+0 until end of turn.")(g, me)
+    assert c.power == 3
+    g2, me2, op2 = _duel()
+    c2 = g2.move_to_battlefield(cards.creature("E", "1G", 2, 2), me2)
+    cardsdb._chapter_effect(
+        "Put a +1/+1 counter on up to one target creature. It gains deathtouch "
+        "until end of turn.")(g2, me2)
+    g2.sba()
+    assert c2.counters.get("+1/+1") == 1 and "deathtouch" in c2.keywords
+
+
 def test_token_keywords_beyond_trample():
     # Las fichas creadas conservan TODAS sus keywords (no solo trample).
     import cardsdb, cards

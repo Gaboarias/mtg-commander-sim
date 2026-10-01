@@ -554,15 +554,31 @@ def _fragment_effect(seg: str):
             game.sba()
         # bonus -> propia criatura; penalización -> criatura rival
         return pump, ("opp_creature" if (dp < 0 or dt < 0) else "own_creature"), 1
-    # poner contadores +1/+1 en una criatura objetivo
-    mc = re.search(r"put (\w+) \+1/\+1 counters? on target creature", seg, re.I)
+    # pump TEMPORAL a tu equipo: "creatures you control get +X/+Y until end of turn"
+    mtp = re.search(r"creatures you control get ([+-]\d+)/([+-]\d+)", seg, re.I)
+    if mtp:
+        dp, dt = int(mtp.group(1)), int(mtp.group(2))
+
+        def team_pump(game, ctrl, targets, _p=dp, _t=dt):
+            for pm in list(ctrl.creatures()):
+                pm.temp_pt[0] += _p
+                pm.temp_pt[1] += _t
+            game.sba()
+            game.log(f"{ctrl.name}: sus criaturas +{_p}/+{_t} este turno")
+        return team_pump, None, 1
+    # poner contadores +1/+1 en una criatura objetivo (incluye "up to one target")
+    mc = re.search(r"put (\w+) \+1/\+1 counters? on (?:up to \w+ )?target creature", seg, re.I)
     if mc and _count_word(mc.group(1)):
         n = _count_word(mc.group(1))
+        kw_grant = next((v for pat, v in _TOKEN_KEYWORDS
+                         if re.search(r"(?:gains?|has) .*" + pat, seg, re.I)), None)
 
-        def putc(game, ctrl, targets, _n=n):
+        def putc(game, ctrl, targets, _n=n, _kw=kw_grant):
             for tg in (targets or []):
                 if hasattr(tg, "counters"):
                     game.add_counters(tg, "+1/+1", _n)
+                    if _kw:
+                        tg.temp_keywords.add(_kw)
         return putc, "own_creature", 1
     # Barridas por tipo como MODO ("destroy all creatures/planeswalkers/battles",
     # "exile all graveyards"). En un modo van por _fragment_effect (no por el tag wipe).
@@ -2663,6 +2679,46 @@ def _generic_amount_effect(oracle: str):
                 game.gain_life(ctrl, _n * max(1, len(opps)))
             game.log(f"{ctrl.name}: cada rival pierde {_n} de vida"
                      + (" y él gana vida" if _gain else ""))
+        return eff
+
+    # edict masivo: "each player sacrifices a creature [or planeswalker]"
+    if re.search(r"each player sacrifices? a creature(?: or planeswalker)?", t):
+        incl_pw = "planeswalker" in t
+
+        def eff(game, ctrl, *_a, _pw=incl_pw):
+            for pl in game.players:
+                pool = [pm for pm in pl.battlefield
+                        if pm.is_creature() or (_pw and "planeswalker" in pm.card.types)]
+                if pool:
+                    _human_or_auto_sacrifice(
+                        game, pl, f"{pl.name}: elegí qué sacrificar", pool=pool)
+        return eff
+
+    # cada jugador descarta N carta(s)
+    m = re.search(r"each player discards? (\w+) cards?", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, *_a, _n=n):
+            for pl in game.players:
+                _human_or_auto_discard(game, pl, _n)
+        return eff
+
+    # self-mill: "put the top N cards of your library into your graveyard"
+    m = re.search(r"put the top (\w+) cards? of your library into your graveyard", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff(game, ctrl, *_a, _n=n):
+            cards.mill(game, ctrl, _n)
+        return eff
+
+    # odio de cementerio: "exile all creature cards from (all) graveyards"
+    if re.search(r"exile all creature cards? from (?:all )?graveyards?", t):
+        def eff(game, ctrl, *_a):
+            for pl in game.players:
+                keep = [c for c in pl.graveyard if not c.is_creature()]
+                gone = len(pl.graveyard) - len(keep)
+                if gone:
+                    pl.exile.extend(c for c in pl.graveyard if c.is_creature())
+                    pl.graveyard[:] = keep
+            game.log(f"{ctrl.name}: exilia las criaturas de los cementerios")
         return eff
 
     # quema a un objetivo tipo jugador (any target / target player / creature or
