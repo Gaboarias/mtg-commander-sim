@@ -3468,13 +3468,16 @@ def _generic_amount_effect(oracle: str):
                  r"battlefield", t):
         lim = int(mvm.group(1)) if (mvm := re.search(r"mana value (\d+) or less", t)) else None
         cre = "creature card" in t
+        nonland = "nonland permanent" in t or "noncreature, nonland" in t
         any_gy = "from a graveyard" in t     # reanimación de cualquier cementerio
 
-        def eff(game, ctrl, *_a, _lim=lim, _cre=cre, _any=any_gy):
+        def eff(game, ctrl, *_a, _lim=lim, _cre=cre, _nl=nonland, _any=any_gy):
             def ok(c):
                 if not _is_permanent_card(c):        # instantáneos/conjuros NO al campo
                     return False
                 if _cre and "creature" not in c.types:
+                    return False
+                if _nl and c.is_land():               # "nonland permanent": sin tierras
                     return False
                 if _lim is not None and c.cost and c.cost.cmc > _lim:
                     return False

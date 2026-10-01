@@ -4099,6 +4099,46 @@ def test_dark_depths_remove_counters_makes_marit_lage():
     assert ml[0].has_subtype("Avatar") and ml[0].is_token
 
 
+def test_etb_reanimate_nonland_opens_human_picker():
+    # "When ~ enters, return target nonland permanent card with mana value 3 or less
+    # from your graveyard to the battlefield" (Primary Research): el humano elige en
+    # un modal; sólo permanentes NO tierra con CMV <= 3.
+    import interactive, cards, cardsdb, decks
+
+    def mk():
+        return cardsdb.build_card_from_data({
+            "name": "Primary Research", "type_line": "Enchantment", "mana_cost": "{3}{U}",
+            "oracle_text": "When this enchantment enters, return target nonland permanent "
+                           "card with mana value 3 or less from your graveyard to the "
+                           "battlefield.\nAt the beginning of your end step, if a card left "
+                           "your graveyard this turn, draw a card."})
+
+    ig = interactive.InteractiveGame(
+        [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")],
+        human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    hu.graveyard = [cards.land("Forest", ["G"], basic=True),       # tierra (excluida)
+                    cards.creature("Bicho", "1G", 2, 2),           # cmv 2 (elegible)
+                    cards.creature("Grande", "4G", 5, 5)]          # cmv 5 (excede)
+    ig.g.move_to_battlefield(mk(), hu)
+    pc = ig.g.pending_choice
+    assert pc is not None and pc["kind"] == "reanimate"
+    assert [o["name"] for o in pc["options"]] == ["Bicho"]          # sólo el válido
+    idx = next(o["i"] for o in pc["options"] if o["name"] == "Bicho")
+    ig.resolve_choice(idx)
+    assert any(p.name == "Bicho" for p in hu.battlefield)           # revivido al elegir
+
+    # cementerio sólo con una tierra -> no hay objetivo -> no abre modal
+    ig2 = interactive.InteractiveGame(
+        [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")],
+        human_index=0, seed=3)
+    ig2.keep([])
+    ig2.human().graveyard = [cards.land("Forest", ["G"], basic=True)]
+    ig2.g.move_to_battlefield(mk(), ig2.human())
+    assert ig2.g.pending_choice is None
+
+
 def test_living_weapon_equipped_attack_trigger():
     # Living weapon crea un Germen y se equipa; el disparo "whenever equipped
     # creature attacks" vive en el EQUIPO y ahora dispara cuando ataca el Germen.
