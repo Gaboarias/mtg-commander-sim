@@ -1958,6 +1958,40 @@ def _loyalty_effect(text: str):
     devuelve None: la habilidad solo cambia la lealtad (mejor que no existir)."""
     t = re.sub(r"\s+", " ", (text or "").lower())
 
+    # Scry N (p. ej. Nissa +2): mira el tope y decide dejar/mandar al fondo.
+    ms = re.search(r"\bscry (\w+)", t)
+    if ms and (k := _count_word(ms.group(1))):
+        _scry = _scry_surveil_effect(k, False)
+        def eff(game, ctrl, perm, _s=_scry):
+            _s(game, ctrl)
+        return eff
+
+    # "Look at the top card of your library. If it's a land (or a creature with
+    # mana value <= loyalty counters on this), you may put it onto the battlefield."
+    if re.search(r"look at the top card of your library", t) and "onto the battlefield" in t:
+        _allow_land = "land card" in t
+        _cre_cap = "creature card with mana value" in t
+
+        def eff(game, ctrl, perm, _land=_allow_land, _cap=_cre_cap):
+            if not ctrl.library:
+                return
+            top = ctrl.library[-1]                       # tope = final de la lista
+            loy = perm.counters.get("loyalty", 0)
+            cmv = top.cost.cmc if getattr(top, "cost", None) else 0
+            ok = (_land and top.is_land()) or (top.is_creature()
+                                               and (not _cap or cmv <= loy))
+            if not ok:
+                game.log(f"{ctrl.name} mira el tope ({top.name}): no es elegible")
+                return
+
+            def _put(g, c):
+                if ctrl.library and ctrl.library[-1] is top:
+                    ctrl.library.pop()
+                    g.move_to_battlefield(top, ctrl)
+                    g.log(f"{ctrl.name} pone {top.name} desde el tope al campo")
+            game.may(ctrl, f"¿Poner {top.name} (del tope) en el campo?", _put)
+        return eff
+
     m = re.search(r"deals? (\w+) damage to each opponent", t)
     if m and (n := _count_word(m.group(1))):
         def eff(game, ctrl, perm, _n=n):

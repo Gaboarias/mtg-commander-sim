@@ -4069,6 +4069,47 @@ def test_saga_chapter_runs_fragment_effect():
     assert small.counters.get("+1/+1", 0) == 0
 
 
+def test_nissa_plus_scry_and_zero_put_top():
+    # +2 Scry 2 (se cablea sin error) y 0: poner el tope si es tierra o criatura
+    # con CMV <= lealtad.
+    import cardsdb, cards
+    orc = ("+2: Scry 2.\n"
+           "0: Look at the top card of your library. If it's a land card or a "
+           "creature card with mana value less than or equal to the number of "
+           "loyalty counters on Nissa, you may put that card onto the battlefield.\n"
+           "−6: Untap up to two target lands you control. They become 5/5 Elemental "
+           "creatures with flying and haste until end of turn. They're still lands.")
+
+    def mk():
+        return cardsdb.build_card_from_data({
+            "name": "Nissa", "type_line": "Legendary Planeswalker — Nissa",
+            "mana_cost": "{3}{G}{G}", "loyalty": "5", "oracle_text": orc})
+
+    n = mk()
+    wired = {c: (e is not None) for c, e in n.loyalty_abilities}
+    assert wired[2] and wired[0]                          # +2 y 0 cableadas
+
+    # 0: criatura CMV 3 <= lealtad 5 -> al campo
+    g, me, op = _duel()
+    pw = g.move_to_battlefield(mk(), me)
+    pw.counters["loyalty"] = 5
+    me.library = [cards.land("X", ["G"], basic=True) for _ in range(3)] + \
+        [cards.creature("Bestia", "2G", 3, 3)]            # tope = Bestia
+    i0 = next(i for i, (c, e) in enumerate(pw.card.loyalty_abilities) if c == 0)
+    pw.card.loyalty_abilities[i0][1](g, me, pw)
+    g.resolve_stack(); g.sba()
+    assert any(p.name == "Bestia" for p in me.battlefield)
+
+    # 0: criatura CMV 7 > lealtad 5 -> NO entra
+    g2, me2, op2 = _duel()
+    pw2 = g2.move_to_battlefield(mk(), me2)
+    pw2.counters["loyalty"] = 5
+    me2.library = [cards.creature("Gigante", "5GG", 8, 8)]
+    pw2.card.loyalty_abilities[i0][1](g2, me2, pw2)
+    g2.resolve_stack(); g2.sba()
+    assert not any(p.name == "Gigante" for p in me2.battlefield)
+
+
 def test_planeswalker_minus_animates_lands():
     # Habilidad de lealtad que anima tierras: "untap up to two target lands you
     # control. They become 5/5 Elemental creatures with flying and haste until end
