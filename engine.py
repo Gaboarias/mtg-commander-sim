@@ -2238,6 +2238,15 @@ class Game:
                 self.stack.append(StackObject(
                     p, (lambda g, _cb=cb, _perm=perm, _d=defender: _cb(g, _perm, defender=_d)),
                     source=perm, label=f"attacks:{perm.name}"))
+            # disparos "whenever EQUIPPED creature attacks": viven en el equipo/aura
+            # anexado al atacante, no en la criatura. Se disparan con el equipo.
+            for src in self.all_permanents():
+                if getattr(src, "enchanting", None) is perm:
+                    ecb = src.card.triggers.get("attacks")
+                    if ecb:
+                        self.stack.append(StackObject(
+                            p, (lambda g, _cb=ecb, _s=src, _d=defender: _cb(g, _s, defender=_d)),
+                            source=src, label=f"attacks:{src.name}"))
         # Exalted: si atacó UNA sola criatura, recibe +1/+1 por cada permanente
         # con exaltación que controle el atacante.
         if len(declared) == 1:

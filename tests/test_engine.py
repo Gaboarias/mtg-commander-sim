@@ -4099,6 +4099,33 @@ def test_dark_depths_remove_counters_makes_marit_lage():
     assert ml[0].has_subtype("Avatar") and ml[0].is_token
 
 
+def test_living_weapon_equipped_attack_trigger():
+    # Living weapon crea un Germen y se equipa; el disparo "whenever equipped
+    # creature attacks" vive en el EQUIPO y ahora dispara cuando ataca el Germen.
+    import cardsdb, cards
+    lw = cardsdb.build_card_from_data({
+        "name": "Living Blade", "type_line": "Artifact — Equipment", "mana_cost": "{2}",
+        "oracle_text": "Living weapon (When this Equipment enters the battlefield, "
+                       "create a 0/0 black Phyrexian Germ creature token, then attach "
+                       "this to it.)\nEquipped creature gets +1/+1.\nWhenever equipped "
+                       "creature attacks, you may search your library for a basic land "
+                       "card, put it onto the battlefield tapped, then shuffle.\nEquip {3}"})
+    g, me, op = _duel()
+    me.library = [cards.land("Forest", ["G"], basic=True) for _ in range(3)]
+    perm = g.move_to_battlefield(lw, me)
+    g.sba()
+    germ = perm.enchanting
+    assert germ is not None and germ.name == "Germ"
+    assert germ.power == 1 and germ.toughness == 1          # +1/+1 del equipo
+    germ.summoning_sick = False
+    lands0 = sum(1 for p in me.battlefield if p.card.is_land())
+    g._declare_attackers(me, [(germ, op)])
+    g.resolve_stack(); g.sba()
+    lands1 = sum(1 for p in me.battlefield if p.card.is_land())
+    assert lands1 == lands0 + 1                             # buscó una tierra básica
+    assert any(p.card.is_land() and p.tapped for p in me.battlefield)  # entra tapeada
+
+
 def test_thespians_stage_copies_dark_depths_combo():
     # Thespian's Stage copia Dark Depths (sin copiar contadores): queda con 0 hielo
     # y la sba la sacrifica creando Marit Lage. Cierra el combo.
