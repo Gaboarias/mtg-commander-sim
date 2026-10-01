@@ -2405,6 +2405,46 @@ def _generic_amount_effect(oracle: str):
                                  cands, _do, allow_none=_opt)
         return eff
 
+    # exiliar un permanente no-tierra (y no-ficha) que NO controlás, con CMV <= N
+    # (p. ej. Skyclave Apparition). El humano elige; el bot toma el de mayor CMV.
+    m = re.search(
+        r"exile (?:up to \w+ )?target (?:nonland[,\s]+)?(?:nontoken[,\s]+)?permanent "
+        r"(?:you don.?t control|an opponent controls)"
+        r"(?: with (?:mana value|converted mana cost) (\d+) or less)?", t)
+    if m:
+        mv_cap = int(m.group(1)) if m.group(1) else None
+        opt = "up to" in t
+
+        def eff(game, ctrl, *_a, _cap=mv_cap, _opt=opt):
+            def _cmv(pm):
+                return pm.card.cost.cmc if getattr(pm.card, "cost", None) else 0
+            pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield
+                    if not pm.card.is_land() and not pm.is_token
+                    and (_cap is None or _cmv(pm) <= _cap)]
+            if not pool:
+                game.log(f"{ctrl.name}: no hay permanente rival válido para exiliar")
+                return
+            pool.sort(key=lambda pm: _cmv(pm), reverse=True)   # el bot toma el mayor CMV
+            cands = [(f"{pm.name} (CMV {_cmv(pm)}) · {pm.controller.name}", pm)
+                     for pm in pool]
+
+            def _do(victim):
+                owner = victim.controller
+                if victim not in owner.battlefield:
+                    return
+                owner.battlefield.remove(victim)
+                if not victim.is_token and victim.card is not owner.commander_card:
+                    owner.exile.append(victim.card)
+                game.log(f"{ctrl.name} exilia {victim.name} "
+                         f"(CMV {_cmv(victim)}) de {owner.name}")
+                game.sba()
+
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí un permanente del rival para exiliar"
+                                 + (" (o ninguno)" if _opt else ""),
+                                 cands, _do, allow_none=_opt)
+        return eff
+
     # destruir / exiliar una criatura objetivo como ETB (p. ej. Ravenous Chupacabra):
     # el humano elige a cuál; el bot toma la más grande del rival.
     m = re.search(r"(destroy|exile) (?:up to )?(?:one |a |target )?target creature", t)

@@ -3995,6 +3995,46 @@ def test_cascade_human_picks_target_manually():
     assert any(c.name == "Fulgor" for c in hu.graveyard)   # el hechizo fue al cementerio
 
 
+def test_skyclave_etb_exiles_permanent_with_mv_cap():
+    # ETB tipo Skyclave Apparition: exilia un permanente no-tierra/no-ficha del
+    # rival con CMV <= 4. El bot toma el de mayor CMV elegible; respeta el tope.
+    import cardsdb, cards
+    g, me, op = _duel()
+    g.move_to_battlefield(cards.creature("Bicho", "1G", 2, 2), op)          # cmv 2
+    g.move_to_battlefield(cardsdb.build_card_from_data(
+        {"name": "Trinket", "type_line": "Artifact", "mana_cost": "{3}"}), op)  # cmv 3
+    g.move_to_battlefield(cards.creature("Dragón", "5RR", 6, 6), op)        # cmv 7 (excede)
+    sky = cardsdb.build_card_from_data({
+        "name": "Skyclave Apparition", "type_line": "Creature — Kor Spirit",
+        "mana_cost": "{1}{W}{W}", "power": "2", "toughness": "2",
+        "oracle_text": "When this creature enters, exile up to one target nonland, "
+                       "nontoken permanent you don't control with mana value 4 or less."})
+    assert sky.on_etb is not None
+    g.move_to_battlefield(sky, me)                     # me = bot aquí -> auto
+    assert any(c.name == "Trinket" for c in op.exile)  # exilió el mayor CMV <= 4
+    assert any(p.name == "Dragón" for p in op.battlefield)  # el CMV 7 quedó
+    assert any(p.name == "Bicho" for p in op.battlefield)   # el CMV 2 quedó
+
+
+def test_skyclave_etb_human_opens_target_picker():
+    # Cuando lo controla el humano, el ETB abre el selector de objetivo (no auto).
+    import interactive, cards, cardsdb, decks
+    defs = [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human(); op = ig.g.opponents(hu)[0]
+    ig.g.move_to_battlefield(cards.creature("Bicho", "1G", 2, 2), op)
+    sky = cardsdb.build_card_from_data({
+        "name": "Skyclave Apparition", "type_line": "Creature — Kor Spirit",
+        "mana_cost": "{1}{W}{W}", "power": "2", "toughness": "2",
+        "oracle_text": "When this creature enters, exile up to one target nonland, "
+                       "nontoken permanent you don't control with mana value 4 or less."})
+    ig.g.move_to_battlefield(sky, hu)
+    pc = ig.g.pending_choice
+    assert pc is not None and pc["kind"] == "etb_target"
+    assert any("Bicho" in o["name"] for o in pc["options"])
+
+
 def test_cascade_bot_no_target_prompt():
     # Un bot que cascadea un hechizo con objetivo NO abre pending_choice (no hay
     # modal para la IA): resuelve sin trabar el motor headless.
