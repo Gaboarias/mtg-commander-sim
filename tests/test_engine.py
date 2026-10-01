@@ -4099,6 +4099,52 @@ def test_dark_depths_remove_counters_makes_marit_lage():
     assert ml[0].has_subtype("Avatar") and ml[0].is_token
 
 
+def test_graveyard_shuffle_multiselect():
+    # 2a habilidad de Perpetual Timepiece: coste "Exile this artifact" + "shuffle
+    # any number of target cards from your graveyard into your library".
+    import interactive, cards, cardsdb, decks
+    pt_data = {"name": "Perpetual Timepiece", "type_line": "Artifact", "mana_cost": "{2}",
+               "oracle_text": "{T}: Mill two cards.\n{2}, Exile Perpetual Timepiece: "
+                              "Shuffle any number of target cards from your graveyard "
+                              "into your library."}
+    pt = cardsdb.build_card_from_data(pt_data)
+    labels = pt.activated_abilities
+    assert any(a.get("exile_self") for a in labels)           # coste exiliar reconocido
+
+    # BOT: baraja de vuelta las no-tierra; el artefacto se exilia
+    from tests.test_engine import _duel  # noqa
+    g, me, op = _duel()
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me)
+    me.graveyard = [cards.creature("A", "1G", 1, 1), cards.land("L", ["G"], basic=True),
+                    cards.creature("B", "1G", 1, 1)]
+    perm = g.move_to_battlefield(cardsdb.build_card_from_data(pt_data), me)
+    i2 = next(i for i, a in enumerate(perm.card.activated_abilities) if a.get("exile_self"))
+    assert g.activate_ability(perm, i2) is True
+    g.resolve_stack(); g.sba()
+    assert perm not in me.battlefield and any(c.name == "Perpetual Timepiece" for c in me.exile)
+    assert [c.name for c in me.graveyard] == ["L"]            # sólo la tierra quedó
+
+    # HUMANO: multi-selector del cementerio (elige de a una, con 'ninguna más')
+    ig = interactive.InteractiveGame(
+        [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")],
+        human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    for _ in range(2):
+        ig.g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), hu)
+    hu.graveyard = [cards.creature("X", "1G", 1, 1), cards.creature("Y", "1G", 1, 1)]
+    hperm = ig.g.move_to_battlefield(cardsdb.build_card_from_data(pt_data), hu)
+    hi = next(i for i, a in enumerate(hperm.card.activated_abilities) if a.get("exile_self"))
+    ig.activate_ability(hperm.uid, hi)
+    pc = ig.g.pending_choice
+    assert pc is not None and pc["kind"] == "gy_shuffle" and pc["allow_none"]
+    idx = next(o["i"] for o in pc["options"] if o["name"] == "X")
+    ig.resolve_choice(idx)                                    # baraja X
+    ig.resolve_choice(None)                                   # 'ninguna más'
+    assert [c.name for c in hu.graveyard] == ["Y"]           # X volvió; Y quedó
+
+
 def test_mill_ability_logs_feedback():
     # "{T}: Mill two cards" (Perpetual Timepiece): la activada muele y ahora deja
     # rastro en el log (antes era silenciosa -> parecía que no hacía nada).

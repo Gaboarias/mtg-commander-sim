@@ -1180,9 +1180,12 @@ export default function Play() {
           legend: "Regla de legendarios", x: "Elegí X",
           reanimate: "Elegí una carta del cementerio", exile_pick: "Elegí una carta del exilio",
           cascade_target: "Cascada: elegí el objetivo",
+          gy_shuffle: "Barajar cartas del cementerio",
         };
         const title = titles[ch.kind] || "Elegí una carta";
-        const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno" : "No llevarme ninguna";
+        const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno"
+          : ch.kind === "gy_shuffle" ? "Ninguna más"
+          : "No llevarme ninguna";
         return (
           <div className="inspect-back">
             <div className="inspect" onClick={(e) => e.stopPropagation()}>

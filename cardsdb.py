@@ -874,6 +874,7 @@ def _parse_activated(oracle: str, name: str = ""):
         # Cualquier cláusula que no reconozcamos descarta la habilidad (bad=True).
         syms = []
         sac_self = False
+        exile_self = False
         sac_other = None   # {"count": n, "type": "..."} — sacrificar OTRAS permanentes
         pay_life = 0
         discard = 0        # nº de cartas a descartar (-1 = toda la mano)
@@ -884,6 +885,11 @@ def _parse_activated(oracle: str, name: str = ""):
             if not rest:
                 continue
             key = re.sub(r"[^a-z]", "", rest)
+            if key.startswith("exile"):          # "Exile this/~/<nombre>" como coste
+                tail = key[len("exile"):]
+                if tail.startswith(("this", "it", "~")) or (name_key and tail == name_key):
+                    exile_self = True
+                    continue
             if key.startswith("sacrifice"):
                 tail = key[len("sacrifice"):]
                 if tail.startswith(("this", "it", "~")) or (name_key and tail == name_key):
@@ -914,8 +920,8 @@ def _parse_activated(oracle: str, name: str = ""):
         if bad:
             continue
         # se acepta una habilidad sin maná/{T} solo si tiene un coste real (sacrificio,
-        # pagar vida, descartar) — p. ej. "Sacrifice a creature: Add {C}{C}".
-        if not syms and not (sac_self or sac_other or pay_life or discard):
+        # exiliarse, pagar vida, descartar) — p. ej. "Sacrifice a creature: Add {C}{C}".
+        if not syms and not (sac_self or exile_self or sac_other or pay_life or discard):
             continue
         tap = any(s.upper() == "T" for s in syms)
         mana = "".join("{%s}" % s for s in syms if s.upper() != "T")
@@ -936,7 +942,7 @@ def _parse_activated(oracle: str, name: str = ""):
             eff = (lambda g, c, tg=None, _n=(amt or 1):
                    (setattr(c, "mana_pool", c.mana_pool + _n),
                     g.log(f"{c.name} agrega {_n} maná")))
-            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
                         "sacrifice_other": sac_other, "pay_life": pay_life,
                         "discard": discard, "label": _short_label(body),
                         "effect": (lambda g, c, perm, tg, _e=eff: _e(g, c, tg)),
@@ -953,7 +959,7 @@ def _parse_activated(oracle: str, name: str = ""):
                 if perm is not None:
                     g.add_counters(perm, "+1/+1", _n)
                     perm.monstrous = True
-            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
                         "sacrifice_other": sac_other, "pay_life": pay_life,
                         "discard": discard, "label": _short_label(body),
                         "effect": eff_self, "target_spec": None,
@@ -989,7 +995,7 @@ def _parse_activated(oracle: str, name: str = ""):
                         _s(perm)
                         g.log(f"{perm.name}: quita contadores")
                         g.sba()
-                out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
                             "sacrifice_other": sac_other, "pay_life": pay_life,
                             "discard": discard, "label": _short_label(body),
                             "effect": eff_self_rc, "target_spec": None,
@@ -1002,7 +1008,7 @@ def _parse_activated(oracle: str, name: str = ""):
                             _s(t_)
                             g.log(f"{c.name}: quita contadores de {t_.name}")
                     g.sba()
-                out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
                             "sacrifice_other": sac_other, "pay_life": pay_life,
                             "discard": discard, "label": _short_label(body),
                             "effect": (lambda g, c, perm, tg, _e=eff_tgt_rc: _e(g, c, tg)),
@@ -1036,11 +1042,24 @@ def _parse_activated(oracle: str, name: str = ""):
                 labels = [(f"{pm.name} · {pm.controller.name}", pm) for pm in cands]
                 _human_target_choice(g, ctrl, "etb_target",
                                      "Elegí la tierra a copiar", labels, _do)
-            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
                         "sacrifice_other": sac_other, "pay_life": pay_life,
                         "discard": discard, "label": _short_label(body),
                         "effect": eff_copy, "target_spec": None,
                         "target_count": 1, "is_copy_ability": False})
+            continue
+        # "shuffle any number of target cards from your graveyard into your library"
+        # (Perpetual Timepiece): multi-selector del cementerio (el humano elige
+        # cuántas y cuáles, de a una; el bot baraja de vuelta las no-tierra).
+        if re.search(r"shuffle any number of target cards? from your graveyard into "
+                     r"your library", body, re.I):
+            def eff_shuffle_gy(g, ctrl, perm, tg):
+                _shuffle_graveyard_into_library(g, ctrl)
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                        "exile_self": exile_self, "sacrifice_other": sac_other,
+                        "pay_life": pay_life, "discard": discard,
+                        "label": _short_label(body), "effect": eff_shuffle_gy,
+                        "target_spec": None, "target_count": 1, "is_copy_ability": False})
             continue
         eff, spec, count = _fragment_effect(body)
         if eff is None:
@@ -1052,7 +1071,7 @@ def _parse_activated(oracle: str, name: str = ""):
         is_copy = bool(re.search(r"copy target (?:activated|triggered)", body, re.I)
                        or re.search(r"copy (?:that|the target) (?:activated |triggered )?ability",
                                     body, re.I))
-        out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+        out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
                     "sacrifice_other": sac_other, "pay_life": pay_life,
                     "discard": discard,
                     "label": _short_label(body),
@@ -1927,6 +1946,39 @@ def _human_target_choice(game, ctrl, kind, prompt, options, apply_one,
         }
     else:
         apply_one(options[0][1])
+
+
+def _shuffle_graveyard_into_library(game, ctrl):
+    """'Shuffle any number of target cards from your graveyard into your library':
+    multi-selector. El humano elige de a una (puede parar con 'ninguna más'); el
+    bot baraja de vuelta sus cartas NO tierra (valor: re-dibujarlas)."""
+    if not ctrl.graveyard:
+        return
+
+    def _do(card):
+        if card in ctrl.graveyard:
+            ctrl.graveyard.remove(card)
+            ctrl.library.append(card)
+            game.rng.shuffle(ctrl.library)
+            game.log(f"{ctrl.name} baraja {card.name} en su biblioteca")
+
+    if ctrl is getattr(game, "interactive_human", None):
+        def _prompt():
+            pool = list(ctrl.graveyard)
+            if not pool:
+                return
+
+            def _pick(card):
+                _do(card)
+                _prompt()                     # seguir eligiendo (any number)
+            _pick_card_from_zone(
+                game, ctrl, pool, _pick,
+                "Elegí cartas del cementerio para barajar en tu biblioteca "
+                "(una por una, o 'ninguna más')", kind="gy_shuffle", allow_none=True)
+        _prompt()
+    else:
+        for c in [c for c in list(ctrl.graveyard) if not c.is_land()]:
+            _do(c)
 
 
 def _pick_card_from_zone(game, ctrl, cards_list, apply_one, prompt, kind="reanimate",

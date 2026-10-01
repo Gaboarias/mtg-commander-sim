@@ -1663,6 +1663,13 @@ class Game:
             # el sacrificio es parte del COSTE: se paga al activar (el efecto ya
             # está en la pila y no necesita al permanente).
             self.to_graveyard(perm, "coste: sacrificio")
+        if ab.get("exile_self"):
+            # exiliar ESTE permanente como coste (Perpetual Timepiece, etc.).
+            if perm in ctrl.battlefield:
+                ctrl.battlefield.remove(perm)
+                if not perm.is_token and perm.card is not ctrl.commander_card:
+                    ctrl.exile.append(perm.card)
+                self.log(f"{ctrl.name} exilia {perm.name} (coste)")
         self.log(f"{ctrl.name}: {perm.name} activa «{ab.get('label', '')}»")
         self.note_ability(perm.card, f"habilidad: {ab.get('label', '')}", controller=ctrl)
         eff = ab.get("effect")
