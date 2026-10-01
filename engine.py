@@ -1252,6 +1252,26 @@ class Game:
                             and perm.counters.get("loyalty", 0) <= 0):
                         self.to_graveyard(perm, "loyalty 0")
                         changed = True
+            # estado: "cuando ~ no tenga contadores <X>, sacrifícala y crea <ficha>"
+            # (Dark Depths -> Marit Lage). Se dispara una sola vez por permanente.
+            for p in self.players:
+                for perm in list(p.battlefield):
+                    spec = getattr(perm.card, "sac_when_no_counter", None)
+                    if not spec or getattr(perm, "_no_counter_fired", False):
+                        continue
+                    cname, tok = spec
+                    if perm.counters.get(cname, 0) <= 0:
+                        perm._no_counter_fired = True
+                        self.to_graveyard(perm, f"sin contadores {cname}")
+                        if tok:
+                            import cards as _cards
+                            _cards.make_token(
+                                self, p, tok["name"], tok["power"], tok["toughness"],
+                                kw=tuple(tok.get("keywords", ())),
+                                subtypes=tuple(tok.get("subtypes", ())))
+                            self.log(f"{p.name} crea {tok['name']} "
+                                     f"{tok['power']}/{tok['toughness']}")
+                        changed = True
             # aura sin huésped válido -> al cementerio
             for p in self.players:
                 for perm in list(p.battlefield):

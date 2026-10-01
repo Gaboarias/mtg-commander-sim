@@ -959,6 +959,25 @@ def _parse_activated(oracle: str, name: str = ""):
                         "effect": eff_self, "target_spec": None,
                         "target_count": 1, "is_copy_ability": False})
             continue
+        # quitar contadores de SÍ MISMA: "remove a/N <X> counter(s) from this/it/~"
+        # (Dark Depths, etc.). Usa el PERMANENTE fuente, como la rama de monstrosity.
+        mrc = re.search(r"remove (a|an|\d+|two|three|four|five|\w+) (\w+) counters? from",
+                        body, re.I)
+        if mrc and (_rn := _count_word(mrc.group(1))):
+            _cn = mrc.group(2).lower()
+
+            def eff_rc(g, c, perm, tg, _n=_rn, _k=_cn):
+                if perm is not None:
+                    perm.counters[_k] = max(0, perm.counters.get(_k, 0) - _n)
+                    g.log(f"{perm.name}: quita {_n} contador(es) {_k} "
+                          f"(quedan {perm.counters[_k]})")
+                    g.sba()
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                        "sacrifice_other": sac_other, "pay_life": pay_life,
+                        "discard": discard, "label": _short_label(body),
+                        "effect": eff_rc, "target_spec": None,
+                        "target_count": 1, "is_copy_ability": False})
+            continue
         eff, spec, count = _fragment_effect(body)
         if eff is None:
             # efecto no modelado: EXPONER igual la habilidad con un respaldo visible,
@@ -3647,6 +3666,21 @@ def build_card_from_data(data: dict) -> Card:
     _etc = _parse_etb_counters(data.get("oracle_text", ""))
     if _etc:
         card.etb_counters = _etc
+
+    # estado "cuando ~ no tenga contadores <X>, sacrifícala; crea <ficha>" (Dark
+    # Depths -> Marit Lage). Se evalúa en sba() (consistente para cualquier fuente
+    # que llegue a 0 contadores).
+    _noc = re.search(
+        r"has no (\w+) counters? on it,? sacrifice it\.?\s*(?:if you do,?\s*)?"
+        r"create ([a-z][\w' ]+?), an? (?:legendary )?(\d+)/(\d+) "
+        r"[\w ]*?(\w+) creature token(?: with ([\w, ]+))?",
+        re.sub(r"\s+", " ", data.get("oracle_text", "") or ""), re.I)
+    if _noc:
+        _kws = [v for pat, v in _TOKEN_KEYWORDS if re.search(pat, _noc.group(6) or "")]
+        card.sac_when_no_counter = (_noc.group(1).lower(), {
+            "name": _noc.group(2).strip().title(),
+            "power": int(_noc.group(3)), "toughness": int(_noc.group(4)),
+            "subtypes": (_noc.group(5).capitalize(),), "keywords": _kws})
 
     # Produccion de mana: usar `produced_mana` de Scryfall (el mana REAL que
     # produce la carta), no la identidad de color — las tierras no basicas son

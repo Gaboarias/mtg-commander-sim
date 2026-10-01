@@ -4069,6 +4069,36 @@ def test_saga_chapter_runs_fragment_effect():
     assert small.counters.get("+1/+1", 0) == 0
 
 
+def test_dark_depths_remove_counters_makes_marit_lage():
+    # "{3}: Remove an ice counter" ahora SÍ quita contadores; al llegar a 0 la
+    # tierra se sacrifica y crea Marit Lage 20/20 vuela/indestructible.
+    import cardsdb, cards
+    dd = cardsdb.build_card_from_data({
+        "name": "Dark Depths", "type_line": "Legendary Snow Land", "mana_cost": "",
+        "oracle_text": "Dark Depths enters with ten ice counters on it.\n"
+                       "{3}: Remove an ice counter from Dark Depths.\n"
+                       "When Dark Depths has no ice counters on it, sacrifice it. If you "
+                       "do, create Marit Lage, a legendary 20/20 black Avatar creature "
+                       "token with flying and indestructible."})
+    assert dd.etb_counters.get("ice") == 10
+    assert dd.activated_abilities and getattr(dd, "sac_when_no_counter", None)
+    g, me, op = _duel()
+    perm = g.move_to_battlefield(dd, me)
+    assert perm.counters.get("ice") == 10
+    ab = dd.activated_abilities[0]
+    for _ in range(10):
+        ab["effect"](g, me, perm, None)
+        g.sba()
+        if perm not in me.battlefield:
+            break
+    assert perm not in me.battlefield                    # se sacrificó
+    ml = [p for p in me.battlefield if p.name == "Marit Lage"]
+    assert len(ml) == 1
+    assert ml[0].power == 20 and ml[0].toughness == 20
+    assert ml[0].has("flying") and ml[0].has("indestructible")
+    assert ml[0].has_subtype("Avatar") and ml[0].is_token
+
+
 def test_nissa_plus_scry_and_zero_put_top():
     # +2 Scry 2 (se cablea sin error) y 0: poner el tope si es tierra o criatura
     # con CMV <= lealtad.
