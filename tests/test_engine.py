@@ -4099,6 +4099,23 @@ def test_dark_depths_remove_counters_makes_marit_lage():
     assert ml[0].has_subtype("Avatar") and ml[0].is_token
 
 
+def test_mill_ability_logs_feedback():
+    # "{T}: Mill two cards" (Perpetual Timepiece): la activada muele y ahora deja
+    # rastro en el log (antes era silenciosa -> parecía que no hacía nada).
+    import cardsdb, cards
+    pt = cardsdb.build_card_from_data({
+        "name": "Perpetual Timepiece", "type_line": "Artifact", "mana_cost": "{2}",
+        "oracle_text": "{T}: Mill two cards.\n{2}, Exile Perpetual Timepiece: Shuffle "
+                       "any number of target cards from your graveyard into your library."})
+    g, me, op = _duel()
+    me.library = [cards.creature("C%d" % i, "1G", 1, 1) for i in range(5)]
+    perm = g.move_to_battlefield(pt, me)
+    assert g.activate_ability(perm, 0) is True
+    g.resolve_stack(); g.sba()
+    assert perm.tapped and len(me.graveyard) == 2              # giró y molió 2
+    assert any("muele" in l for l in g.log_lines)              # feedback visible
+
+
 def test_smothering_tithe_opponent_draw_makes_treasure():
     # "Whenever an opponent draws a card, ... you create a Treasure token": en la
     # sim los bots no pagan -> el controlador recibe un Tesoro por carta robada.

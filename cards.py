@@ -300,12 +300,17 @@ def attach_generic_effects(card):
 
 def mill(game, player, n):
     """Mueve las n cartas de arriba de la biblioteca al cementerio."""
+    milled = []
     for _ in range(n):
         if not player.library:
-            return
+            break
         card = player.library.pop()
         player.graveyard.append(card)
+        milled.append(card.name)
         game.emit("to_graveyard", player=player, card=card)
+    if milled:
+        game.log(f"{player.name} muele {len(milled)} carta(s): "
+                 + ", ".join(milled))
 
 
 def reanimate(game, ctrl, card):
