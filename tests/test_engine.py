@@ -4069,6 +4069,33 @@ def test_saga_chapter_runs_fragment_effect():
     assert small.counters.get("+1/+1", 0) == 0
 
 
+def test_magecraft_cast_or_copy_trigger():
+    # Magecraft ("whenever you cast OR COPY an instant or sorcery spell") y el
+    # disparo genérico "cast a spell" (Birgi) ahora se cablean.
+    import cardsdb, cards
+    g, me, op = _duel()
+    sk = cardsdb.build_card_from_data({
+        "name": "Storm-Kiln Artist", "type_line": "Creature — Dwarf Artificer",
+        "mana_cost": "{3}{R}", "power": "1", "toughness": "4",
+        "oracle_text": "Magecraft — Whenever you cast or copy an instant or sorcery "
+                       "spell, create a Treasure token."})
+    perm = g.move_to_battlefield(sk, me)
+    assert "cast" in sk.triggers
+    inst = cardsdb.build_card_from_data({"name": "Bolt", "type_line": "Instant",
+                                         "mana_cost": "{R}", "oracle_text": ""})
+    sk.triggers["cast"](g, perm, card=inst)
+    assert sum(1 for p in me.battlefield if p.name == "Treasure") == 1
+    # NO dispara al lanzar una criatura
+    sk.triggers["cast"](g, perm, card=cards.creature("X", "1G", 2, 2))
+    assert sum(1 for p in me.battlefield if p.name == "Treasure") == 1
+
+    birgi = cardsdb.build_card_from_data({
+        "name": "Birgi", "type_line": "Legendary Creature — God", "mana_cost": "{1}{R}",
+        "power": "3", "toughness": "3",
+        "oracle_text": "Whenever you cast a spell, add {C}."})
+    assert "cast" in birgi.triggers
+
+
 def test_excava_attack_reanimates_with_finality():
     # Disparo "al atacar" que reanima del cementerio con tope de CMV y contador de
     # finalidad (al morir, se exilia). Respeta el tope de maná.

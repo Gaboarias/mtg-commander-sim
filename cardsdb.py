@@ -1152,9 +1152,9 @@ def _event_trigger_effect(oracle: str):
     # "whenever you cast a(n) <tipo> spell, <efecto>" (magecraft, Young Pyromancer,
     # Talrand, disparos de fichas al lanzar criaturas, etc.). Filtra por el TIPO
     # de hechizo declarado; "your first ... each turn" se aproxima sin el límite.
-    mc = re.search(r"whenever you cast (?:your first )?"
+    mc = re.search(r"whenever you cast (?:or copy )?(?:your first )?"
                    r"(an instant or sorcery|a noncreature|a creature|an artifact|"
-                   r"an enchantment|a spell)"
+                   r"an enchantment|a)"
                    r"[\w ]*? spell,?\s*(.{0,160})", t, re.I)
     if mc and "cast" not in out:
         qual = mc.group(1).lower()
@@ -1164,8 +1164,8 @@ def _event_trigger_effect(oracle: str):
                 need = {"instant", "sorcery"}
             elif "noncreature" in qual:
                 need = None      # cualquier no-criatura (se filtra abajo)
-            elif "a spell" in qual:
-                need = set()     # cualquier hechizo
+            elif qual == "a":
+                need = set()     # cualquier hechizo (magecraft genérico, Birgi…)
             else:
                 need = {qual.split()[-1]}   # creature / artifact / enchantment
 
