@@ -4069,6 +4069,42 @@ def test_saga_chapter_runs_fragment_effect():
     assert small.counters.get("+1/+1", 0) == 0
 
 
+def test_token_keywords_beyond_trample():
+    # Las fichas creadas conservan TODAS sus keywords (no solo trample).
+    import cardsdb, cards
+    g, me, op = _duel()
+    sp = cardsdb.build_card_from_data({
+        "name": "Hacer Caballero", "type_line": "Sorcery", "mana_cost": "{1}{W}",
+        "oracle_text": "Create a 2/2 white Knight creature token with vigilance and lifelink."})
+    sp.on_cast_resolve(g, me, [])
+    tok = [p for p in me.battlefield if p.is_token][0]
+    assert "vigilance" in tok.keywords and "lifelink" in tok.keywords
+
+
+def test_destroy_all_lands_effect():
+    # "Destroy all lands" (Fall of the Thran, Armageddon…) arrasa las tierras.
+    import cardsdb, cards
+    g, me, op = _duel()
+    for _ in range(2):
+        g.move_to_battlefield(cards.land("Plains", ["W"], basic=True), me)
+    g.move_to_battlefield(cards.land("Island", ["U"], basic=True), op)
+    eff = cardsdb._chapter_effect("Destroy all lands")
+    assert eff is not None
+    eff(g, me)
+    g.sba()
+    assert not any(p.card.is_land() for p in me.battlefield + op.battlefield)
+
+
+def test_gain_life_and_draw_compound():
+    import cardsdb, cards
+    g, me, op = _duel()
+    me.library = [cards.land("Plains", ["W"], basic=True) for _ in range(5)]
+    eff = cardsdb._chapter_effect("You gain 2 life and draw a card")
+    life0, hand0 = me.life, len(me.hand)
+    eff(g, me)
+    assert me.life == life0 + 2 and len(me.hand) == hand0 + 1
+
+
 def test_saga_chapter_human_picks_target():
     # Capítulo de Saga con objetivo (contadores) controlado por el humano: abre el
     # modal y aplica al elegido, no al auto.

@@ -140,6 +140,17 @@ def _prefer_front_face(data: dict) -> dict:
 _NUMWORD = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4,
             "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 
+# keywords que puede traer una ficha ("... token with vigilance and lifelink")
+_TOKEN_KEYWORDS = [
+    (r"\bflying\b", "flying"), (r"\btrample\b", "trample"),
+    (r"\bvigilance\b", "vigilance"), (r"\blifelink\b", "lifelink"),
+    (r"\bdeathtouch\b", "deathtouch"), (r"\bmenace\b", "menace"),
+    (r"\bhaste\b", "haste"), (r"\breach\b", "reach"),
+    (r"\bdefender\b", "defender"), (r"\bhexproof\b", "hexproof"),
+    (r"\bindestructible\b", "indestructible"),
+    (r"\bfirst strike\b", "first_strike"), (r"\bdouble strike\b", "double_strike"),
+]
+
 
 # tipo de objeto pedido por el texto -> target_spec que el humano puede elegir.
 # El orden importa: "artifact or enchantment" antes que "artifact" o "enchantment".
@@ -555,14 +566,24 @@ def _fragment_effect(seg: str):
         return putc, "own_creature", 1
     # Barridas por tipo como MODO ("destroy all creatures/planeswalkers/battles",
     # "exile all graveyards"). En un modo van por _fragment_effect (no por el tag wipe).
-    mall = re.search(r"destroy all (creatures?|planeswalkers?|battles?)", seg, re.I)
+    mall = re.search(r"destroy all (creatures?|planeswalkers?|battles?|lands?|"
+                     r"artifacts?|enchantments?|nonland permanents?|permanents?)", seg, re.I)
     if mall:
         kind = mall.group(1).lower().rstrip("s")
+
+        def _matches(pm, _k=kind):
+            if _k == "land":
+                return pm.card.is_land()
+            if _k == "permanent":
+                return True
+            if _k == "nonland permanent":
+                return not pm.card.is_land()
+            return _k in pm.card.types
 
         def wipe_type(game, ctrl, targets, _k=kind):
             for pl in game.players:
                 for pm in list(pl.battlefield):
-                    if _k in pm.card.types:
+                    if _matches(pm):
                         game.destroy(pm, f"destruir todos los {_k}")
             game.sba()
             game.log(f"Se destruyen todos los {_k}")
@@ -2587,7 +2608,10 @@ def _generic_amount_effect(oracle: str):
         # "with N +1/+1 counters on it" (contadores de entrada de la ficha)
         mc = re.search(r"with (\w+) \+1/\+1 counters?", t)
         cn = _count_word(mc.group(1)) if mc else 0
-        kw = ("trample",) if re.search(r"\bwith trample\b|has trample", t) else ()
+        # keywords de la ficha: sólo las de ESTA oración (tras "token ...") para no
+        # arrastrar keywords de otras cláusulas del texto.
+        _tail = re.split(r"[.;]", t[m.end():])[0]
+        kw = tuple(v for pat, v in _TOKEN_KEYWORDS if re.search(pat, _tail))
         # cantidad VARIABLE: "X ... where X is the number of …" / "for each …"
         cnt_fn = None
         mvar = re.search(r"(?:for each|equal to the number of|where x is the number of) "
@@ -2673,8 +2697,15 @@ def _generic_amount_effect(oracle: str):
 
     m = re.search(r"(?:you )?gain (\w+) life", t)
     if m and (n := _count_word(m.group(1))):
-        def eff(game, ctrl, *_a, _n=n):
+        # compuesto frecuente: "gain N life and draw M card(s)"
+        md = re.search(r"draw (\w+) cards?", t)
+        dn = _count_word(md.group(1)) if md else 0
+
+        def eff(game, ctrl, *_a, _n=n, _d=dn):
             game.gain_life(ctrl, _n)
+            if _d:
+                ctrl.draw(_d, game)
+                game.log(f"{ctrl.name} roba {_d} carta(s)")
         return eff
 
     # duplicar contadores +1/+1 (en cada criatura tuya, o en una objetivo)
