@@ -4099,6 +4099,27 @@ def test_dark_depths_remove_counters_makes_marit_lage():
     assert ml[0].has_subtype("Avatar") and ml[0].is_token
 
 
+def test_smothering_tithe_opponent_draw_makes_treasure():
+    # "Whenever an opponent draws a card, ... you create a Treasure token": en la
+    # sim los bots no pagan -> el controlador recibe un Tesoro por carta robada.
+    import cardsdb, cards
+    tithe = cardsdb.build_card_from_data({
+        "name": "Smothering Tithe", "type_line": "Enchantment", "mana_cost": "{3}{W}",
+        "oracle_text": "Whenever an opponent draws a card, that player may pay {2}. If "
+                       "the player does not, you create a Treasure token."})
+    assert "opp_draw" in tithe.triggers
+    g, me, op = _duel()
+    op.library = [cards.land("X", ["W"], basic=True) for _ in range(5)]
+    g.move_to_battlefield(tithe, me)
+    op.draw(2, g)
+    g.resolve_stack(); g.sba()
+    assert sum(1 for p in me.battlefield if p.name == "Treasure") == 2   # 1 por carta
+    me.library = [cards.land("Y", ["W"], basic=True) for _ in range(3)]
+    me.draw(1, g)                                                        # robo propio
+    g.resolve_stack(); g.sba()
+    assert sum(1 for p in me.battlefield if p.name == "Treasure") == 2   # no cambia
+
+
 def test_etb_reanimate_nonland_opens_human_picker():
     # "When ~ enters, return target nonland permanent card with mana value 3 or less
     # from your graveyard to the battlefield" (Primary Research): el humano elige en

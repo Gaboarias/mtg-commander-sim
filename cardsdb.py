@@ -1212,6 +1212,19 @@ def _event_trigger_effect(oracle: str):
                     effo(game, perm.controller)
             out["opp_cast"] = cboc
 
+    # "whenever an opponent draws a card, <efecto>" (Smothering Tithe…). En la
+    # simulación los bots no pagan el impuesto -> el controlador recibe el efecto
+    # (p. ej. crea un Tesoro). Evento opp_draw sin scope; el callback filtra.
+    mod = re.search(r"whenever an opponent draws (?:a|their first) card,?\s*(.{0,160})",
+                    t, re.I)
+    if mod:
+        effd = _generic_amount_effect(mod.group(1))
+        if effd is not None:
+            def cbod(game, perm, drawer=None, _e=effd, **_kw):
+                if drawer is not None and drawer is not perm.controller:
+                    _e(game, perm.controller)
+            out["opp_draw"] = cbod
+
     # "whenever you gain life, <efecto>" (soul sisters, Ajani's Pridemate, Heliod…).
     if "gain_life" not in out:
         mg = re.search(r"whenever you gain life,?\s*(.{0,140})", t, re.I)

@@ -389,6 +389,9 @@ class Player:
             # `count` = cuantas cartas van robadas este turno (para efectos como
             # el drenaje de Kang, que mira la SEGUNDA carta robada del turno).
             game.emit("draw", player=self, count=self.draws_this_turn)
+            # evento sin scope para "whenever an opponent draws a card" (Smothering
+            # Tithe): se despacha a los permanentes de TODOS; el callback filtra.
+            game.emit("opp_draw", drawer=self)
 
     # -- consultas -------------------------------------------------------- #
     def creatures(self) -> list:
