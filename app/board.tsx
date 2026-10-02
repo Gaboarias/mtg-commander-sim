@@ -19,10 +19,11 @@ export type PlayerState = {
 };
 
 export function CardMini({
-  perm, art, reduce, selectable, selected, onClick, onInspect,
+  perm, art, reduce, selectable, selected, onClick, onInspect, isCommander,
 }: {
   perm: Perm; art?: string; reduce: boolean;
   selectable?: boolean; selected?: boolean; onClick?: () => void; onInspect?: () => void;
+  isCommander?: boolean;
 }) {
   const plus = perm.counters["+1/+1"] || 0;
   const minus = perm.counters["-1/-1"] || 0;
@@ -44,8 +45,8 @@ export function CardMini({
       animate={{ opacity: 1, scale: 1, y: 0, rotate: perm.tapped ? 9 : 0 }}
       exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.5, y: 10 }}
       transition={{ type: "spring", stiffness: 420, damping: 30 }}
-      className={`cardmini ${perm.attacking ? "atk" : ""} ${selectable ? "sel-able" : ""} ${selected ? "sel" : ""}`}
-      title={perm.name}
+      className={`cardmini ${perm.attacking ? "atk" : ""} ${perm.tapped ? "tapped" : ""} ${selectable ? "sel-able" : ""} ${selected ? "sel" : ""}`}
+      title={perm.tapped ? `${perm.name} (girada)` : perm.name}
       onClick={onClick}
       style={onClick ? { cursor: "pointer" } : undefined}
     >
@@ -53,8 +54,11 @@ export function CardMini({
         <button className="cm-info" title="Ver carta" aria-label="Ver detalle de la carta"
           onClick={(e) => { e.stopPropagation(); onInspect(); }}><Icon name="info" size={14} /></button>
       )}
+      {isCommander && (
+        <span className="cm-badge cmdr" title="comandante"><Icon name="crown" size={10} /></span>
+      )}
       {perm.is_token && <span className="cm-badge tok" title="ficha">ficha</span>}
-      {perm.is_creature && perm.sick && !perm.tapped && (
+      {perm.is_creature && perm.sick && (
         <span className="cm-badge sick" title="mareo de invocación (no puede atacar este turno)">zzz</span>
       )}
       {art ? (
@@ -164,6 +168,7 @@ export function Seat({
                 key={pm.uid} perm={pm} art={pm.is_token ? undefined : art[pm.name]} reduce={reduce}
                 selectable={selectableUids?.has(pm.uid)}
                 selected={selectedUids?.has(pm.uid)}
+                isCommander={p.commander.includes(pm.name)}
                 onClick={onCard && selectableUids?.has(pm.uid) ? () => onCard(pm.uid) : undefined}
                 onInspect={onInspect ? () => onInspect(pm) : undefined}
               />
@@ -176,6 +181,7 @@ export function Seat({
           <AnimatePresence>
             {lands.map((pm) => (
               <CardMini key={pm.uid} perm={pm} art={pm.is_token ? undefined : art[pm.name]} reduce={reduce}
+                isCommander={p.commander.includes(pm.name)}
                 onInspect={onInspect ? () => onInspect(pm) : undefined} />
             ))}
           </AnimatePresence>

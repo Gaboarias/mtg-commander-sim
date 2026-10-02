@@ -94,6 +94,7 @@ export default function Play() {
   const [booting, setBooting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<GameState | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
   const countedRef = useRef(false);
   // contar la partida cuando termina (una sola vez por partida)
   useEffect(() => {
@@ -171,6 +172,12 @@ export default function Play() {
 
   // terminar el worker del motor al desmontar la página
   useEffect(() => () => { workerRef.current?.terminate(); workerRef.current = null; }, []);
+
+  // auto-scroll del relato a la última jugada (la más nueva está abajo)
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [state?.log]);
 
   useEffect(() => {
     fetch("/api/catalog").then((r) => r.json()).then((d) => {
@@ -1091,7 +1098,7 @@ export default function Play() {
 
           <div className="card">
             <h2>Relato</h2>
-            <div className="log">{(state.log || []).join("\n")}</div>
+            <div className="log" ref={logRef}>{(state.log || []).join("\n")}</div>
             <div className="act-block" style={{ marginTop: 10 }}>
               <span className="act-label">Exportar todas las jugadas:</span>
               <button className="ghost" onClick={() => exportGame("json")} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> JSON</button>
@@ -1195,6 +1202,13 @@ export default function Play() {
           etb_target: "Elegí a qué apunta la habilidad.",
           cascade_target: "Cascada: elegí a qué carta revelada apuntar.",
           gy_shuffle: "Elegí cartas de tu cementerio para barajar de vuelta a la biblioteca.",
+          look_take: "Mirá las cartas reveladas y llevate la que elijas.",
+          reveal_land: "Elegí una de las cartas reveladas.",
+          reanimate: "Elegí una carta del cementerio para ponerla en el campo de batalla.",
+          exile_pick: "Elegí una carta del exilio.",
+          creature_type: "Elegí un tipo de criatura (p. ej. Zombi, Elfo, Dragón).",
+          discard: "Elegí qué carta mandar al cementerio.",
+          may: "Decidí si querés aplicar el efecto opcional.",
         };
         const title = titles[ch.kind] || "Elegí una carta";
         const hint = hints[ch.kind];
@@ -1223,7 +1237,7 @@ export default function Play() {
                     disabled={o.ok === false}
                     onClick={() => doAct("choose", { index: o.i })}
                     style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    {isCardPick && art[o.name]
+                    {art[o.name]
                       ? <span className="choice-thumb" style={{ backgroundImage: `url(${art[o.name]})` }} />
                       : <Icon name={isCardPick ? (o.is_land ? "land" : "cards") : "chevron-right"} size={13} />}
                     {o.name}
