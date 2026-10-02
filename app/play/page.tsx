@@ -1174,15 +1174,30 @@ export default function Play() {
         const titles: Record<string, string> = {
           scry: "Scry", surveil: "Surveil", fateseal: "Fateseal (biblioteca rival)",
           explore: "Explorar", search: "Buscar en la biblioteca",
-          look_take: "Elegí una carta", reveal_land: "Elegí una carta",
+          look_take: "Mirar y elegir", reveal_land: "Revelar y elegir",
           etb_target: "Elegí un objetivo", creature_type: "Elegí un tipo de criatura",
           discard: "Descartar", may: "¿Querés hacerlo?",
           legend: "Regla de legendarios", x: "Elegí X",
-          reanimate: "Elegí una carta del cementerio", exile_pick: "Elegí una carta del exilio",
+          reanimate: "Revivir desde el cementerio", exile_pick: "Elegí una carta del exilio",
           cascade_target: "Cascada: elegí el objetivo",
           gy_shuffle: "Barajar cartas del cementerio",
         };
+        // Una línea que EXPLICA la mecánica (sobre todo la jerga de MTG), debajo del
+        // título. El `prompt` del motor da el detalle puntual (qué carta, cuántas faltan).
+        const hints: Record<string, string> = {
+          scry: "Mirá las cartas de arriba de tu biblioteca y mandá cada una arriba o al fondo.",
+          surveil: "Mirá las cartas de arriba y mandá cada una arriba o al cementerio.",
+          fateseal: "Mirá arriba de la biblioteca del rival y decidís si la dejás arriba o al fondo.",
+          explore: "Si la carta de arriba es tierra va a tu mano; si no, la criatura crece +1/+1.",
+          search: "Elegí una carta de tu biblioteca; después se baraja.",
+          legend: "Tenés dos legendarias iguales: conservá una, la otra va al cementerio.",
+          x: "Elegí cuánto maná pagar por X.",
+          etb_target: "Elegí a qué apunta la habilidad.",
+          cascade_target: "Cascada: elegí a qué carta revelada apuntar.",
+          gy_shuffle: "Elegí cartas de tu cementerio para barajar de vuelta a la biblioteca.",
+        };
         const title = titles[ch.kind] || "Elegí una carta";
+        const hint = hints[ch.kind];
         const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno"
           : ch.kind === "gy_shuffle" ? "Ninguna más"
           : "No llevarme ninguna";
@@ -1190,6 +1205,7 @@ export default function Play() {
           <div className="inspect-back">
             <div className="inspect" onClick={(e) => e.stopPropagation()}>
               <h3><Icon name="book" size={17} /> {title}</h3>
+              {hint && <p className="muted" style={{ marginTop: 2, fontSize: ".82rem", opacity: .85 }}>{hint}</p>}
               <p className="muted" style={{ marginTop: 2 }}>{ch.prompt}</p>
               {ch.card && (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, margin: "8px 0 12px" }}>
