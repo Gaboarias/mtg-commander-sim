@@ -6654,6 +6654,50 @@ def test_ability_library_create_tapped_treasure():
     assert len(tr) == 2 and all(pm.tapped for pm in tr)
 
 
+# -- habilidades {X} (Crypt Rats, Fireball-like) --------------------------- #
+def test_x_activated_ability_deals_x_damage_to_all():
+    import cardsdb, cards
+    g, me, op = _duel()
+    cr = cardsdb.build_card_from_data({
+        "name": "Crypt Rats", "type_line": "Creature", "mana_cost": "{2}{B}",
+        "power": "1", "toughness": "1",
+        "oracle_text": "{X}: Crypt Rats deals X damage to each creature and each player."})
+    pm = g.move_to_battlefield(cr, me)
+    ab = pm.card.activated_abilities[0]
+    assert ab.get("x_cost") is True and ab["cost"].cmc == 0   # el coste es sólo {X}
+    bicho = g.move_to_battlefield(cards.creature("Bicho", "1G", 3, 3), op)
+    for _ in range(6):
+        g.move_to_battlefield(cards.land("Swamp", ["B"], basic=True), me)
+    ol, ml = op.life, me.life
+    assert g.activate_ability(pm, 0, x=3) is True
+    g.resolve_stack(); g.sba()
+    assert op.life == ol - 3 and me.life == ml - 3              # 3 a cada jugador
+    assert not any(p.name == "Bicho" for p in op.battlefield)   # 3 mata al 3/3
+    assert not any(p.name == "Crypt Rats" for p in me.battlefield)  # y al 1/1 propio
+
+
+def test_x_ability_human_prompts_for_x():
+    import interactive, cards, cardsdb, decks
+    ig = interactive.InteractiveGame(
+        [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")],
+        human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    cr = cardsdb.build_card_from_data({
+        "name": "Crypt Rats", "type_line": "Creature", "mana_cost": "{2}{B}",
+        "power": "1", "toughness": "1",
+        "oracle_text": "{X}: Crypt Rats deals X damage to each creature and each player."})
+    pm = ig.g.move_to_battlefield(cr, hu)
+    for _ in range(5):
+        ig.g.move_to_battlefield(cards.land("Swamp", ["B"], basic=True), hu)
+    st = ig.activate_ability(pm.uid, 0)
+    assert st["phase"] == "choose" and st["choice"]["kind"] == "x"
+    opp = ig.g.opponents(hu)[0]
+    ol = opp.life
+    ig.resolve_choice(3)                                        # X = 3
+    assert opp.life == ol - 3
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

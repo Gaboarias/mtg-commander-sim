@@ -279,11 +279,22 @@ class Policy:
                 tgt = self._spec_targets(game, me, spec, ab.get("target_count", 1))
                 if spec and not tgt:
                     continue
+                # habilidades {X}: elegir X = maná sobrante tras el coste base (tope
+                # 10). Las que se auto-dañan (pegan a cada criatura/jugador) el bot las
+                # evita para no barrerse su propio tablero.
+                xv = 0
+                if ab.get("x_cost"):
+                    if ab.get("x_self_harm"):
+                        continue
+                    base = ab.get("cost").cmc if ab.get("cost") else 0
+                    xv = min(10, max(0, me.available_mana() - base))
+                    if xv < 1:
+                        continue        # sin maná para X no aporta nada
                 # marcar ANTES de activar: si la activación pausa (ReactionPause),
                 # al reanudar este permanente ya queda descartado.
                 if done is not None:
                     done.add(perm.uid)
-                if game.activate_ability(perm, j, targets=tgt):
+                if game.activate_ability(perm, j, targets=tgt, x=xv):
                     used += 1
                     break              # una habilidad por permanente por turno
 

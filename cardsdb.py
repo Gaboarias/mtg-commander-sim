@@ -935,7 +935,8 @@ def _parse_activated(oracle: str, name: str = ""):
                              or pay_life or discard):
             continue
         tap = any(s.upper() == "T" for s in syms)
-        mana = "".join("{%s}" % s for s in syms if s.upper() != "T")
+        x_cost = any(s.upper() == "X" for s in syms)   # habilidad con {X} en el coste
+        mana = "".join("{%s}" % s for s in syms if s.upper() not in ("T", "X"))
         cost = parse_cost(mana_cost_to_str(mana)) if mana else parse_cost("0")
         # habilidades de "agregar maná": las de coste trivial ({T}/maná) ya las cubre
         # `produces`. Pero las que tienen un coste REAL (sacrificar otra permanente,
@@ -960,6 +961,54 @@ def _parse_activated(oracle: str, name: str = ""):
                         "target_spec": None, "target_count": 1,
                         "is_copy_ability": False})
             continue
+        # habilidad {X}: "{X}: ~ deals X damage to <objetivo>" (Crypt Rats, Fireball,
+        # Comet Storm, Blaze…). El valor de X lo elige quien activa; el motor lo pasa
+        # al efecto vía game._ability_x.
+        if x_cost:
+            mxd = re.search(r"deals x damage to ([\w' ,]+)", body, re.I)
+            if mxd:
+                dest = mxd.group(1).lower()
+                all_cre = "each creature" in dest
+                all_pl = "each player" in dest
+                each_opp = "each opponent" in dest
+                tgt_creature = ("target creature" in dest) and not all_cre
+
+                def eff_xdmg(g, c, perm, tg, _ac=all_cre, _ap=all_pl,
+                             _eo=each_opp, _tc=tgt_creature):
+                    x = max(0, int(getattr(g, "_ability_x", 0) or 0))
+                    if x <= 0:
+                        return
+                    if _ac or _ap or _eo:
+                        if _ac:
+                            for pl in g.players:
+                                for pm in list(pl.creatures()):
+                                    g.deal_damage(perm, pm, x)
+                        if _ap:
+                            for pl in g.players:
+                                g.deal_damage(perm, pl, x)
+                        if _eo:
+                            for o in g.opponents(c):
+                                g.deal_damage(perm, o, x)
+                    elif _tc and tg:
+                        g.deal_damage(perm, tg[0], x)
+                    else:                       # "any target"/"target player" -> rival
+                        opps = g.opponents(c)
+                        if opps:
+                            g.deal_damage(perm, min(opps, key=lambda o: o.life), x)
+                    g.log(f"{c.name}: {perm.name if perm else '—'} inflige {x} de daño (X)")
+                    g.sba()
+                out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                            "exile_self": exile_self, "rm_counter": rm_counter,
+                            "sacrifice_other": sac_other, "pay_life": pay_life,
+                            "discard": discard, "label": _short_label(body),
+                            "effect": eff_xdmg,
+                            "target_spec": ("opp_creature" if tgt_creature else None),
+                            "target_count": 1, "is_copy_ability": False,
+                            "x_cost": True,
+                            # pega a cada criatura/jugador -> el bot lo evita (auto-daño)
+                            "x_self_harm": bool(all_cre or all_pl)})
+                continue
+
         # self-buff: "Monstrosity N" o "put N +1/+1 counters on it/this creature"
         # (usa el PERMANENTE fuente, que el wrapper genérico no pasa al efecto).
         msc = re.search(r"monstrosity (\w+)", body, re.I) or re.search(

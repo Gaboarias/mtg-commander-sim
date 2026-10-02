@@ -1322,7 +1322,7 @@ class InteractiveGame:
                 "mana": p.available_mana(),
                 "mana_sources": len(p.mana_sources())}
 
-    def activate_ability(self, uid, index=0, target_uids=None):
+    def activate_ability(self, uid, index=0, target_uids=None, x=None):
         if not self._my_turn():
             return self.state()
         pm = self._find_perm(uid)
@@ -1330,9 +1330,29 @@ class InteractiveGame:
             return self.state()
         self._snapshot()
         abs_ = getattr(pm.card, "activated_abilities", ()) or ()
-        spec = abs_[index].get("target_spec") if 0 <= index < len(abs_) else None
+        ab = abs_[index] if 0 <= index < len(abs_) else None
+        if ab is None:
+            return self.state()
+        spec = ab.get("target_spec")
         tgt = self._chosen_targets(pm.card, target_uids, spec=spec) if spec else None
-        self.g.activate_ability(pm, index, targets=tgt)
+        # habilidad con {X}: el humano elige X (0..máximo pagable) antes de activar.
+        if ab.get("x_cost") and x is None:
+            p = self.human()
+            base = ab.get("cost").cmc if ab.get("cost") else 0
+            maxx = min(20, max(0, p.available_mana() - base))
+
+            def _apply(idx, _pm=pm, _i=index, _tg=tgt):
+                self.g.activate_ability(_pm, _i, targets=_tg, x=(idx or 0))
+                self.g.sba()
+
+            self.g.pending_choice = {
+                "kind": "x",
+                "prompt": f"Elegí X para «{ab.get('label', '')}» (0 a {maxx}).",
+                "options": [{"i": v, "name": f"X = {v}"} for v in range(maxx + 1)],
+                "allow_none": False, "_apply": _apply,
+            }
+            return self.state()
+        self.g.activate_ability(pm, index, targets=tgt, x=(x or 0))
         self.g.sba()
         return self.state()
 

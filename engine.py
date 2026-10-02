@@ -1620,11 +1620,11 @@ class Game:
             kind="ability", perm=perm))
         return self._after_stack_push(ctrl, self.stack[-1])
 
-    def activate_ability(self, perm: Permanent, index: int, targets=None) -> bool:
+    def activate_ability(self, perm: Permanent, index: int, targets=None, x=0) -> bool:
         """Activa una habilidad con coste de maná (y opcionalmente girar) de un
         permanente. El coste se paga al activar; el EFECTO va a la pila y se
         resuelve con prioridad (refactor A). Se puede repetir mientras haya con
-        qué pagar."""
+        qué pagar. `x` es el valor de X para habilidades con {X} en el coste."""
         abils = perm.card.activated_abilities
         if not abils or not (0 <= index < len(abils)):
             return False
@@ -1632,7 +1632,11 @@ class Game:
         if ab.get("tap") and perm.tapped:
             return False
         ctrl = perm.controller
-        if not ctrl.can_pay(ab.get("cost")):
+        # habilidad con {X}: el coste efectivo suma X maná genérico.
+        base_cost = ab.get("cost")
+        xv = max(0, int(x)) if ab.get("x_cost") else 0
+        pay_cost = Cost(base_cost.generic + xv, base_cost.pips) if (xv and base_cost) else base_cost
+        if not ctrl.can_pay(pay_cost):
             return False
         # costes adicionales: verificar que se pueden pagar ANTES de tocar nada.
         sac_o = ab.get("sacrifice_other")
@@ -1651,7 +1655,7 @@ class Game:
         rmc = ab.get("rm_counter")
         if rmc and perm.counters.get(rmc["name"], 0) < rmc["n"]:
             return False   # sin contadores suficientes para pagar el coste
-        ctrl.pay(ab.get("cost"))
+        ctrl.pay(pay_cost)
         if rmc:
             perm.counters[rmc["name"]] = perm.counters.get(rmc["name"], 0) - rmc["n"]
             self.log(f"{ctrl.name} quita {rmc['n']} contador(es) {rmc['name']} "
@@ -1683,9 +1687,11 @@ class Game:
         _t = list(targets or [])
         is_copy = bool(ab.get("is_copy_ability"))
 
-        def _resolve(g, _eff=eff, _c=ctrl, _p=perm, _tg=_t, _ab=ab, _is_copy=is_copy):
+        def _resolve(g, _eff=eff, _c=ctrl, _p=perm, _tg=_t, _ab=ab, _is_copy=is_copy, _x=xv):
             if _eff:
+                g._ability_x = _x            # valor de X para habilidades {X}
                 _eff(g, _c, _p, _tg)
+                g._ability_x = 0
             # recordar esta habilidad para "copiá la última habilidad" (Strionic).
             # La propia habilidad de copia NO se registra (evita copiarse a sí misma).
             if not _is_copy:

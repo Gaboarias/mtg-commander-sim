@@ -190,6 +190,8 @@ _FILLER_ORACLE = {
                       "control, proliferate.",
     "Bloated Contaminator": "Trample\nToxic 1\nWhenever Bloated Contaminator deals "
                             "combat damage to a player, proliferate.",
+    "Crypt Rats": "{X}: Crypt Rats deals X damage to each creature and each player.",
+    "River Boa": "Islandwalk\n{G}: Regenerate River Boa.",
 }
 
 
