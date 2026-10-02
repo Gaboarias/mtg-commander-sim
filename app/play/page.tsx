@@ -1176,7 +1176,7 @@ export default function Play() {
           explore: "Explorar", search: "Buscar en la biblioteca",
           look_take: "Elegí una carta", reveal_land: "Elegí una carta",
           etb_target: "Elegí un objetivo", creature_type: "Elegí un tipo de criatura",
-          discard: "Descartar (mano de más de 7)", may: "¿Querés hacerlo?",
+          discard: "Descartar", may: "¿Querés hacerlo?",
           legend: "Regla de legendarios", x: "Elegí X",
           reanimate: "Elegí una carta del cementerio", exile_pick: "Elegí una carta del exilio",
           cascade_target: "Cascada: elegí el objetivo",
