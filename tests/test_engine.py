@@ -6698,6 +6698,37 @@ def test_x_ability_human_prompts_for_x():
     assert opp.life == ol - 3
 
 
+# -- ETB dirigido a un permanente no-criatura (bot auto-target) ------------ #
+def test_etb_destroy_target_land_bot_autotargets():
+    import cardsdb, cards
+    g, me, op = _duel()
+    g.move_to_battlefield(cards.land("Island", ["U"], basic=True), op)
+    g.move_to_battlefield(cardsdb.build_card_from_data({
+        "name": "White Orchid Phantom", "type_line": "Creature", "mana_cost": "{2}{W}",
+        "power": "2", "toughness": "2",
+        "oracle_text": "Flying\nWhen White Orchid Phantom enters, destroy target land."}), me)
+    g.resolve_stack(); g.sba()
+    assert not any(p.name == "Island" for p in op.battlefield)   # el bot destruyó la tierra rival
+
+
+def test_etb_destroy_target_artifact_opens_human_modal():
+    import interactive, cards, cardsdb, decks
+    ig = interactive.InteractiveGame(
+        [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")],
+        human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    opp = ig.g.opponents(hu)[0]
+    ig.g.move_to_battlefield(cardsdb.build_card_from_data(
+        {"name": "Reliquia", "type_line": "Artifact", "mana_cost": "{3}", "oracle_text": ""}), opp)
+    ig.g.move_to_battlefield(cardsdb.build_card_from_data({
+        "name": "Rompe", "type_line": "Creature", "mana_cost": "{2}", "power": "2",
+        "toughness": "2", "oracle_text": "When Rompe enters, destroy target artifact."}), hu)
+    pc = ig.g.pending_choice
+    assert pc is not None and pc["kind"] == "etb_target"
+    assert any("Reliquia" in o["name"] for o in pc["options"])
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

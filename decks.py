@@ -192,6 +192,8 @@ _FILLER_ORACLE = {
                             "combat damage to a player, proliferate.",
     "Crypt Rats": "{X}: Crypt Rats deals X damage to each creature and each player.",
     "River Boa": "Islandwalk\n{G}: Regenerate River Boa.",
+    "White Orchid Phantom": "Flying\nWhen White Orchid Phantom enters, destroy "
+                            "target land.",
 }
 
 

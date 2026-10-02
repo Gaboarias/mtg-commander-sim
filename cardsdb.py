@@ -3016,6 +3016,59 @@ def _generic_amount_effect(oracle: str):
                                  cands, _do, allow_none=_opt)
         return eff
 
+    # destruir / exiliar un PERMANENTE NO criatura objetivo (tierra, artefacto,
+    # encantamiento, planeswalker, permanente): White Orchid Phantom, Frost Titan,
+    # etc. El humano elige; el bot toma el del RIVAL de mayor coste.
+    mp = re.search(r"(destroy|exile) (?:up to )?(?:one |a |target )?target "
+                   r"(land|artifact or enchantment|artifact|enchantment|planeswalker|"
+                   r"nonland permanent|permanent)", t)
+    if mp:
+        _mode = "exile" if mp.group(1) == "exile" else "destroy"
+        _kind = mp.group(2)
+        _opt = "up to" in t
+
+        def _match(pm, _k=_kind):
+            tp = pm.card.types
+            if _k == "land":
+                return pm.card.is_land()
+            if _k == "artifact":
+                return "artifact" in tp
+            if _k == "enchantment":
+                return "enchantment" in tp
+            if _k == "planeswalker":
+                return "planeswalker" in tp
+            if _k == "artifact or enchantment":
+                return bool({"artifact", "enchantment"} & tp)
+            if _k == "nonland permanent":
+                return not pm.card.is_land()
+            return True                               # "permanent"
+
+        def eff(game, ctrl, *_a, _mode=_mode, _opt=_opt, _m=_match):
+            pool = [pm for pl in game.players for pm in pl.battlefield
+                    if pm.controller is not ctrl and _m(pm) and game.can_target(ctrl, pm)]
+            if not pool:
+                return
+            pool.sort(key=lambda x: (x.card.cost.cmc if x.card.cost else 0), reverse=True)
+            cands = [(f"{pm.name} · {pm.controller.name}", pm) for pm in pool]
+
+            def _do(pm):
+                if pm not in pm.controller.battlefield:
+                    return
+                if _mode == "exile":
+                    owner = pm.controller
+                    owner.battlefield.remove(pm)
+                    if not pm.is_token and pm.card is not owner.commander_card:
+                        owner.exile.append(pm.card)
+                    game.log(f"{ctrl.name} exilia {pm.name}")
+                else:
+                    game.destroy(pm, "ETB")
+                    game.log(f"{ctrl.name} destruye {pm.name}")
+
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí un permanente" + (" (o ninguno)" if _opt else ""),
+                                 cands, _do, allow_none=_opt)
+        return eff
+
     # fichas de recurso (Treasure/Clue/Food/Blood): visibles en el tablero.
     m = re.search(r"create (\w+) (treasure|clue|food|blood|gold) tokens?", t)
     if m:
