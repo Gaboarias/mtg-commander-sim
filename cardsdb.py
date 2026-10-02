@@ -5005,6 +5005,21 @@ def build_card_from_data(data: dict) -> Card:
     return cards.attach_generic_effects(card)
 
 
+# Cartas NO criatura de los presets (.md) cuyo tipo real no viene en la tabla
+# (las filas sin P/T caen a 'sorcery' por defecto). Con el tipo correcto + oracle,
+# el parser las implementa. {nombre: (type_line, oracle_text)}.
+PRESET_NONCREATURE = {
+    "Inexorable Tide": ("Enchantment",
+                        "Whenever you cast a spell, proliferate."),
+    "Patchwork Banner": (
+        "Artifact",
+        "As Patchwork Banner enters the battlefield, choose a creature type.\n"
+        "Creatures you control of the chosen type get +1/+1.\n"
+        "{T}: Add one mana of any color. Spend this mana only to cast a creature "
+        "spell of the chosen type."),
+}
+
+
 # --------------------------------------------------------------------------- #
 # Resolucion por nombre
 # --------------------------------------------------------------------------- #

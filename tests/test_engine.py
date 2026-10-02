@@ -6761,6 +6761,18 @@ def test_conditional_self_buff_lands_and_life():
     assert (av.power, av.toughness) == (3, 3)                 # <25: base
 
 
+# -- presets: no-criaturas con tipo+oracle correctos ----------------------- #
+def test_preset_noncreature_gets_real_effect():
+    import decks, coverage
+    # tricky-terrain (preset .md) trae Inexorable Tide SIN tipo en la tabla; con el
+    # tipo real (Enchantment) + oracle, su disparo "al lanzar un hechizo" vive.
+    deck, cmd = decks.build("tricky-terrain")
+    tide = next((c for c in [cmd] + deck if c.name == "Inexorable Tide"), None)
+    assert tide is not None
+    assert "enchantment" in tide.types and coverage._implemented(tide)
+    assert "cast" in (getattr(tide, "triggers", {}) or {})
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
