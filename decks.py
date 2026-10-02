@@ -12,7 +12,7 @@ import re
 from engine import W, U, B, R, G, C
 import cards
 import cardsdb
-from cards import creature, land, rock
+from cards import creature as _base_creature, land, rock
 
 
 # Oracle real de cartas del pool de relleno que SÍ tienen efecto conocido y
@@ -176,6 +176,14 @@ _FILLER_ORACLE = {
     "Fume Spitter": "Sacrifice Fume Spitter: Put a -1/-1 counter on target creature.",
     "Seasoned Hallowblade": "Vigilance\nDiscard a card: Seasoned Hallowblade gains "
                             "indestructible until end of turn.",
+    "Cinder Pyromancer": "{T}: Cinder Pyromancer deals 1 damage to each opponent.\n"
+                         "Whenever you cast a red spell, untap Cinder Pyromancer.",
+    "Dawnbringer Charioteers": "Flying, lifelink\n{2}{W}: Prevent the next 2 damage "
+                               "that would be dealt to any target this turn.",
+    "Bogardan Dragonheart": "Haste\n{1}{R}, Sacrifice Bogardan Dragonheart: It deals "
+                            "2 damage to any target.",
+    "Wavesifter": "Flying\nWhen Wavesifter enters, investigate twice. (Create two "
+                  "Clue tokens.)",
 }
 
 
@@ -195,7 +203,22 @@ def _mk_filler(name, cost, pw, tf, kw, colors):
             "power": str(pw), "toughness": str(tf),
             "keywords": [k for k in kw], "color_identity": ci,
             "oracle_text": oracle})
-    return creature(name, cost, pw, tf, kw=kw, color_id=colors)
+    return _base_creature(name, cost, pw, tf, kw=kw, color_id=colors)
+
+
+def creature(name, cost, power, toughness, kw=(), legendary=False,
+             tags=("creature",), subtypes=(), color_id=None):
+    """Wrapper de cards.creature para los deck-builders: si la carta es un relleno
+    SIMPLE (no comandante, sin tags/subtipos especiales) y conocemos su oracle en
+    _FILLER_ORACLE, la construye con su EFECTO REAL (vía cardsdb). Así una carta
+    listada como `creature("Nombre", ...)` dentro de un mazo hecho a mano también
+    aprovecha el oracle, sin tener que reescribir cada línea. Los comandantes y
+    cartas con params especiales caen al constructor base."""
+    if (not legendary and tuple(tags) == ("creature",) and not subtypes
+            and name in _FILLER_ORACLE):
+        return _mk_filler(name, cost, power, toughness, kw, color_id or ())
+    return _base_creature(name, cost, power, toughness, kw=kw, legendary=legendary,
+                          tags=tags, subtypes=subtypes, color_id=color_id)
 
 
 # --------------------------------------------------------------------------- #
