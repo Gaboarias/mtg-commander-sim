@@ -2016,27 +2016,37 @@ def _shuffle_graveyard_into_library(game, ctrl):
 
 
 def _pick_card_from_zone(game, ctrl, cards_list, apply_one, prompt, kind="reanimate",
-                         allow_none=False):
+                         allow_none=False, ok_fn=None):
     """Elegir UNA carta de una zona (cementerio/exilio) para recuperar/revivir.
     El humano ve las cartas (imagen + nombre) en el modal y elige; el bot toma la
-    primera (el que llama la lista ordenada de mejor a peor)."""
+    primera elegible (el que llama la lista ordenada de mejor a peor).
+
+    `ok_fn(card)->bool` marca qué cartas son ELEGIBLES. Si se pasa, la lista puede
+    incluir cartas no elegibles (se muestran en gris, deshabilitadas): así el humano
+    ve TODO el cementerio y entiende por qué una carta no se puede elegir. El humano
+    nunca puede confirmar una no elegible (el botón va deshabilitado y `_apply` igual
+    la ignora)."""
     cands = list(cards_list)
     if not cands:
         return
+
+    def _ok(c):
+        return True if ok_fn is None else bool(ok_fn(c))
+
     if ctrl is getattr(game, "interactive_human", None):
-        def _apply(idx, _objs=cands, _fn=apply_one):
-            if idx is not None and 0 <= idx < len(_objs):
+        def _apply(idx, _objs=cands, _fn=apply_one, _okf=_ok):
+            if idx is not None and 0 <= idx < len(_objs) and _okf(_objs[idx]):
                 _fn(_objs[idx])
         game.pending_choice = {
             "kind": kind,
             "prompt": prompt,
-            "options": [{"i": i, "name": c.name, "is_land": c.is_land(), "ok": True}
+            "options": [{"i": i, "name": c.name, "is_land": c.is_land(), "ok": _ok(c)}
                         for i, c in enumerate(cands)],
             "allow_none": bool(allow_none),
             "_apply": _apply,
         }
     else:
-        apply_one(cands[0])
+        apply_one(next((c for c in cands if _ok(c)), cands[0]))
 
 
 def _route_choice(game, player, prompt_fn, auto_fn):
@@ -3583,22 +3593,29 @@ def _generic_amount_effect(oracle: str):
                 return True
             zones = ([(pl, pl.graveyard) for pl in game.players] if _any
                      else [(ctrl, ctrl.graveyard)])
-            cands = [(owner, c) for owner, gy in zones for c in gy if ok(c)]
-            if not cands:
+            eligibles = [(owner, c) for owner, gy in zones for c in gy if ok(c)]
+            if not eligibles:
                 game.log(f"{ctrl.name}: sin carta válida en el cementerio para revivir")
                 return
-            cands.sort(key=lambda oc: (oc[1].cost.cmc if oc[1].cost else 0), reverse=True)
-            picks = [c for _o, c in cands]
-            owner_of = {id(c): o for o, c in cands}
+            # Mostrar TODO el cementerio relevante (cartas NO tierra): las elegibles
+            # arriba (por CMV desc) y las no elegibles en gris, para que el humano VEA
+            # el cementerio completo y entienda por qué puede o no elegir cada carta.
+            shown = [(owner, c) for owner, gy in zones for c in gy if not c.is_land()]
+            shown.sort(key=lambda oc: (0 if ok(oc[1]) else 1,
+                                       -(oc[1].cost.cmc if oc[1].cost else 0)))
+            picks = [c for _o, c in shown]
+            owner_of = {id(c): o for o, c in shown}
 
             def _do(pick):
                 owner = owner_of.get(id(pick))
-                if owner and pick in owner.graveyard:
+                if owner and pick in owner.graveyard and ok(pick):
                     owner.graveyard.remove(pick)
                     game.move_to_battlefield(pick, ctrl)   # bajo control del que reanima
                     game.log(f"{ctrl.name} revive {pick.name} del cementerio")
+            _hint = " (las grises no son elegibles)" if any(not ok(c) for c in picks) else ""
             _pick_card_from_zone(game, ctrl, picks, _do,
-                                 "Elegí una carta del cementerio para revivir")
+                                 "Elegí una carta del cementerio para revivir" + _hint,
+                                 ok_fn=ok)
         return eff
 
     # regresar una carta del cementerio a la mano (elección automática + log)

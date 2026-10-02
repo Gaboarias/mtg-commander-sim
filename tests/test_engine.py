@@ -4244,7 +4244,12 @@ def test_etb_reanimate_nonland_opens_human_picker():
     ig.g.move_to_battlefield(mk(), hu)
     pc = ig.g.pending_choice
     assert pc is not None and pc["kind"] == "reanimate"
-    assert [o["name"] for o in pc["options"]] == ["Bicho"]          # sólo el válido
+    # se muestra TODO el cementerio NO tierra (Bicho + Grande), la tierra no;
+    # sólo el válido (CMV<=3) queda elegible, el resto en gris (ok=False)
+    names = {o["name"] for o in pc["options"]}
+    assert names == {"Bicho", "Grande"} and "Forest" not in names
+    oks = {o["name"]: o["ok"] for o in pc["options"]}
+    assert oks["Bicho"] is True and oks["Grande"] is False
     idx = next(o["i"] for o in pc["options"] if o["name"] == "Bicho")
     ig.resolve_choice(idx)
     assert any(p.name == "Bicho" for p in hu.battlefield)           # revivido al elegir
