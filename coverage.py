@@ -18,11 +18,26 @@ def _is_basic(card):
 def _implemented(card):
     """Efecto REAL implementado = tiene algun gancho de comportamiento.
     Tener solo un `tag` (que la IA lee) NO cuenta como efecto."""
-    if card.on_etb or card.on_death or card.on_cast_resolve:
+    if card.on_etb or card.on_death or card.on_cast_resolve or getattr(card, "on_leave", None):
         return True
     if card.triggers or card.activated:
         return True
+    # habilidades activadas "ricas" (coste de maná + objetivos) viven en otro campo
+    if getattr(card, "activated_abilities", None):
+        return True
     if card.static_mod or card.counter_modifier or card.loyalty_abilities:
+        return True
+    # modos (hechizos modales), juego/recursión desde cementerio, auras y anthems
+    if getattr(card, "modes", None) or getattr(card, "gy_play", None):
+        return True
+    if getattr(card, "gy_abilities", None) or getattr(card, "gy_triggers", None):
+        return True
+    if getattr(card, "aura_pt_set", None) or getattr(card, "aura_keywords", None):
+        return True
+    if getattr(card, "anthem_keywords", None) or getattr(card, "anthem_others", None):
+        return True
+    if (getattr(card, "token_double", False) or getattr(card, "damage_double", None)
+            or getattr(card, "die_exile", False) or getattr(card, "etb_counters", None)):
         return True
     if card.produces is not None and not _is_basic(card):
         return True

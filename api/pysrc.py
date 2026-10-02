@@ -11,8 +11,9 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # módulos que necesita interactive.InteractiveGame con decks de ejemplo
 _MODULES = [
-    "carddesc.py", "engine.py", "cards.py", "cardsdb.py", "decklist.py",
-    "mdparse.py", "policy.py", "decks.py", "run.py", "interactive.py",
+    "carddesc.py", "engine.py", "cards.py", "abilities.py", "cardsdb.py",
+    "decklist.py", "mdparse.py", "policy.py", "decks.py", "run.py",
+    "interactive.py",
 ]
 
 

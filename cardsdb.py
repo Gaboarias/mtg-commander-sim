@@ -3738,7 +3738,9 @@ def _generic_amount_effect(oracle: str):
                     f(game, ctrl, [])
             return eff
 
-    return None
+    # fallback: biblioteca de habilidades (registro declarativo, fácil de extender)
+    import abilities
+    return abilities.effect_from_text(t, oracle)
 
 
 def build_card_from_data(data: dict) -> Card:

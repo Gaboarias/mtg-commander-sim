@@ -6620,6 +6620,40 @@ def test_ai_removal_targets_the_real_threat_not_the_priciest():
     assert picks2 and picks2[0] is dude
 
 
+# -- biblioteca de habilidades (fallback declarativo del parser) ----------- #
+def test_ability_library_exile_top_of_library():
+    import cardsdb, cards
+    g, me, op = _duel()
+    me.library = [cards.creature(f"C{i}", "1G", 1, 1) for i in range(5)]
+    eff = cardsdb._generic_amount_effect("exile the top three cards of your library.")
+    assert eff is not None                       # lo atrapa la biblioteca (fallback)
+    eff(g, me)
+    assert len(me.library) == 2 and len(me.exile) == 3
+
+
+def test_ability_library_destroy_all_tokens():
+    import cardsdb, cards
+    g, me, op = _duel()
+    cards.make_token(g, me, "Soldado", 1, 1)
+    cards.make_token(g, op, "Zombi", 2, 2)
+    g.move_to_battlefield(cards.creature("Real", "1G", 3, 3), me)   # NO ficha
+    eff = cardsdb._generic_amount_effect("destroy all tokens.")
+    assert eff is not None
+    eff(g, me)
+    toks = [pm for pl in g.players for pm in pl.battlefield if pm.is_token]
+    assert toks == [] and any(pm.name == "Real" for pm in me.battlefield)
+
+
+def test_ability_library_create_tapped_treasure():
+    import cardsdb
+    g, me, op = _duel()
+    eff = cardsdb._generic_amount_effect("create two tapped treasure tokens.")
+    assert eff is not None
+    eff(g, me)
+    tr = [pm for pm in me.battlefield if pm.name == "Treasure"]
+    assert len(tr) == 2 and all(pm.tapped for pm in tr)
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
