@@ -6805,6 +6805,25 @@ def test_upkeep_life_loss_conditional():
     assert me.life == b                           # rival <=10 -> no pierde
 
 
+# -- ETB robar control con devolución al dejar el campo (Sower) ------------ #
+def test_sower_steals_and_returns_on_leave():
+    import cardsdb, cards
+    g, me, op = _duel()
+    bicho = g.move_to_battlefield(cards.creature("Bicho", "1G", 3, 3), op)
+    sower = cardsdb.build_card_from_data({
+        "name": "Sower of Temptation", "type_line": "Creature", "mana_cost": "{2}{U}{U}",
+        "power": "2", "toughness": "2",
+        "oracle_text": "Flying\nWhen Sower of Temptation enters, gain control of target "
+                       "creature for as long as you control Sower of Temptation."})
+    pm = g.move_to_battlefield(sower, me)
+    g.resolve_stack(); g.sba()
+    assert any(p.name == "Bicho" for p in me.battlefield)        # el bot robó la criatura
+    assert not any(p.name == "Bicho" for p in op.battlefield)
+    g.to_graveyard(pm, "muerte"); g.sba()
+    assert any(p.name == "Bicho" for p in op.battlefield)        # al morir Sower, vuelve
+    assert not any(p.name == "Bicho" for p in me.battlefield)
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

@@ -3125,6 +3125,37 @@ def _generic_amount_effect(oracle: str):
                                  cands, _do, allow_none=_opt)
         return eff
 
+    # ETB robar control de una criatura rival (Sower of Temptation): el humano
+    # elige; el bot toma la más grande. La devolución al dejar el campo la cablea
+    # build_card_from_data (on_leave) cuando el texto dice "as long as you control".
+    if re.search(r"gain control of (?:up to \w+ )?target creature", t) and "enters" in t:
+        def eff(game, ctrl, *_a):
+            perm = _a[0] if _a else None
+            pool = [pm for pm in game.legal_creature_targets(ctrl)
+                    if pm.controller is not ctrl]
+            if not pool:
+                return
+            pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness} · {pm.controller.name}", pm)
+                     for pm in pool]
+
+            def _do(tgt, _perm=perm):
+                if tgt not in tgt.controller.battlefield or tgt.controller is ctrl:
+                    return
+                old = tgt.controller
+                old.battlefield.remove(tgt)
+                tgt.controller = ctrl
+                ctrl.battlefield.append(tgt)
+                tgt.summoning_sick = False
+                tgt.tapped = False
+                if _perm is not None:
+                    _perm._stolen = (tgt, old)
+                game.log(f"{ctrl.name} toma el control de {tgt.name}")
+
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí una criatura rival para controlar", cands, _do)
+        return eff
+
     # fichas de recurso (Treasure/Clue/Food/Blood): visibles en el tablero.
     m = re.search(r"create (\w+) (treasure|clue|food|blood|gold) tokens?", t)
     if m:
@@ -4438,6 +4469,24 @@ def build_card_from_data(data: dict) -> Card:
                      re.sub(r"\s+", " ", (data.get("oracle_text", "") or "")), re.I)
     if _lgb:
         card.life_gain_bonus = int(_lgb.group(1))
+
+    # Sower of Temptation: al dejar el campo, la criatura robada vuelve a su dueño
+    # ("gain control ... for as long as you control ~"). El robo lo hace el ETB.
+    _ctl = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "").lower())
+    if ("creature" in types and card.on_leave is None
+            and re.search(r"gain control of .*?target creature", _ctl)
+            and "as long as you control" in _ctl):
+        def _return_stolen(game, ctrl, perm):
+            st = getattr(perm, "_stolen", None)
+            if st:
+                tgt, old = st
+                if tgt in ctrl.battlefield:
+                    ctrl.battlefield.remove(tgt)
+                    tgt.controller = old
+                    old.battlefield.append(tgt)
+                    game.log(f"{tgt.name} vuelve a {old.name}")
+                perm._stolen = None
+        card.on_leave = _return_stolen
 
     # "play an additional land / X additional lands on each of your turns"
     # (Exploration, Azusa, Dryad…): sube el límite de tierras del controlador.

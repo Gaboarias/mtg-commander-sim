@@ -202,6 +202,9 @@ _FILLER_ORACLE = {
                          "you have 25 or more life.",
     "Vampire Lacerator": "At the beginning of your upkeep, you lose 1 life unless "
                          "an opponent has 10 or less life.",
+    "Sower of Temptation": "Flying\nWhen Sower of Temptation enters, gain control of "
+                           "target creature for as long as you control Sower of "
+                           "Temptation.",
 }
 
 
