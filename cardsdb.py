@@ -1248,6 +1248,25 @@ def _event_trigger_effect(oracle: str):
                 _e(game, perm.controller)
             out["combat_damage_to_player"] = cb_cd
 
+    # disparo GLOBAL al atacar: "whenever a creature you control attacks, <efecto>"
+    # (Hellrider: pega N al jugador/planeswalker atacado; otros: efecto genérico).
+    mca = re.search(r"whenever a creature you control attacks,?\s*(.{0,160})", t, re.I)
+    if mca:
+        _body = mca.group(1)
+        mdmg = re.search(r"deals? (\w+) damage to (?:the player|that player|"
+                         r"the player or planeswalker|it)", _body, re.I)
+        if mdmg and (dn := _count_word(mdmg.group(1))):
+            def cb_ca(game, perm, attacker=None, defender=None, _n=dn, **_kw):
+                if defender is not None:
+                    game.deal_damage(perm, defender, _n)
+            out["creature_attacks"] = cb_ca
+        else:
+            _eff = _generic_amount_effect(_body)
+            if _eff is not None:
+                def cb_ca2(game, perm, attacker=None, defender=None, _e=_eff, **_kw):
+                    _e(game, perm.controller)
+                out["creature_attacks"] = cb_ca2
+
     # landfall: "whenever a land enters (the battlefield) under your control, …" /
     # "Landfall — …". El evento landfall es self-scoped (solo tus tierras).
     ml = re.search(r"(?:landfall\s*[—–-]\s*|whenever a land (?:you control )?enters"

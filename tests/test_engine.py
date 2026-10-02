@@ -6824,6 +6824,28 @@ def test_sower_steals_and_returns_on_leave():
     assert not any(p.name == "Bicho" for p in me.battlefield)
 
 
+# -- disparo global al atacar (Hellrider) ---------------------------------- #
+def test_hellrider_global_attack_trigger():
+    import cardsdb, cards, io, contextlib
+    g, me, op = _duel()
+    hr = cardsdb.build_card_from_data({
+        "name": "Hellrider", "type_line": "Creature", "mana_cost": "{2}{R}{R}",
+        "power": "3", "toughness": "3",
+        "oracle_text": "Haste\nWhenever a creature you control attacks, Hellrider deals "
+                       "1 damage to the player or planeswalker that creature is attacking."})
+    assert "creature_attacks" in hr.triggers
+    pm = g.move_to_battlefield(hr, me); pm.summoning_sick = False
+    for nm in ("A", "B"):
+        d = g.move_to_battlefield(cards.creature(nm, "1R", 2, 2), me)
+        d.summoning_sick = False
+    before = op.life
+    with contextlib.redirect_stdout(io.StringIO()):
+        g._declare_attackers(me, [(p, op) for p in me.creatures()])
+        g.resolve_stack(); g.sba()
+    # 3 atacantes (incluido Hellrider) -> 3 de daño directo del disparo (antes del combate)
+    assert before - op.life >= 3
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

@@ -2278,6 +2278,16 @@ class Game:
                         self.stack.append(StackObject(
                             p, (lambda g, _cb=ecb, _s=src, _d=defender: _cb(g, _s, defender=_d)),
                             source=src, label=f"attacks:{src.name}"))
+            # disparos GLOBALES "whenever a creature you control attacks" (Hellrider…):
+            # cuentan CADA criatura tuya que ataca, incluida la fuente si ella misma
+            # ataca. (La clave es distinta de "attacks", así que no se duplica.)
+            for src in p.battlefield:
+                gcb = src.card.triggers.get("creature_attacks")
+                if gcb:
+                    self.stack.append(StackObject(
+                        p, (lambda g, _cb=gcb, _s=src, _a=perm, _d=defender:
+                            _cb(g, _s, attacker=_a, defender=_d)),
+                        source=src, label=f"creature_attacks:{src.name}"))
         # Exalted: si atacó UNA sola criatura, recibe +1/+1 por cada permanente
         # con exaltación que controle el atacante.
         if len(declared) == 1:
