@@ -6773,6 +6773,38 @@ def test_preset_noncreature_gets_real_effect():
     assert "cast" in (getattr(tide, "triggers", {}) or {})
 
 
+# -- cola larga: reemplazo de vida + pérdida de vida en upkeep ------------- #
+def test_life_gain_bonus_replacement():
+    import cardsdb, cards
+    g, me, op = _duel()
+    g.move_to_battlefield(cardsdb.build_card_from_data({
+        "name": "Angel of Vitality", "type_line": "Creature", "mana_cost": "{2}{W}",
+        "power": "3", "toughness": "3",
+        "oracle_text": "Flying\nIf you would gain life, you gain that much life plus 1 instead."}), me)
+    before = me.life
+    g.gain_life(me, 3)
+    assert me.life == before + 4                 # 3 + 1 de bono
+
+
+def test_upkeep_life_loss_conditional():
+    import cardsdb, cards
+    g, me, op = _duel()
+    vl = cardsdb.build_card_from_data({
+        "name": "Vampire Lacerator", "type_line": "Creature", "mana_cost": "{B}",
+        "power": "2", "toughness": "2",
+        "oracle_text": "At the beginning of your upkeep, you lose 1 life unless an opponent has 10 or less life."})
+    pm = g.move_to_battlefield(vl, me)
+    assert "upkeep" in vl.triggers
+    cb = vl.triggers["upkeep"]
+    b = me.life
+    cb(g, pm); g.resolve_stack(); g.sba()
+    assert me.life == b - 1                       # rival en 40 -> pierde 1
+    op.life = 8
+    b = me.life
+    cb(g, pm); g.resolve_stack(); g.sba()
+    assert me.life == b                           # rival <=10 -> no pierde
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

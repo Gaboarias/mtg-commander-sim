@@ -200,6 +200,8 @@ _FILLER_ORACLE = {
     "Angel of Vitality": "Flying\nIf you would gain life, you gain that much life "
                          "plus 1 instead.\nAngel of Vitality gets +2/+2 as long as "
                          "you have 25 or more life.",
+    "Vampire Lacerator": "At the beginning of your upkeep, you lose 1 life unless "
+                         "an opponent has 10 or less life.",
 }
 
 

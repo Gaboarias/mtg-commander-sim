@@ -932,6 +932,14 @@ class Game:
                 if stop == "all" or (stop == "opponents" and pl is not player):
                     self.log(f"{player.name} no puede ganar vida ({pm.name})")
                     return
+        # reemplazo "si ganarías vida, ganás esa cantidad +N" (Angel of Vitality,
+        # Boon Reflection…): +N por evento, por cada fuente del controlador.
+        bonus = 0
+        for pm in player.battlefield:
+            b = getattr(pm.card, "life_gain_bonus", 0)
+            if b and not pm.abilities_off():
+                bonus += b
+        n += bonus
         player.life += n
         self.emit("gain_life", player=player, amount=n)
 

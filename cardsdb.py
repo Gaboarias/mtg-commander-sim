@@ -3206,6 +3206,20 @@ def _generic_amount_effect(oracle: str):
                      + (" y él gana vida" if _gain else ""))
         return eff
 
+    # pérdida de vida propia: "you lose N life" (drawback; Vampire Lacerator…),
+    # con condición opcional "unless an opponent has X or less life".
+    m = re.search(r"you lose (\w+) life", t)
+    if m and (n := _count_word(m.group(1))):
+        munless = re.search(r"unless an opponent has (\d+) or less life", t)
+        thresh = int(munless.group(1)) if munless else None
+
+        def eff(game, ctrl, *_a, _n=n, _th=thresh):
+            if _th is not None and any(o.life <= _th for o in game.opponents(ctrl)):
+                return                              # condición cumplida: no pierde vida
+            ctrl.life -= _n
+            game.log(f"{ctrl.name} pierde {_n} de vida")
+        return eff
+
     # edict masivo: "each player sacrifices a creature [or planeswalker]"
     if re.search(r"each player sacrifices? a creature(?: or planeswalker)?", t):
         incl_pw = "planeswalker" in t
@@ -4417,6 +4431,13 @@ def build_card_from_data(data: dict) -> Card:
         _csb = _conditional_self_buff(data.get("oracle_text", ""), card.name)
         if _csb is not None:
             card.static_mod = _csb
+
+    # reemplazo de ganancia de vida: "if you would gain life, you gain that much
+    # life plus N instead" (Angel of Vitality, Boon Reflection…). +N por evento.
+    _lgb = re.search(r"if you would gain life, you gain that much life plus (\d+) instead",
+                     re.sub(r"\s+", " ", (data.get("oracle_text", "") or "")), re.I)
+    if _lgb:
+        card.life_gain_bonus = int(_lgb.group(1))
 
     # "play an additional land / X additional lands on each of your turns"
     # (Exploration, Azusa, Dryad…): sube el límite de tierras del controlador.
