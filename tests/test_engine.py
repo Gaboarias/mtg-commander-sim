@@ -4264,6 +4264,49 @@ def test_etb_reanimate_nonland_opens_human_picker():
     assert ig2.g.pending_choice is None
 
 
+def test_reanimate_never_opens_a_dead_all_greyed_modal():
+    # Regresión: un reanimador que SÍ permite tierras ("return target permanent card
+    # with mana value 3 or less") con un cementerio = [tierra elegible + 2 conjuros].
+    # El modal nunca debe quedar "todo en gris" (congelaría el juego): la tierra
+    # elegible se muestra y es seleccionable.
+    import interactive, cards, cardsdb, decks
+
+    def mk():
+        return cardsdb.build_card_from_data({
+            "name": "Permiso de Tierra", "type_line": "Enchantment", "mana_cost": "{3}",
+            "oracle_text": "When this enchantment enters, return target permanent card "
+                           "with mana value 3 or less from your graveyard to the "
+                           "battlefield."})
+
+    def sorc(name):
+        return cardsdb.build_card_from_data(
+            {"name": name, "type_line": "Sorcery", "mana_cost": "{2}", "oracle_text": "Draw a card."})
+
+    ig = interactive.InteractiveGame(
+        [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")],
+        human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    hu.graveyard = [cards.land("Island", ["U"], basic=True), sorc("Secret Rendezvous"), sorc("Otra")]
+    ig.g.move_to_battlefield(mk(), hu)
+    pc = ig.g.pending_choice
+    assert pc is not None and pc["kind"] == "reanimate"
+    assert any(o["ok"] for o in pc["options"])                      # NUNCA todo en gris
+    assert next(o for o in pc["options"] if o["name"] == "Island")["ok"] is True
+    idx = next(o["i"] for o in pc["options"] if o["name"] == "Island")
+    ig.resolve_choice(idx)
+    assert any(p.name == "Island" for p in hu.battlefield)
+
+    # y si NO hay ninguna elegible (solo conjuros) -> fizzle, sin modal (no congela)
+    ig3 = interactive.InteractiveGame(
+        [("Tu",) + decks.build("marvel"), ("R",) + decks.build("strixhaven")],
+        human_index=0, seed=3)
+    ig3.keep([])
+    ig3.human().graveyard = [sorc("A"), sorc("B")]
+    ig3.g.move_to_battlefield(mk(), ig3.human())
+    assert ig3.g.pending_choice is None
+
+
 def test_living_weapon_equipped_attack_trigger():
     # Living weapon crea un Germen y se equipa; el disparo "whenever equipped
     # creature attacks" vive en el EQUIPO y ahora dispara cuando ataca el Germen.

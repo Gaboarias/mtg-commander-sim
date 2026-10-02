@@ -2033,7 +2033,13 @@ def _pick_card_from_zone(game, ctrl, cards_list, apply_one, prompt, kind="reanim
     def _ok(c):
         return True if ok_fn is None else bool(ok_fn(c))
 
+    selectable = [c for c in cands if _ok(c)]
     if ctrl is getattr(game, "interactive_human", None):
+        # Red de seguridad: nunca abrir un modal donde NADA se puede elegir (y sin
+        # "ninguna"), porque dejaría al humano sin forma de avanzar -> juego congelado.
+        # Si no hay nada elegible, la habilidad simplemente no hace nada.
+        if not selectable and not allow_none:
+            return
         def _apply(idx, _objs=cands, _fn=apply_one, _okf=_ok):
             if idx is not None and 0 <= idx < len(_objs) and _okf(_objs[idx]):
                 _fn(_objs[idx])
@@ -2045,8 +2051,8 @@ def _pick_card_from_zone(game, ctrl, cards_list, apply_one, prompt, kind="reanim
             "allow_none": bool(allow_none),
             "_apply": _apply,
         }
-    else:
-        apply_one(next((c for c in cands if _ok(c)), cands[0]))
+    elif selectable:
+        apply_one(selectable[0])
 
 
 def _route_choice(game, player, prompt_fn, auto_fn):
@@ -3597,10 +3603,12 @@ def _generic_amount_effect(oracle: str):
             if not eligibles:
                 game.log(f"{ctrl.name}: sin carta válida en el cementerio para revivir")
                 return
-            # Mostrar TODO el cementerio relevante (cartas NO tierra): las elegibles
-            # arriba (por CMV desc) y las no elegibles en gris, para que el humano VEA
-            # el cementerio completo y entienda por qué puede o no elegir cada carta.
-            shown = [(owner, c) for owner, gy in zones for c in gy if not c.is_land()]
+            # Mostrar el cementerio relevante: TODA carta elegible (aunque sea tierra,
+            # si el efecto las permite) + las no-tierra no elegibles en gris, para que
+            # el humano VEA el cementerio y entienda por qué puede o no elegir cada una.
+            # (Incluir siempre las elegibles evita un modal "todo en gris" que congela.)
+            shown = [(owner, c) for owner, gy in zones for c in gy
+                     if ok(c) or not c.is_land()]
             shown.sort(key=lambda oc: (0 if ok(oc[1]) else 1,
                                        -(oc[1].cost.cmc if oc[1].cost else 0)))
             picks = [c for _o, c in shown]
