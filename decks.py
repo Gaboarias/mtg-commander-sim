@@ -184,6 +184,12 @@ _FILLER_ORACLE = {
                             "2 damage to any target.",
     "Wavesifter": "Flying\nWhen Wavesifter enters, investigate twice. (Create two "
                   "Clue tokens.)",
+    "Herd Baloth": "When Herd Baloth enters, create a 4/4 green Beast creature "
+                   "token.",
+    "Evolution Sage": "Landfall — Whenever a land enters the battlefield under your "
+                      "control, proliferate.",
+    "Bloated Contaminator": "Trample\nToxic 1\nWhenever Bloated Contaminator deals "
+                            "combat damage to a player, proliferate.",
 }
 
 
