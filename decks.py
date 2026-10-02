@@ -131,6 +131,51 @@ _FILLER_ORACLE = {
                         "create a Clue token.",
     "Vinelasher Kudzu": "Whenever a land enters the battlefield under your control, "
                         "put a +1/+1 counter on Vinelasher Kudzu.",
+    # --- lote: cartas de precon que quedaban vainilla (oracle real) ---
+    "Eternal Witness": "When Eternal Witness enters, return target card from your "
+                       "graveyard to your hand.",
+    "Flametongue Kavu": "When Flametongue Kavu enters, it deals 4 damage to target "
+                        "creature.",
+    "Ravenous Chupacabra": "When Ravenous Chupacabra enters, destroy target creature "
+                           "an opponent controls.",
+    "Dusk Legion Zealot": "When Dusk Legion Zealot enters, you draw a card and you "
+                          "lose 1 life.",
+    "Wall of Blossoms": "Defender\nWhen Wall of Blossoms enters, draw a card.",
+    "Pelakka Wurm": "Trample\nWhen Pelakka Wurm enters, you gain 7 life.\n"
+                    "When Pelakka Wurm dies, draw a card.",
+    "Nested Shambler": "When Nested Shambler dies, create a number of 1/1 green "
+                       "Squirrel creature tokens equal to its power.",
+    "Carrion Feeder": "Carrion Feeder can't block.\nSacrifice a creature: Put a "
+                      "+1/+1 counter on Carrion Feeder.",
+    "Fauna Shaman": "{G}, {T}, Discard a creature card: Search your library for a "
+                    "creature card, reveal it, put it into your hand, then shuffle.",
+    "Vampire Hexmage": "First strike, protection from white\nSacrifice Vampire "
+                       "Hexmage: Remove three counters from target permanent.",
+    "Crypt Ghast": "Extort\nWhenever you tap a Swamp for mana, add an additional "
+                   "{B}.",
+    "Deathgorge Scavenger": "Whenever Deathgorge Scavenger attacks or blocks, you "
+                            "may exile target card from a graveyard. If a creature "
+                            "card is exiled this way, you gain 2 life. If a "
+                            "noncreature card is exiled this way, Deathgorge "
+                            "Scavenger gets +1/+1 until end of turn.",
+    "Sheoldred, the Apocalypse": "Deathtouch\nWhenever you draw a card, you gain 2 "
+                                 "life.\nWhenever an opponent draws a card, they "
+                                 "lose 2 life.",
+    "Hellrider": "Haste\nWhenever a creature you control attacks, Hellrider deals 1 "
+                 "damage to the player or planeswalker that creature is attacking.",
+    "Sea Gate Oracle": "When Sea Gate Oracle enters, look at the top two cards of "
+                       "your library. Put one of them into your hand and the other "
+                       "on the bottom of your library.",
+    "Festering Goblin": "When Festering Goblin dies, target creature gets -1/-1 "
+                        "until end of turn.",
+    "Twisted Abomination": "Swampcycling {2}\n{B}: Regenerate Twisted Abomination.",
+    "Chasm Skulker": "Whenever you draw a card, put a +1/+1 counter on Chasm "
+                     "Skulker.\nWhen Chasm Skulker dies, create X 1/1 blue Squid "
+                     "creature tokens with islandwalk, where X is the number of "
+                     "+1/+1 counters on Chasm Skulker.",
+    "Fume Spitter": "Sacrifice Fume Spitter: Put a -1/-1 counter on target creature.",
+    "Seasoned Hallowblade": "Vigilance\nDiscard a card: Seasoned Hallowblade gains "
+                            "indestructible until end of turn.",
 }
 
 
@@ -308,9 +353,9 @@ def lorehold():
     d.append(cards.QuintoriusPlaneswalker())                      # P2.3 planeswalker
     # criaturas de relleno tematicas (nombres reales -> traen ilustracion)
     d.append(creature("Goblin Cratermaker", "1R", 2, 2, color_id=(R,)))
-    d.append(creature("Seasoned Hallowblade", "1W", 3, 2, color_id=(W,)))
+    d.append(_mk_filler("Seasoned Hallowblade", "1W", 3, 2, ("vigilance",), (W,)))
     d.append(creature("Serra Angel", "3WW", 4, 4, kw=("flying",), color_id=(W,)))
-    d.append(creature("Flametongue Kavu", "3R", 4, 3, kw=("haste",), color_id=(R,)))
+    d.append(_mk_filler("Flametongue Kavu", "3R", 4, 3, (), (R,)))
     d.append(creature("Wall of Reverence", "4W", 3, 6, kw=("vigilance",), color_id=(W,)))
     # ramp + removal + draw
     d.append(rock("Boros Signet", "2", [R, W]))
