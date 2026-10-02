@@ -8,6 +8,24 @@ import { download, fileStamp } from "../download";
 import { Icon } from "../icons";
 import { Help } from "../Help";
 
+const TURN_MARK = "‹turno› ";
+// Agrupa el relato por turno: cada línea "‹turno› Nombre" abre un grupo nuevo.
+// Lo previo al primer turno (mulligan, preparación) va a un grupo sin encabezado.
+function groupLog(log: string[]): { head: string | null; lines: string[] }[] {
+  const groups: { head: string | null; lines: string[] }[] = [];
+  let turn = 0;
+  for (const raw of log) {
+    if (raw.startsWith(TURN_MARK)) {
+      turn++;
+      groups.push({ head: `Turno ${turn} · ${raw.slice(TURN_MARK.length)}`, lines: [] });
+    } else {
+      if (groups.length === 0) groups.push({ head: null, lines: [] });
+      groups[groups.length - 1].lines.push(raw);
+    }
+  }
+  return groups;
+}
+
 type RegDeck = { key: string; commander: string; identity: string[]; theme?: string };
 type Spec = { kind: "registered"; key: string; name: string } | { kind: "custom"; name: string; text: string };
 type Pickable = { id: string; label: string; tag: string; spec: Spec; mine: boolean };
@@ -1098,7 +1116,14 @@ export default function Play() {
 
           <div className="card">
             <h2>Relato</h2>
-            <div className="log" ref={logRef}>{(state.log || []).join("\n")}</div>
+            <div className="log" ref={logRef}>
+              {groupLog(state.log || []).map((g, gi) => (
+                <div key={gi} className="log-turn">
+                  {g.head && <div className="log-turn-head">{g.head}</div>}
+                  {g.lines.map((ln, li) => <div key={li} className="log-line">{ln}</div>)}
+                </div>
+              ))}
+            </div>
             <div className="act-block" style={{ marginTop: 10 }}>
               <span className="act-label">Exportar todas las jugadas:</span>
               <button className="ghost" onClick={() => exportGame("json")} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> JSON</button>

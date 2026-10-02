@@ -359,6 +359,16 @@ th { color: var(--muted); font-weight: 600; font-size: .8rem; text-transform: up
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .8rem; line-height: 1.55; white-space: pre-wrap; color: var(--text);
 }
+.log-turn { margin-bottom: 9px; }
+.log-turn:last-child { margin-bottom: 0; }
+.log-turn-head {
+  position: sticky; top: -16px; z-index: 1;
+  margin: 0 -16px 4px; padding: 3px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  font-family: var(--font-ui, inherit); font-weight: 700; font-size: .76rem;
+  letter-spacing: .2px; color: var(--accent); text-transform: none;
+}
+.log-line { padding: 1px 0; }
 .opp-recap {
   margin: 10px 0 4px; padding: 12px 14px; border-radius: 12px;
   background: rgba(224,163,90,.07); border: 1px solid var(--border);
