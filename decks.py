@@ -194,6 +194,12 @@ _FILLER_ORACLE = {
     "River Boa": "Islandwalk\n{G}: Regenerate River Boa.",
     "White Orchid Phantom": "Flying\nWhen White Orchid Phantom enters, destroy "
                             "target land.",
+    "Sylvan Advocate": "Vigilance\nSylvan Advocate gets +2/+2 as long as you have "
+                       "six or more lands.",
+    "Kird Ape": "Kird Ape gets +1/+2 as long as you control a Forest.",
+    "Angel of Vitality": "Flying\nIf you would gain life, you gain that much life "
+                         "plus 1 instead.\nAngel of Vitality gets +2/+2 as long as "
+                         "you have 25 or more life.",
 }
 
 

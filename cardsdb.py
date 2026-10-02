@@ -1608,6 +1608,62 @@ def _static_anthem(oracle: str):
     return sm, kws, subtype
 
 
+def _parse_static_condition(cond_text: str):
+    """'condición' de un buff estático condicional -> predicado cond(perm)->bool,
+    evaluado dinámicamente sobre el CONTROLADOR del permanente. None si no la
+    reconocemos. Cubre: controlás una tierra básica de tipo X; N+ tierras; N+ de
+    vida; N+ criaturas; N+ cartas en tu cementerio."""
+    c = re.sub(r"\s+", " ", (cond_text or "")).strip().lower()
+    mland = re.search(r"you control (?:a|an) (forest|plains|island|swamp|mountain)", c)
+    if mland:
+        sub = mland.group(1).capitalize()
+        # la tierra básica puede traer el subtipo o solo el nombre -> aceptar ambos
+        return (lambda p, _s=sub: any(
+            pm.card.is_land() and (pm.has_subtype(_s) or pm.name == _s)
+            for pm in p.controller.battlefield))
+    ml = re.search(r"you (?:have|control) (\w+) or more lands", c)
+    if ml and (n := _count_word(ml.group(1))):
+        return (lambda p, _n=n: sum(1 for pm in p.controller.battlefield
+                                    if pm.card.is_land()) >= _n)
+    mlife = re.search(r"you have (\d+) or more life", c)
+    if mlife:
+        return (lambda p, _n=int(mlife.group(1)): p.controller.life >= _n)
+    mcre = re.search(r"you control (\w+) or more creatures", c)
+    if mcre and (n := _count_word(mcre.group(1))):
+        return (lambda p, _n=n: sum(1 for _ in p.controller.creatures()) >= _n)
+    mgy = re.search(r"(\w+) or more cards? (?:in|are in) your graveyard", c)
+    if mgy and (n := _count_word(mgy.group(1))):
+        return (lambda p, _n=n: len(p.controller.graveyard) >= _n)
+    return None
+
+
+def _conditional_self_buff(oracle: str, name: str = ""):
+    """'<Nombre/This creature/It> gets +X/+Y as long as <condición>' -> static_mod
+    que aplica +X/+Y SOLO a esta misma criatura mientras la condición se cumpla
+    (Sylvan Advocate, Kird Ape, Angel of Vitality…). None si no matchea."""
+    t = re.sub(r"\s+", " ", (oracle or "")).strip()
+    subj = r"this creature|it"
+    if name:
+        subj = re.escape(name) + r"|" + subj
+    m = re.search(r"(?:" + subj + r") gets ([+-]\d+)/([+-]\d+) as long as ([^.]+)",
+                  t, re.I)
+    if not m:
+        return None
+    dp, dt = int(m.group(1)), int(m.group(2))
+    cond = _parse_static_condition(m.group(3))
+    if cond is None:
+        return None
+
+    def sm(source, target, _dp=dp, _dt=dt, _c=cond):
+        if target is not source:
+            return (0, 0)
+        try:
+            return (_dp, _dt) if _c(source) else (0, 0)
+        except Exception:  # noqa: BLE001
+            return (0, 0)
+    return sm
+
+
 def _cmc(perm):
     """Coste de maná convertido de un permanente (0 si no tiene coste)."""
     c = getattr(perm, "card", perm)
@@ -4354,6 +4410,13 @@ def build_card_from_data(data: dict) -> Card:
                 data.get("oracle_text", "") or "").lower()
             if asub:
                 card.anthem_subtype = asub
+
+    # buff ESTÁTICO CONDICIONAL de la propia criatura ("~ gets +X/+Y as long as
+    # <condición>"): Sylvan Advocate, Kird Ape, Angel of Vitality…
+    if card.static_mod is None and "creature" in types:
+        _csb = _conditional_self_buff(data.get("oracle_text", ""), card.name)
+        if _csb is not None:
+            card.static_mod = _csb
 
     # "play an additional land / X additional lands on each of your turns"
     # (Exploration, Azusa, Dryad…): sube el límite de tierras del controlador.

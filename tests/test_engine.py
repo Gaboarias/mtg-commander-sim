@@ -6729,6 +6729,38 @@ def test_etb_destroy_target_artifact_opens_human_modal():
     assert any("Reliquia" in o["name"] for o in pc["options"])
 
 
+# -- buff estático condicional ("gets +X/+Y as long as ...") --------------- #
+def test_conditional_self_buff_lands_and_life():
+    import cardsdb, cards
+    g, me, op = _duel()
+    sa = g.move_to_battlefield(cardsdb.build_card_from_data({
+        "name": "Sylvan Advocate", "type_line": "Creature", "mana_cost": "{1}{G}",
+        "power": "2", "toughness": "3",
+        "oracle_text": "Vigilance\nSylvan Advocate gets +2/+2 as long as you have six or more lands."}), me)
+    assert (sa.power, sa.toughness) == (2, 3)                 # sin tierras: base
+    for _ in range(6):
+        g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me)
+    assert (sa.power, sa.toughness) == (4, 5)                 # 6 tierras: +2/+2
+
+    g2, me2, op2 = _duel()
+    ka = g2.move_to_battlefield(cardsdb.build_card_from_data({
+        "name": "Kird Ape", "type_line": "Creature", "mana_cost": "{R}",
+        "power": "1", "toughness": "1",
+        "oracle_text": "Kird Ape gets +1/+2 as long as you control a Forest."}), me2)
+    assert (ka.power, ka.toughness) == (1, 1)
+    g2.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me2)
+    assert (ka.power, ka.toughness) == (2, 3)                 # con Forest: +1/+2
+
+    g3, me3, op3 = _duel()
+    av = g3.move_to_battlefield(cardsdb.build_card_from_data({
+        "name": "Angel of Vitality", "type_line": "Creature", "mana_cost": "{2}{W}",
+        "power": "3", "toughness": "3",
+        "oracle_text": "Flying\nAngel of Vitality gets +2/+2 as long as you have 25 or more life."}), me3)
+    assert (av.power, av.toughness) == (5, 5)                 # 40 de vida
+    me3.life = 20
+    assert (av.power, av.toughness) == (3, 3)                 # <25: base
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
