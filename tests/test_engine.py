@@ -6603,6 +6603,23 @@ def cards_land_r():
     return cards.land("Mountain", ["R"], basic=True)
 
 
+# -- AI: la remoción apunta a la amenaza, no a lo más caro ----------------- #
+def test_ai_removal_targets_the_real_threat_not_the_priciest():
+    import cards, cardsdb, policy
+    g, me, op = _duel()
+    pol = policy.Policy("avanzado")
+    # rival: artefacto caro inofensivo (cmv 6) + criatura barata letal (cmv 2)
+    g.move_to_battlefield(cardsdb.build_card_from_data(
+        {"name": "Reliquia Cara", "type_line": "Artifact", "mana_cost": "{6}", "oracle_text": ""}), op)
+    dude = g.move_to_battlefield(cards.creature("Asesino", "1B", 2, 2, kw=("flying", "deathtouch")), op)
+    # remoción genérica de no-tierra: debe elegir la criatura peligrosa, no el artefacto
+    picks = pol._perm_spec_targets(g, me, "any_nonland", 1)
+    assert picks and picks[0] is dude
+    # y un objetivo de permanente cualquiera, igual prioriza la amenaza
+    picks2 = pol._perm_spec_targets(g, me, "any_perm", 1)
+    assert picks2 and picks2[0] is dude
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

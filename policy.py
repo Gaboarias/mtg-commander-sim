@@ -359,21 +359,32 @@ class Policy:
         "any_perm": lambda pm: True,
     }
 
+    def _perm_target_rank(self, pm):
+        """Prioridad de un permanente rival como objetivo de remoción. Rankea por
+        PELIGRO real, no solo por coste: una criatura chica pero con evasión/letal
+        (o el comandante) pesa más que un artefacto caro inofensivo."""
+        cmc = pm.card.cost.cmc if pm.card.cost else 0
+        if pm.is_creature():
+            return self._threat_value(pm) + cmc          # cuerpo + keywords + comandante
+        if "planeswalker" in pm.card.types:
+            loy = getattr(pm, "loyalty", 0) or 0
+            return 12 + loy + cmc                         # los PW son amenazas serias
+        return cmc * 2                                    # motores caros (artef./ench.)
+
     def _perm_spec_targets(self, game, me, spec, count):
-        """Objetivos para un spec de permanente: los del RIVAL primero (más caros),
-        y sólo si no hay, los propios. Legal-target aware."""
+        """Objetivos para un spec de permanente: los del RIVAL primero (el más
+        PELIGROSO), y sólo si no hay, los propios. Legal-target aware."""
         pred = self._PERM_SPEC_PRED[spec]
         opp = []
-        mine = []
         for pm in [p for pl in game.players for p in pl.battlefield]:
             if not pred(pm) or not game.can_target(me, pm):
                 continue
-            (mine if pm.controller is me else opp).append(pm)
-        opp.sort(key=lambda x: (x.card.cost.cmc if x.card.cost else 0), reverse=True)
-        pool = opp or []                      # el bot no se destruye lo propio salvo…
-        if not pool:                          # …que sea la única opción (raro; lo evita)
+            if pm.controller is not me:
+                opp.append(pm)
+        if not opp:                           # el bot no se destruye lo propio
             return []
-        return pool[:max(1, count)]
+        opp.sort(key=self._perm_target_rank, reverse=True)
+        return opp[:max(1, count)]
 
     def _spec_targets(self, game, me, spec, count):
         if spec in self._PERM_SPEC_PRED:
