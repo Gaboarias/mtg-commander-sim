@@ -1025,6 +1025,28 @@ def _parse_activated(oracle: str, name: str = ""):
                         "effect": eff_self, "target_spec": None,
                         "target_count": 1, "is_copy_ability": False})
             continue
+        # Vorel: "for each kind of counter on target ... double the number of those
+        # counters on it" -> duplica TODO tipo de contador en un permanente tuyo.
+        if re.search(r"double the number of those counters", body, re.I):
+            def eff_double(g, c, perm, tg):
+                for pmt in list(tg or []):
+                    for k in list(pmt.counters.keys()):
+                        cur = pmt.counters.get(k, 0)
+                        if cur <= 0:
+                            continue
+                        if k == "+1/+1":
+                            g.add_counters(pmt, k, cur)     # respeta dobladores
+                        else:
+                            pmt.counters[k] += cur
+                    g.log(f"{c.name} duplica los contadores de {pmt.name}")
+                g.sba()
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self,
+                        "exile_self": exile_self, "rm_counter": rm_counter,
+                        "sacrifice_other": sac_other, "pay_life": pay_life,
+                        "discard": discard, "label": _short_label(body),
+                        "effect": eff_double, "target_spec": "own_creature",
+                        "target_count": 1, "is_copy_ability": False})
+            continue
         # quitar contadores: "remove a/N <X> counter(s) from <destino>".
         #   destino = this/it/~/<nombre>  -> de SÍ MISMA (usa el permanente fuente).
         #   destino = target permanent/... -> de un objetivo elegido.
@@ -3338,6 +3360,26 @@ def _generic_amount_effect(oracle: str):
         def eff(game, ctrl, *_a):
             ctrl.life *= 2
             game.log(f"{ctrl.name} duplica su vida ({ctrl.life})")
+        return eff
+
+    # ganar vida igual al poder de una criatura tuya objetivo (Wall of Reverence):
+    # el humano elige; el bot toma su criatura más grande. (Va ANTES del "gain N
+    # life" genérico para no capturar el número equivocado.)
+    if re.search(r"gain life equal to (?:the power of|its power)", t) and "target creature" in t:
+        def eff(game, ctrl, *_a):
+            pool = [pm for pm in ctrl.creatures()]
+            if not pool:
+                return
+            pool.sort(key=lambda x: x.power, reverse=True)
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm) for pm in pool]
+
+            def _do(tgt):
+                if tgt is not None:
+                    game.gain_life(ctrl, max(0, tgt.power))
+                    game.log(f"{ctrl.name} gana {max(0, tgt.power)} de vida (poder de {tgt.name})")
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí una criatura (ganás vida = su poder)",
+                                 cands, _do, allow_none=True)
         return eff
 
     m = re.search(r"(?:you )?gain (\w+) life", t)

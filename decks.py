@@ -205,6 +205,12 @@ _FILLER_ORACLE = {
     "Sower of Temptation": "Flying\nWhen Sower of Temptation enters, gain control of "
                            "target creature for as long as you control Sower of "
                            "Temptation.",
+    "Wall of Reverence": "Defender, flying\nAt the beginning of your end step, you "
+                         "may gain life equal to the power of target creature you "
+                         "control.",
+    "Vorel of the Hull Clade": "{T}: For each kind of counter on target artifact, "
+                               "creature, or land you control, double the number of "
+                               "those counters on it.",
 }
 
 

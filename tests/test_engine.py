@@ -6846,6 +6846,41 @@ def test_hellrider_global_attack_trigger():
     assert before - op.life >= 3
 
 
+# -- end-step vida=poder + Vorel duplica contadores ------------------------ #
+def test_end_step_gain_life_equal_to_power():
+    import cardsdb, cards, io, contextlib
+    g, me, op = _duel()
+    wr = cardsdb.build_card_from_data({
+        "name": "Wall of Reverence", "type_line": "Creature", "mana_cost": "{3}{W}{W}",
+        "power": "3", "toughness": "6",
+        "oracle_text": "Defender, flying\nAt the beginning of your end step, you may "
+                       "gain life equal to the power of target creature you control."})
+    pm = g.move_to_battlefield(wr, me)
+    g.move_to_battlefield(cards.creature("Grande", "4G", 5, 5), me)
+    assert "end_step" in wr.triggers
+    b = me.life
+    with contextlib.redirect_stdout(io.StringIO()):
+        wr.triggers["end_step"](g, pm); g.resolve_stack(); g.sba()
+    assert me.life == b + 5                      # el bot elige la de mayor poder (5)
+
+
+def test_vorel_doubles_counters():
+    import cardsdb, cards, io, contextlib
+    g, me, op = _duel()
+    v = cardsdb.build_card_from_data({
+        "name": "Vorel", "type_line": "Creature", "mana_cost": "{1}{G}{U}",
+        "power": "1", "toughness": "3",
+        "oracle_text": "{T}: For each kind of counter on target artifact, creature, or "
+                       "land you control, double the number of those counters on it."})
+    pm = g.move_to_battlefield(v, me)
+    dude = g.move_to_battlefield(cards.creature("Bicho", "1G", 2, 2), me)
+    g.add_counters(dude, "+1/+1", 3)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert g.activate_ability(pm, 0, targets=[dude]) is True
+        g.resolve_stack(); g.sba()
+    assert dude.counters.get("+1/+1", 0) == 6    # 3 -> 6
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
