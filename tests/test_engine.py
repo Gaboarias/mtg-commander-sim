@@ -7164,6 +7164,33 @@ def test_landfall_self_plus_counter():
     assert "landfall" not in c2.triggers
 
 
+def test_enters_with_x_counters_and_bracket_loyalty():
+    import cardsdb, cards
+    from engine import Game, Player
+    # Hydra: "enters with X +1/+1 counters on it" -> X del lanzamiento
+    h = cardsdb.build_card_from_data({
+        "name": "Hydra", "type_line": "Creature — Hydra", "mana_cost": "{X}{G}",
+        "power": "0", "toughness": "0",
+        "oracle_text": "Hydra enters with X +1/+1 counters on it."})
+    assert h.etb_counters.get("+1/+1") == "X"
+    g = Game([Player("A", [cards.creature("z", "1G", 1, 1) for _ in range(5)],
+                     cards.creature("Cmd", "1G", 1, 1, legendary=True)),
+              Player("B", [cards.creature("z", "1U", 1, 1) for _ in range(5)],
+                     cards.creature("O", "1U", 1, 1, legendary=True))], seed=1)
+    me = g.players[0]
+    for _ in range(5):
+        g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me)
+    me.hand = [h]
+    g.cast(me, h, x_value=3); g.resolve_stack()
+    hp = next(p for p in me.battlefield if p.name == "Hydra")
+    assert (hp.power, hp.toughness) == (3, 3)
+    # planeswalker con corchetes "[+1]:" (formato MTGJSON) también parsea
+    pw = cardsdb.build_card_from_data({
+        "name": "PW", "type_line": "Legendary Planeswalker — Test", "mana_cost": "{3}",
+        "loyalty": "4", "oracle_text": "[+1]: Draw a card.\n[-3]: Destroy target creature."})
+    assert len(pw.loyalty_abilities or []) == 2
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

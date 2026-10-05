@@ -1974,8 +1974,11 @@ def _parse_etb_counters(oracle: str):
     t = re.sub(r"\s+", " ", (oracle or "")).strip()
     out = {}
     m = re.search(r"enters (?:the battlefield )?with (\w+) \+1/\+1 counters?", t, re.I)
-    if m and (n := _count_word(m.group(1))):
-        out["+1/+1"] = n
+    if m:
+        if m.group(1).lower() == "x":
+            out["+1/+1"] = "X"          # X contadores = el X pagado al lanzar (Hydra)
+        elif (n := _count_word(m.group(1))):
+            out["+1/+1"] = n
     m = re.search(r"enters (?:the battlefield )?with (\w+) ([a-z]+) counters?", t, re.I)
     if m and (n := _count_word(m.group(1))):
         kind = m.group(2).lower()
@@ -2386,7 +2389,7 @@ def _count_word(w):
         return None
 
 
-_LOY_LINE = re.compile(r"^\s*([+−\-]?\d+)\s*:\s*(.+?)\s*$")
+_LOY_LINE = re.compile(r"^\s*\[?([+−\-]?\d+)\]?\s*:\s*(.+?)\s*$")  # acepta "+1:" y "[+1]:"
 
 
 def _loyalty_effect(text: str):

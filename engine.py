@@ -974,8 +974,11 @@ class Game:
         # planeswalker: entra con su lealtad inicial
         if "planeswalker" in card.types and card.loyalty:
             perm.counters["loyalty"] = card.loyalty
-        # "entra con N contadores" (efecto de reemplazo: antes de los disparos ETB)
+        # "entra con N contadores" (efecto de reemplazo: antes de los disparos ETB).
+        # N == "X" -> usa el X elegido al lanzar (Hydras con {X}).
         for kind, n in (getattr(card, "etb_counters", None) or {}).items():
+            if n == "X":
+                n = max(0, getattr(self, "spell_x", 0) or 0)
             if n:
                 perm.counters[kind] = perm.counters.get(kind, 0) + n
         player.battlefield.append(perm)
