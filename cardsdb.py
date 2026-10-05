@@ -856,6 +856,76 @@ def _parse_modes(oracle: str):
     return modes, pick
 
 
+def _modal_trigger_runner(full_oracle: str):
+    """Para un disparo MODAL ('... , choose one — • ... • ...'): devuelve un
+    runner run(game, perm) que, para el HUMANO, abre el selector de modo (y el de
+    objetivo si el modo lo pide) vía pending_choice; para el bot elige un modo con
+    objetivo disponible y lo auto-aplica. None si no es modal."""
+    parsed = _parse_modes(full_oracle)
+    if parsed is None:
+        return None
+    modes, pick = parsed
+
+    def _targets_for(game, ctrl, spec):
+        if not spec:
+            return []
+        perms = [p for pl in game.players for p in pl.battlefield]
+        if spec == "opp_creature":
+            pool = [pm for pm in perms if pm.is_creature()
+                    and pm.controller is not ctrl and game.can_target(ctrl, pm)]
+        elif spec == "own_creature":
+            pool = [pm for pm in perms if pm.is_creature() and pm.controller is ctrl]
+        elif spec in ("any_art_ench", "any_artifact", "any_enchantment",
+                      "any_planeswalker", "any_nonland", "any_perm"):
+            def pred(pm, _s=spec):
+                t = pm.card.types
+                return {
+                    "any_art_ench": bool({"artifact", "enchantment"} & t),
+                    "any_artifact": "artifact" in t,
+                    "any_enchantment": "enchantment" in t,
+                    "any_planeswalker": "planeswalker" in t,
+                    "any_nonland": not pm.card.is_land(),
+                    "any_perm": True,
+                }[_s]
+            pool = [pm for pm in perms if pred(pm) and game.can_target(ctrl, pm)]
+            opp = [pm for pm in pool if pm.controller is not ctrl]
+            pool = opp or pool                       # rival primero; propio si no hay
+        else:
+            return []
+        return [(f"{pm.name} · {pm.controller.name}", pm) for pm in pool]
+
+    def _run_mode(game, ctrl, mode):
+        eff = mode.get("effect")
+        if eff is None:
+            return
+        spec = mode.get("target_spec")
+        opts = _targets_for(game, ctrl, spec)
+        if spec and opts:
+            _human_target_choice(
+                game, ctrl, "mode_target",
+                f"Objetivo para «{mode.get('label', '')}»",
+                opts, lambda obj: eff(game, ctrl, [obj]), allow_none=False)
+        else:
+            eff(game, ctrl, [])                       # sin objetivo (o ninguno legal)
+
+    def run(game, perm):
+        ctrl = perm.controller
+        if ctrl is getattr(game, "interactive_human", None):
+            _human_target_choice(
+                game, ctrl, "mode", "Elegí un modo",
+                [(m["label"], i) for i, m in enumerate(modes)],
+                lambda i: _run_mode(game, ctrl, modes[i]), allow_none=False)
+        else:
+            # bot: preferir un modo con objetivo disponible; si no, el primero
+            best = next((m for m in modes
+                         if m.get("target_spec") and _targets_for(game, ctrl, m["target_spec"])),
+                        None)
+            if best is None:
+                best = next((m for m in modes if not m.get("target_spec")), modes[0])
+            _run_mode(game, ctrl, best)
+    return run
+
+
 def _parse_activated(oracle: str, name: str = ""):
     """Habilidades activadas con coste de MANÁ (+ opcional {T} y opcional
     'Sacrifice this ~' como coste). Devuelve una tupla de dicts {cost, tap,
@@ -1397,8 +1467,13 @@ def _event_trigger_effect(oracle: str):
                    r"[\w ]*? spell,?\s*(.{0,160})", t, re.I)
     if mc and "cast" not in out:
         qual = mc.group(1).lower()
-        eff = _generic_amount_effect(mc.group(2))
-        if eff is not None:
+        # disparo MODAL ("... , choose one — ..."): el modal se parsea del oráculo
+        # COMPLETO (la captura del disparo se trunca a 160 y perdería modos).
+        modal_run = (_modal_trigger_runner(t)
+                     if re.search(r"\bchoose (one|two|three|one or more|one or both)\b",
+                                  mc.group(2), re.I) else None)
+        eff = None if modal_run is not None else _generic_amount_effect(mc.group(2))
+        if eff is not None or modal_run is not None:
             if "instant or sorcery" in qual:
                 need = {"instant", "sorcery"}
             elif "noncreature" in qual:
@@ -1408,7 +1483,7 @@ def _event_trigger_effect(oracle: str):
             else:
                 need = {qual.split()[-1]}   # creature / artifact / enchantment
 
-            def cbc(game, perm, card=None, _e=eff, _need=need, **_kw):
+            def cbc(game, perm, card=None, _e=eff, _m=modal_run, _need=need, **_kw):
                 if card is None:
                     return
                 if _need is None:                        # noncreature
@@ -1416,7 +1491,10 @@ def _event_trigger_effect(oracle: str):
                         return
                 elif _need and not (_need & card.types):
                     return
-                _e(game, perm.controller)
+                if _m is not None:
+                    _m(game, perm)                       # modal: abre UI / auto-elige
+                else:
+                    _e(game, perm.controller)
             out["cast"] = cbc
 
     # "whenever another creature (you control) dies, put N +1/+1 counters on this

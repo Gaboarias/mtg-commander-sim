@@ -7048,6 +7048,45 @@ def test_quintorius_spirit_once_per_turn():
     assert spirits() - s0 == 2            # nuevo turno -> otra vez
 
 
+def test_modal_trigger_opens_mode_ui_for_human():
+    # "Whenever you cast a creature spell, choose one — ..." debe abrir el selector
+    # de MODO para el humano (antes el disparo modal no cableaba nada).
+    import cardsdb, cards
+    from engine import Game, Player
+    oracle = ("Whenever you cast a creature spell, choose one —\n"
+              "• Destroy target artifact or enchantment.\n"
+              "• You gain 4 life.")
+    c = cardsdb.build_card_from_data({
+        "name": "Trio", "type_line": "Enchantment", "mana_cost": "{2}{G}",
+        "oracle_text": oracle})
+    assert "cast" in c.triggers
+    me = Player("Yo", [cards.creature("z", "1G", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2G", 3, 3, legendary=True))
+    op = Player("Op", [cards.creature("z", "1U", 1, 1) for _ in range(10)],
+                cards.creature("O", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1); g.interactive_human = me; g.active_index = 0
+    g.move_to_battlefield(c, me); g.resolve_stack()
+    g.emit("cast", player=me, card=cards.creature("Bicho", "1G", 2, 2))
+    g.resolve_stack()
+    pc = g.pending_choice
+    assert pc is not None and pc["kind"] == "mode" and len(pc["options"]) == 2
+    life0 = me.life
+    pc["_apply"](1)                                  # "You gain 4 life"
+    g.resolve_stack()
+    assert me.life - life0 == 4
+    # el modo con objetivo abre un segundo modal (mode_target)
+    g.emit("cast", player=me, card=cards.creature("Bicho2", "1G", 2, 2))
+    g.resolve_stack()
+    art = g.move_to_battlefield(cardsdb.build_card_from_data(
+        {"name": "Rock", "type_line": "Artifact", "mana_cost": "{2}"}), op)
+    g.resolve_stack()
+    g.pending_choice["_apply"](0)                    # modo destruir
+    pc2 = g.pending_choice
+    assert pc2 is not None and pc2["kind"] == "mode_target"
+    pc2["_apply"](0); g.resolve_stack()
+    assert art not in op.battlefield
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
