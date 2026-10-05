@@ -3341,8 +3341,10 @@ def _generic_amount_effect(oracle: str):
         return eff
 
     # barrida simétrica: "each creature deals damage equal to its (power|toughness)
-    # to itself" (p. ej. Wave of Reckoning). Cada criatura se autodaña ese monto.
-    m = re.search(r"each creature deals damage equal to its (power|toughness) to itself", t)
+    # to itself" (Wave of Reckoning) o el orden inverso "...to itself equal to its
+    # power" (ambas redacciones existen). Cada criatura se autodaña ese monto.
+    m = (re.search(r"each creature deals damage equal to its (power|toughness) to itself", t)
+         or re.search(r"each creature deals damage to itself equal to its (power|toughness)", t))
     if m:
         which = m.group(1)
 

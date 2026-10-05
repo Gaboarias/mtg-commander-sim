@@ -7110,6 +7110,33 @@ def test_dead_player_objects_leave_the_game():
     assert dead not in g.opponents(me)
 
 
+def test_each_creature_self_damage_both_wordings():
+    # "Each creature deals damage to itself equal to its power" (y el orden inverso)
+    # debe cablear el efecto (antes el orden 'to itself ... equal to its power' no
+    # matcheaba y la habilidad no hacía nada).
+    import cardsdb, cards
+    from engine import Game, Player
+    for oracle in ("Each creature deals damage to itself equal to its power.",
+                   "Each creature deals damage equal to its power to itself."):
+        c = cardsdb.build_card_from_data({
+            "name": "SelfBurn", "type_line": "Sorcery", "mana_cost": "{2}{R}",
+            "oracle_text": oracle})
+        assert c.on_cast_resolve is not None
+        g = Game([Player("A", [cards.creature("z", "1R", 1, 1) for _ in range(5)],
+                         cards.creature("Cmd", "1R", 1, 1, legendary=True)),
+                  Player("B", [cards.creature("z", "1U", 1, 1) for _ in range(5)],
+                         cards.creature("O", "1U", 1, 1, legendary=True))], seed=1)
+        me, op = g.players
+        big = g.move_to_battlefield(cards.creature("Big", "3R", 4, 4), me)
+        small = g.move_to_battlefield(cards.creature("Small", "1U", 1, 3), op)
+        me.hand = [c]
+        for _ in range(3):
+            g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), me)
+        g.cast(me, c); g.resolve_stack(); g.sba()
+        assert big not in me.battlefield          # 4 power -> 4 a sí misma -> muere
+        assert small.damage == 1                  # 1 power -> 1 a sí misma -> vive
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
