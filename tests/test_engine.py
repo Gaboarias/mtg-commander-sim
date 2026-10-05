@@ -6881,6 +6881,29 @@ def test_vorel_doubles_counters():
     assert dude.counters.get("+1/+1", 0) == 6    # 3 -> 6
 
 
+# -- AI: ataca al rival más indefenso, no siempre al humano ---------------- #
+def test_ai_attacks_the_most_undefended_opponent():
+    import cards, policy
+    from engine import Game, Player
+    me = Player("AI", [cards.land("Forest", ["G"], basic=True) for _ in range(6)],
+                cards.creature("Cm", "2G", 3, 3, legendary=True))
+    you = Player("Vos", [cards.land("Island", ["U"], basic=True) for _ in range(6)],
+                 cards.creature("Ym", "2U", 1, 1, legendary=True))
+    openai = Player("AI2", [cards.land("Swamp", ["B"], basic=True) for _ in range(6)],
+                    cards.creature("Zm", "2B", 1, 1, legendary=True))
+    g = Game([me, you, openai], seed=1)
+    pol = policy.Policy("avanzado")
+    for nm in ("A", "B"):
+        a = g.move_to_battlefield(cards.creature(nm, "1G", 3, 3), me)
+        a.summoning_sick = False
+    # "Vos" tiene bloqueadores; "AI2" está con el campo vacío -> debe ser el objetivo
+    g.move_to_battlefield(cards.creature("Guardia", "1U", 3, 3), you)
+    g.move_to_battlefield(cards.creature("Guardia2", "1U", 3, 3), you)
+    assert pol._attack_target(me, [you, openai], 6) is openai
+    res = pol.declare_attackers(g, me)
+    assert res and all(tgt is openai for _atk, tgt in res)
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

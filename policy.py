@@ -651,6 +651,28 @@ class Policy:
             return extra_lands[-1]
         return min(me.hand, key=lambda c: self.score(game, me, c))
 
+    def _attack_target(self, me, opps, atk_power):
+        """A quién atacar en multijugador. No siempre al de menos vida (eso fijaba
+        el foco en el jugador que recibía daño primero). Prioriza:
+        1) rematar a un rival que probablemente puedo matar YA (menos vida primero);
+        2) si no, el rival MÁS INDEFENSO (menos bloqueadores sin girar), y recién de
+           desempate la vida más baja. Así un rival con el campo vacío se vuelve el
+           objetivo natural en vez del jugador humano.
+        El novato se mantiene simple (siempre al de menos vida)."""
+        if self.level == "novato" or not opps:
+            return min(opps, key=lambda o: o.life) if opps else None
+
+        def defense(o):
+            bl = [c for c in o.creatures() if not c.tapped and not getattr(c, "cant_block", False)]
+            return len(bl), sum(max(1, c.toughness) for c in bl)
+
+        # 1) remate: rivales a los que el daño que pasa (aprox) alcanza su vida
+        killable = [o for o in opps if atk_power - defense(o)[1] >= o.life]
+        if killable:
+            return min(killable, key=lambda o: o.life)
+        # 2) el más indefenso: menos bloqueadores -> menos capacidad de soak -> vida baja
+        return min(opps, key=lambda o: (defense(o)[0], defense(o)[1], o.life))
+
     # -- ataque ----------------------------------------------------------- #
     def declare_attackers(self, game, me):
         opps = game.opponents(me)
@@ -666,7 +688,8 @@ class Policy:
                 attackers.append(p)
         if not attackers:
             return []
-        target = min(opps, key=lambda o: o.life)
+        atk_power = sum(a.power for a in attackers)
+        target = self._attack_target(me, opps, atk_power)
         pws = [perm for o in opps for perm in o.battlefield
                if "planeswalker" in perm.card.types]
 
