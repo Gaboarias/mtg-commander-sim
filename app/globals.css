@@ -492,6 +492,20 @@ textarea:focus { border-color: var(--accent-2) !important; }
 /* keywords sobre el borde inferior del ARTE (no sobre el nombre); dejan lugar al P/T */
 .cardmini .cm-kws { position: absolute; left: 2px; right: 30px; bottom: 20px; display: flex; flex-wrap: wrap; gap: 2px; justify-content: flex-start; }
 .cardmini .cm-kw { background: rgba(10,12,16,.85); color: #d7dee9; font-size: .5rem; font-weight: 600; padding: 0 4px; border-radius: 3px; line-height: 1.55; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+/* pila de fichas idénticas: una carta con efecto de "varias apiladas" + contador */
+.token-stack { position: relative; }
+.token-stack::before, .token-stack::after { content: ""; position: absolute; inset: 0;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--panel); z-index: -1; }
+.token-stack::before { transform: translate(3px, 3px); opacity: .55; }
+.token-stack::after { transform: translate(6px, 6px); opacity: .3; }
+.token-stack:hover .cardmini { transform: translateY(-2px); box-shadow: 0 8px 16px -8px rgba(0,0,0,.8); }
+.token-stack .stack-count { position: absolute; top: -6px; right: -6px; z-index: 2;
+  background: #3a5aa8; color: #fff; font-size: .68rem; font-weight: 800; line-height: 1;
+  padding: 3px 6px; border-radius: 999px; box-shadow: 0 2px 5px -1px rgba(0,0,0,.6); }
+.stack-collapse { display: inline-flex; align-items: center; gap: 3px; align-self: center;
+  background: #2a3346; color: #cdd5e2; border: 1px solid var(--border); border-radius: 6px;
+  font-size: .62rem; font-weight: 600; padding: 3px 7px; cursor: pointer; }
+.stack-collapse:hover { background: #333e54; }
 .mana-pool { display: inline-flex; align-items: center; gap: 5px; font-size: .82rem; font-weight: 600; color: #cfe0ff; background: rgba(58,90,168,.18); border: 1px solid rgba(58,90,168,.5); padding: 2px 9px; border-radius: 999px; }
 .mana-pool svg { color: var(--accent); }
 button.ghost:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Icon } from "./icons";
 
@@ -90,6 +91,48 @@ export function CardMini({
   );
 }
 
+// firma para agrupar fichas idénticas (debe reflejar todo lo que muestra CardMini)
+function tokenSig(pm: Perm): string {
+  return JSON.stringify([
+    pm.name, pm.power, pm.toughness, pm.damage, pm.tapped, pm.sick, pm.attacking,
+    pm.is_creature, pm.is_planeswalker, pm.loyalty ?? null,
+    pm.counters || {}, (pm.keywords || []).slice().sort(),
+  ]);
+}
+
+// pila de fichas idénticas: colapsada muestra una carta con ×N; clic la expande
+function TokenStack({
+  members, reduce, onInspect, isCommander,
+}: {
+  members: Perm[]; reduce: boolean;
+  onInspect?: (pm: Perm) => void; isCommander?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  if (open) {
+    return (
+      <>
+        <button type="button" className="stack-collapse" title="agrupar fichas iguales"
+          onClick={() => setOpen(false)}>
+          <Icon name="x" size={12} /> agrupar
+        </button>
+        {members.map((pm) => (
+          <CardMini key={pm.uid} perm={pm} reduce={reduce} isCommander={isCommander}
+            onInspect={onInspect ? () => onInspect(pm) : undefined} />
+        ))}
+      </>
+    );
+  }
+  const rep = members[0];
+  return (
+    <div className="token-stack" title={`${members.length}× ${rep.name} — clic para expandir`}
+      onClick={() => setOpen(true)} style={{ cursor: "pointer" }}>
+      <span className="stack-count">×{members.length}</span>
+      <CardMini perm={rep} reduce={reduce} isCommander={isCommander}
+        onInspect={onInspect ? () => onInspect(rep) : undefined} />
+    </div>
+  );
+}
+
 export function Seat({
   p, active, art, reduce, selectableUids, selectedUids, onCard, onInspect, onZone, variant = "grid",
 }: {
@@ -160,22 +203,53 @@ export function Seat({
           </span>
         )}
       </div>
-      {nonlands.length > 0 && (
-        <motion.div layout={!reduce} className="row-cards">
-          <AnimatePresence>
-            {nonlands.map((pm) => (
-              <CardMini
-                key={pm.uid} perm={pm} art={pm.is_token ? undefined : art[pm.name]} reduce={reduce}
-                selectable={selectableUids?.has(pm.uid)}
-                selected={selectedUids?.has(pm.uid)}
-                isCommander={p.commander.includes(pm.name)}
-                onClick={onCard && selectableUids?.has(pm.uid) ? () => onCard(pm.uid) : undefined}
-                onInspect={onInspect ? () => onInspect(pm) : undefined}
-              />
+      {nonlands.length > 0 && (() => {
+        // agrupar fichas idénticas en una pila; lo que requiere interacción propia
+        // (seleccionable/seleccionada) o no es ficha se dibuja individual
+        const individuals: Perm[] = [];
+        const groups = new Map<string, Perm[]>();
+        for (const pm of nonlands) {
+          const interactive = selectableUids?.has(pm.uid) || selectedUids?.has(pm.uid);
+          if (pm.is_token && !interactive) {
+            const sig = tokenSig(pm);
+            (groups.get(sig) || groups.set(sig, []).get(sig)!).push(pm);
+          } else {
+            individuals.push(pm);
+          }
+        }
+        const stacks = [...groups.values()];
+        return (
+          <motion.div layout={!reduce} className="row-cards">
+            <AnimatePresence>
+              {individuals.map((pm) => (
+                <CardMini
+                  key={pm.uid} perm={pm} art={pm.is_token ? undefined : art[pm.name]} reduce={reduce}
+                  selectable={selectableUids?.has(pm.uid)}
+                  selected={selectedUids?.has(pm.uid)}
+                  isCommander={p.commander.includes(pm.name)}
+                  onClick={onCard && selectableUids?.has(pm.uid) ? () => onCard(pm.uid) : undefined}
+                  onInspect={onInspect ? () => onInspect(pm) : undefined}
+                />
+              ))}
+            </AnimatePresence>
+            {stacks.map((members) => (
+              members.length === 1 ? (
+                <CardMini
+                  key={members[0].uid} perm={members[0]} reduce={reduce}
+                  isCommander={p.commander.includes(members[0].name)}
+                  onInspect={onInspect ? () => onInspect(members[0]) : undefined}
+                />
+              ) : (
+                <TokenStack
+                  key={tokenSig(members[0])} members={members} reduce={reduce}
+                  isCommander={p.commander.includes(members[0].name)}
+                  onInspect={onInspect}
+                />
+              )
             ))}
-          </AnimatePresence>
-        </motion.div>
-      )}
+          </motion.div>
+        );
+      })()}
       {lands.length > 0 && (
         <motion.div layout={!reduce} className="row-cards lands">
           <AnimatePresence>
