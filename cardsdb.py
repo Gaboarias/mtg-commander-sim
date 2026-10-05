@@ -856,74 +856,77 @@ def _parse_modes(oracle: str):
     return modes, pick
 
 
+def _modal_targets_for(game, ctrl, spec):
+    """Objetivos legales para el spec de un modo (rival primero). [] si no aplica."""
+    if not spec:
+        return []
+    perms = [p for pl in game.players for p in pl.battlefield]
+    if spec == "opp_creature":
+        pool = [pm for pm in perms if pm.is_creature()
+                and pm.controller is not ctrl and game.can_target(ctrl, pm)]
+    elif spec == "own_creature":
+        pool = [pm for pm in perms if pm.is_creature() and pm.controller is ctrl]
+    elif spec in ("any_art_ench", "any_artifact", "any_enchantment",
+                  "any_planeswalker", "any_nonland", "any_perm"):
+        def pred(pm, _s=spec):
+            tp = pm.card.types
+            return {
+                "any_art_ench": bool({"artifact", "enchantment"} & tp),
+                "any_artifact": "artifact" in tp,
+                "any_enchantment": "enchantment" in tp,
+                "any_planeswalker": "planeswalker" in tp,
+                "any_nonland": not pm.card.is_land(),
+                "any_perm": True,
+            }[_s]
+        pool = [pm for pm in perms if pred(pm) and game.can_target(ctrl, pm)]
+        pool = [pm for pm in pool if pm.controller is not ctrl] or pool
+    else:
+        return []
+    return [(f"{pm.name} · {pm.controller.name}", pm) for pm in pool]
+
+
+def _modal_run_one(game, ctrl, mode):
+    """Ejecuta un modo: si pide objetivo, el humano lo elige (pending_choice) y el
+    bot auto-apunta; si no, se aplica directo."""
+    eff = mode.get("effect")
+    if eff is None:
+        return
+    spec = mode.get("target_spec")
+    opts = _modal_targets_for(game, ctrl, spec)
+    if spec and opts:
+        _human_target_choice(
+            game, ctrl, "mode_target",
+            f"Objetivo para «{mode.get('label', '')}»",
+            opts, lambda obj: eff(game, ctrl, [obj]), allow_none=False)
+    else:
+        eff(game, ctrl, [])                           # sin objetivo (o ninguno legal)
+
+
+def _modal_run(game, ctrl, modes):
+    """Abre el selector de MODO: humano elige vía pending_choice; el bot prefiere un
+    modo con objetivo disponible y lo auto-aplica."""
+    if ctrl is getattr(game, "interactive_human", None):
+        _human_target_choice(
+            game, ctrl, "mode", "Elegí un modo",
+            [(m["label"], i) for i, m in enumerate(modes)],
+            lambda i: _modal_run_one(game, ctrl, modes[i]), allow_none=False)
+    else:
+        best = next((m for m in modes if m.get("target_spec")
+                     and _modal_targets_for(game, ctrl, m["target_spec"])), None)
+        if best is None:
+            best = next((m for m in modes if not m.get("target_spec")), modes[0])
+        _modal_run_one(game, ctrl, best)
+
+
 def _modal_trigger_runner(full_oracle: str):
-    """Para un disparo MODAL ('... , choose one — • ... • ...'): devuelve un
-    runner run(game, perm) que, para el HUMANO, abre el selector de modo (y el de
-    objetivo si el modo lo pide) vía pending_choice; para el bot elige un modo con
-    objetivo disponible y lo auto-aplica. None si no es modal."""
+    """Para un disparo MODAL ('... , choose one — • ... • ...'): devuelve un runner
+    run(game, perm) que abre el selector de modo. None si no es modal. Parsea los
+    modos del oráculo COMPLETO (la captura del disparo se trunca y perdería modos)."""
     parsed = _parse_modes(full_oracle)
     if parsed is None:
         return None
-    modes, pick = parsed
-
-    def _targets_for(game, ctrl, spec):
-        if not spec:
-            return []
-        perms = [p for pl in game.players for p in pl.battlefield]
-        if spec == "opp_creature":
-            pool = [pm for pm in perms if pm.is_creature()
-                    and pm.controller is not ctrl and game.can_target(ctrl, pm)]
-        elif spec == "own_creature":
-            pool = [pm for pm in perms if pm.is_creature() and pm.controller is ctrl]
-        elif spec in ("any_art_ench", "any_artifact", "any_enchantment",
-                      "any_planeswalker", "any_nonland", "any_perm"):
-            def pred(pm, _s=spec):
-                t = pm.card.types
-                return {
-                    "any_art_ench": bool({"artifact", "enchantment"} & t),
-                    "any_artifact": "artifact" in t,
-                    "any_enchantment": "enchantment" in t,
-                    "any_planeswalker": "planeswalker" in t,
-                    "any_nonland": not pm.card.is_land(),
-                    "any_perm": True,
-                }[_s]
-            pool = [pm for pm in perms if pred(pm) and game.can_target(ctrl, pm)]
-            opp = [pm for pm in pool if pm.controller is not ctrl]
-            pool = opp or pool                       # rival primero; propio si no hay
-        else:
-            return []
-        return [(f"{pm.name} · {pm.controller.name}", pm) for pm in pool]
-
-    def _run_mode(game, ctrl, mode):
-        eff = mode.get("effect")
-        if eff is None:
-            return
-        spec = mode.get("target_spec")
-        opts = _targets_for(game, ctrl, spec)
-        if spec and opts:
-            _human_target_choice(
-                game, ctrl, "mode_target",
-                f"Objetivo para «{mode.get('label', '')}»",
-                opts, lambda obj: eff(game, ctrl, [obj]), allow_none=False)
-        else:
-            eff(game, ctrl, [])                       # sin objetivo (o ninguno legal)
-
-    def run(game, perm):
-        ctrl = perm.controller
-        if ctrl is getattr(game, "interactive_human", None):
-            _human_target_choice(
-                game, ctrl, "mode", "Elegí un modo",
-                [(m["label"], i) for i, m in enumerate(modes)],
-                lambda i: _run_mode(game, ctrl, modes[i]), allow_none=False)
-        else:
-            # bot: preferir un modo con objetivo disponible; si no, el primero
-            best = next((m for m in modes
-                         if m.get("target_spec") and _targets_for(game, ctrl, m["target_spec"])),
-                        None)
-            if best is None:
-                best = next((m for m in modes if not m.get("target_spec")), modes[0])
-            _run_mode(game, ctrl, best)
-    return run
+    modes = parsed[0]
+    return lambda game, perm: _modal_run(game, perm.controller, modes)
 
 
 def _parse_activated(oracle: str, name: str = ""):
@@ -2892,6 +2895,15 @@ def _generic_amount_effect(oracle: str):
     la capa por tags (wipe/removal/draw/ramp) no modela. Prioridad: fichas >
     quema a cada rival > ganancia de vida > mill propio."""
     t = re.sub(r"\s+", " ", (oracle or "").lower())
+
+    # efecto MODAL ("choose one/two/… — • ... • ..."): abre el selector de modo para
+    # el humano (y el bot auto-elige). Cubre disparos/ETB modales que antes caían en
+    # un patrón suelto y mostraban solo el primer modo.
+    if re.search(r"choose (?:one|two|three|one or more|one or both)\s*[—\-–:]", t):
+        _parsed = _parse_modes(oracle)
+        if _parsed is not None:
+            _modes = _parsed[0]
+            return lambda game, ctrl, *_a, _m=_modes: _modal_run(game, ctrl, _m)
 
     # ritual de maná: "add {C}{C}{C}", "add {G}{G}", "add N mana of any color" ->
     # maná flotante (genérico) que sirve para el próximo hechizo del mismo turno.
