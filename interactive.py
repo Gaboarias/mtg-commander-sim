@@ -1275,8 +1275,11 @@ class InteractiveGame:
                 # las habilidades NO se descartan: se muestran deshabilitadas con
                 # el motivo, así no "desaparecen" al usar otra (girar / gastar maná).
                 reason = None
+                lr = ab.get("level_req")
                 if ab.get("prepared") and not getattr(pm, "_prepared", False):
                     reason = "ya usada"
+                elif lr is not None and pm.counters.get("level", 1) != lr - 1:
+                    reason = f"requiere nivel {lr - 1}"
                 elif ab.get("tap") and pm.tapped:
                     reason = "girada"
                 elif not p.can_pay(ab.get("cost")):

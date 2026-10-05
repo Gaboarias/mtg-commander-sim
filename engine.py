@@ -1640,6 +1640,11 @@ class Game:
         if ab.get("tap") and perm.tapped:
             return False
         ctrl = perm.controller
+        # Clase: una habilidad de "subir a nivel N" solo se puede activar estando en
+        # el nivel N-1 (si no, antes pagaba el maná y no hacía nada).
+        lr = ab.get("level_req")
+        if lr is not None and perm.counters.get("level", 1) != lr - 1:
+            return False
         # habilidad con {X}: el coste efectivo suma X maná genérico.
         base_cost = ab.get("cost")
         xv = max(0, int(x)) if ab.get("x_cost") else 0

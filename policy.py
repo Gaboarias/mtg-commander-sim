@@ -721,15 +721,76 @@ class Policy:
             if p not in sending:
                 sending.append(p)
 
+        # repartir los atacantes entre los rivales (no todos a uno): se satura al más
+        # indefenso y el excedente derrama al siguiente. El novato sigue mandando todo
+        # a un solo objetivo.
+        if self.level == "novato" or len(opps) == 1:
+            assign = {a.uid: target for a in sending}
+        else:
+            assign = self._distribute_attackers(me, sending, opps, atk_power)
+
         result = []
-        pw_i = 0
-        for i, atk in enumerate(sending):
-            if pws and self.level != "novato" and i % 2 == 1:
-                result.append((atk, pws[pw_i % len(pws)]))
-                pw_i += 1
+        local = {}                      # índice de atacantes por rival, para alternar
+        for atk in sending:
+            o = assign.get(atk.uid, target)
+            o_pws = [perm for perm in o.battlefield if "planeswalker" in perm.card.types]
+            k = local.get(id(o), 0)
+            local[id(o)] = k + 1
+            # alternar dentro de cada rival: parte del daño a su planeswalker (presión
+            # mixta jugador/planeswalker) sin dejar al jugador sin recibir nada
+            if o_pws and self.level != "novato" and k % 2 == 1:
+                result.append((atk, o_pws[(k // 2) % len(o_pws)]))
             else:
-                result.append((atk, target))
+                result.append((atk, o))
         return result
+
+    def _distribute_attackers(self, me, sending, opps, atk_power):
+        """Reparte los atacantes entre los rivales en vez de mandarlos todos a uno.
+        - A un rival REMATABLE se le asignan los que hagan falta para cubrir su vida.
+        - El resto se reparte con una CUOTA JUSTA por rival (≈ parejo), enrutando por
+          el soak (resistencia de bloqueadores sin girar) para preferir dónde conecta.
+        Así, con tablero amplio, se presiona a varios rivales y no solo al humano."""
+        def defense(o):
+            return sum(max(1, c.toughness) for c in o.creatures()
+                       if not c.tapped and not getattr(c, "cant_block", False))
+
+        def could_die(atk, o):
+            # ¿algún bloqueador sin girar del rival mataría a este atacante?
+            for b in o.creatures():
+                if b.tapped or getattr(b, "cant_block", False):
+                    continue
+                bhas = getattr(b, "has", lambda _k: False)
+                if b.power >= atk.toughness or (bhas("deathtouch") and b.power > 0):
+                    return True
+            return False
+
+        killable = {id(o) for o in opps if atk_power - defense(o) >= o.life}
+        order = sorted(opps, key=lambda o: (0 if id(o) in killable else 1,
+                                            defense(o), o.life))
+        soak = {id(o): defense(o) for o in opps}
+        need = {id(o): o.life + defense(o) for o in opps}   # daño para asegurar letal
+        count = {id(o): 0 for o in opps}
+        committed = {id(o): 0 for o in opps}
+        fair = max(1, -(-len(sending) // len(opps)))        # ceil: cuota pareja por rival
+        assign = {}
+        for atk in sorted(sending, key=lambda c: c.power, reverse=True):
+            def key(o, atk=atk):
+                # un rival queda 'saturado' al asegurar su remate (rematables) o al
+                # llegar a su cuota pareja (no rematables); entonces desborda al próximo.
+                # Pero nunca derrama a un rival donde el atacante moriría pudiendo pegar
+                # gratis en otro: ese cambio desfavorable va último.
+                if id(o) in killable:
+                    satisfied = committed[id(o)] >= need[id(o)]
+                else:
+                    satisfied = count[id(o)] >= fair
+                return (could_die(atk, o), satisfied,
+                        max(0, soak[id(o)]), order.index(o))
+            best = min(order, key=key)
+            assign[atk.uid] = best
+            count[id(best)] += 1
+            committed[id(best)] += atk.power
+            soak[id(best)] = max(0, soak[id(best)] - atk.power)
+        return assign
 
     # -- bloqueo ---------------------------------------------------------- #
     def declare_blockers(self, game, me, incoming):

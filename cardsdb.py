@@ -1515,17 +1515,17 @@ def _parse_class(card, oracle):
             continue
 
         def _lvl(g, ctrl, perm, targets=None, _n=n):
-            lv = perm.counters.get("level", 1)
-            if lv == _n - 1:
+            # el motor ya verifica el nivel (level_req) antes de pagar; esto es red.
+            if perm.counters.get("level", 1) == _n - 1:
                 perm.counters["level"] = _n
                 g.log(f"{perm.name} sube a nivel {_n}")
-            else:
-                g.log(f"{perm.name}: no puede subir a nivel {_n} (nivel actual {lv})")
         abils.append({"cost": cost, "tap": False, "sacrifice_self": False,
                       "sacrifice_other": None, "pay_life": 0, "discard": 0,
                       "label": f"Subir a nivel {n}", "effect": _lvl,
                       "target_spec": None, "target_count": 1,
-                      "is_copy_ability": False})
+                      "is_copy_ability": False,
+                      # solo activable estando en el nivel inmediatamente anterior
+                      "level_req": n})
     card.activated_abilities = tuple(abils)
 
     # habilidades por nivel (disparos), con verificación de nivel

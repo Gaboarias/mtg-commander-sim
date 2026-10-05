@@ -6904,6 +6904,62 @@ def test_ai_attacks_the_most_undefended_opponent():
     assert res and all(tgt is openai for _atk, tgt in res)
 
 
+def test_ai_distributes_attackers_across_rivals():
+    """Con tablero amplio reparte los atacantes entre rivales en vez de apilarlos
+    todos en uno, aun cuando uno esté totalmente abierto."""
+    import policy
+    class C:
+        def __init__(s, p, t):
+            s.power = p; s.toughness = t; s.tapped = False
+            s.cant_block = False; s.uid = id(s)
+    class O:
+        def __init__(s, name, life, cr):
+            s.name = name; s.life = life; s._c = cr
+        def creatures(s): return s._c
+    pol = policy.Policy("avanzado")
+    atk = [C(3, 3) for _ in range(4)]
+    # un rival con muro 0/4 (soak 4) y otro con el campo vacío
+    vos = O("Vos", 40, [C(0, 4)]); ai2 = O("AI2", 40, [])
+    assign = pol._distribute_attackers(None, atk, [vos, ai2], 12)
+    tally = {}
+    for a in atk:
+        tally[assign[a.uid].name] = tally.get(assign[a.uid].name, 0) + 1
+    assert tally.get("Vos", 0) >= 1 and tally.get("AI2", 0) >= 1
+    # a un rival rematable se le manda lo justo; el resto desborda al abierto
+    kill = O("Kill", 5, []); open2 = O("AI2", 40, [])
+    a2 = pol._distribute_attackers(None, atk, [kill, open2], 12)
+    t2 = {}
+    for a in atk:
+        t2[a2[a.uid].name] = t2.get(a2[a.uid].name, 0) + 1
+    assert t2.get("Kill", 0) == 2 and t2.get("AI2", 0) == 2
+
+
+# -- Clase (Advanced Reconstruction): subir de nivel con gating ------------ #
+def test_class_level_up_requires_previous_level():
+    import cardsdb, cards
+    c = cardsdb.build_card_from_data({
+        "name": "Advanced Reconstruction", "type_line": "Enchantment — Class",
+        "mana_cost": "{3}{R}",
+        "oracle_text": "(Gain the next level as a sorcery to add its ability.)\n"
+                       "At the beginning of your first main phase, mill a card.\n"
+                       "{1}{R}: Level 2\n"
+                       "Level 2 — Whenever one or more cards leave your graveyard, this "
+                       "Class deals 2 damage to each opponent.\n"
+                       "{1}{R}: Level 3\nLevel 3 — Spells cost {2} less."})
+    assert "class" in c.subtypes and len(c.activated_abilities) == 2
+    g, me, op = _duel()
+    pm = g.move_to_battlefield(c, me)
+    for _ in range(6):
+        g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), me)
+    mana0 = me.available_mana()
+    # "Subir a nivel 3" estando en nivel 1 -> rechazado, SIN pagar maná
+    assert g.activate_ability(pm, 1) is False
+    assert pm.counters.get("level") == 1 and me.available_mana() == mana0
+    # secuencial: 1 -> 2 -> 3
+    assert g.activate_ability(pm, 0) is True and pm.counters["level"] == 2
+    assert g.activate_ability(pm, 1) is True and pm.counters["level"] == 3
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
