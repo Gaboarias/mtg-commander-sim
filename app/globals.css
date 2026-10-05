@@ -487,6 +487,12 @@ textarea:focus { border-color: var(--accent-2) !important; }
 .cardmini .cm-badge { position: absolute; top: 3px; font-size: .56rem; font-weight: 700; padding: 0 4px; border-radius: 3px; letter-spacing: .3px; text-transform: uppercase; }
 .cardmini .cm-badge.tok { left: 3px; background: #3a5aa8; color: #fff; }
 .cardmini .cm-badge.sick { right: 3px; background: rgba(0,0,0,.7); color: #ffd27a; }
+/* doble golpe: badge ⚔×2 abajo-izquierda + aro brillante distintivo */
+.cardmini .cm-badge.ds { top: auto; bottom: 20px; left: 3px; display: inline-flex;
+  align-items: center; gap: 2px; background: linear-gradient(135deg,#e0684f,#b6412f);
+  color: #fff; box-shadow: 0 0 0 1px rgba(255,255,255,.25); }
+.cardmini.dstrike { box-shadow: 0 0 0 2px #e0684f, 0 0 10px -2px #e0684f; }
+.cardmini.dstrike.atk { box-shadow: 0 0 0 2px #ff8a6e, 0 0 12px -1px #e0684f; }
 /* corona del comandante en el campo: centrada arriba, no choca con tok/+1 (izq) ni sick/−1 (der) */
 .cardmini .cm-badge.cmdr { left: 50%; transform: translateX(-50%); display: inline-grid; place-items: center; padding: 1px 3px; background: var(--accent); color: #1a1508; }
 /* keywords sobre el borde inferior del ARTE (no sobre el nombre); dejan lugar al P/T */

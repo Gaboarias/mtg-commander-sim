@@ -39,6 +39,8 @@ export function CardMini({
     protection: "protec.",
   };
   const kws = (perm.keywords || []).filter((k) => KW_SHORT[k]);
+  // doble golpe: resaltar la carta de forma especial (temporal o permanente da igual)
+  const doubleStrike = (perm.keywords || []).includes("double_strike");
   return (
     <motion.div
       layout={!reduce}
@@ -46,7 +48,7 @@ export function CardMini({
       animate={{ opacity: 1, scale: 1, y: 0, rotate: perm.tapped ? 9 : 0 }}
       exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.5, y: 10 }}
       transition={{ type: "spring", stiffness: 420, damping: 30 }}
-      className={`cardmini ${perm.attacking ? "atk" : ""} ${perm.tapped ? "tapped" : ""} ${selectable ? "sel-able" : ""} ${selected ? "sel" : ""}`}
+      className={`cardmini ${perm.attacking ? "atk" : ""} ${perm.tapped ? "tapped" : ""} ${selectable ? "sel-able" : ""} ${selected ? "sel" : ""} ${doubleStrike ? "dstrike" : ""}`}
       title={perm.tapped ? `${perm.name} (girada)` : perm.name}
       onClick={onClick}
       style={onClick ? { cursor: "pointer" } : undefined}
@@ -57,6 +59,11 @@ export function CardMini({
       )}
       {isCommander && (
         <span className="cm-badge cmdr" title="comandante"><Icon name="crown" size={10} /></span>
+      )}
+      {doubleStrike && (
+        <span className="cm-badge ds" title="doble golpe (pega dos veces)">
+          <Icon name="swords" size={9} /> ×2
+        </span>
       )}
       {perm.is_token && <span className="cm-badge tok" title="ficha">ficha</span>}
       {perm.is_creature && perm.sick && (
