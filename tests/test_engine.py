@@ -3095,6 +3095,7 @@ def test_delve_exiles_graveyard_to_pay():
         "color_identity": ["U"], "oracle_text": "Delve\nDraw a card.",
         "keywords": ["Delve"]})
     assert "delve" in c.tags
+    me.library = [cards.creature("Lib", "1U", 1, 1) for _ in range(5)]  # evitar deckout al robar
     for _ in range(5):
         me.graveyard.append(cards.creature("Gy", "1U", 1, 1))
     g.move_to_battlefield(cards.land("Island", ["U"], basic=True), me)
@@ -7085,6 +7086,28 @@ def test_modal_trigger_opens_mode_ui_for_human():
     assert pc2 is not None and pc2["kind"] == "mode_target"
     pc2["_apply"](0); g.resolve_stack()
     assert art not in op.battlefield
+
+
+def test_dead_player_objects_leave_the_game():
+    # un jugador eliminado deja el juego: sus permanentes/cementerio/exilio se van,
+    # así ninguna habilidad puede apuntar a sus cartas (regla 800.4a).
+    import cards, policy
+    from engine import Game, Player
+    me = Player("Vivo", [cards.land("Forest", ["G"], basic=True) for _ in range(10)],
+                cards.creature("Cmd", "1G", 1, 1, legendary=True), policy=policy.Policy("avanzado"))
+    dead = Player("Muerto", [cards.land("Island", ["U"], basic=True) for _ in range(10)],
+                  cards.creature("D", "1U", 1, 1, legendary=True), policy=policy.Policy("avanzado"))
+    g = Game([me, dead], seed=1)
+    g.move_to_battlefield(cards.creature("Bicho", "1U", 2, 2), dead)
+    g.move_to_battlefield(cards.land("Island", ["U"], basic=True), dead)
+    dead.graveyard.append(cards.creature("GY", "1U", 1, 1))
+    dead.life = 0
+    g.sba()
+    assert dead.lost
+    assert dead.battlefield == [] and dead.graveyard == [] and dead.exile == []
+    # el pool de objetivos del vivo ya no incluye nada del muerto
+    assert g.legal_creature_targets(me) == []
+    assert dead not in g.opponents(me)
 
 
 # -- partida completa corre sin excepciones -------------------------------- #

@@ -1234,6 +1234,23 @@ class Game:
                     p.lost = True
                     changed = True
                     self.log(f"{p.name} pierde por dano de comandante")
+            # un jugador ELIMINADO deja el juego: todos sus objetos se van (regla
+            # 800.4a). Así ninguna habilidad puede apuntar a sus cartas (campo,
+            # cementerio, exilio) ni siguen activos sus efectos estáticos/disparos.
+            for p in self.players:
+                if not p.lost:
+                    continue
+                if p.battlefield or p.graveyard or p.exile or p.impulse or p.exile_play:
+                    if p.battlefield:
+                        changed = True          # sus estáticos/anthems dejan de aplicar
+                    p.battlefield = []
+                    p.graveyard = []
+                    p.exile = []
+                    p.impulse = []
+                    p.exile_play = []
+                    p.hand = []
+                    p.library = []
+                    p.command = []
             # contadores +1/+1 y -1/-1 se aniquilan de a pares
             for p in self.players:
                 for perm in p.battlefield:
