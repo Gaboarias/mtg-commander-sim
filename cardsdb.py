@@ -1321,18 +1321,38 @@ def _event_trigger_effect(oracle: str):
     out = {}
     # muerte de criatura: distingue "a creature" (cualquiera) de "a creature you
     # control" (solo las tuyas) para no sobre-dispararse con muertes rivales.
-    md = re.search(r"whenever (?:a|another) (?:nontoken )?creature( you control)? "
-                   r"dies,?\s*(.{0,160})", t, re.I)
+    md = re.search(r"whenever (this creature or )?(a|an|another) (?:nontoken )?"
+                   r"creature( you control)? dies,?\s*(.{0,160})", t, re.I)
     if md:
-        eff = _generic_amount_effect(md.group(2))
+        eff = _generic_amount_effect(md.group(4))
         if eff is not None:
-            yours = bool(md.group(1))
+            yours = bool(md.group(3))
+            # "a/an creature" o "this creature or ..." incluyen a la propia; "another"
+            # (sin "this creature or") excluye su propia muerte.
+            self_counts = bool(md.group(1)) or md.group(2).lower() in ("a", "an")
 
-            def cb_death(game, perm, player=None, _e=eff, _y=yours, **_kw):
+            def cb_death(game, perm, player=None, self_death=False,
+                         _e=eff, _y=yours, _sc=self_counts, **_kw):
+                if self_death and not _sc:
+                    return                       # "another": no cuenta su propia muerte
                 if _y and player is not None and player is not perm.controller:
                     return                       # "you control": solo tus criaturas
                 _e(game, perm.controller)
             out["death"] = cb_death
+
+    # recursión: "when this creature dies, return it to the battlefield under its
+    # owner's control" (criaturas que vuelven solas). La carta ya está en el
+    # cementerio cuando resuelve el disparo -> la devolvemos al campo.
+    if "death" not in out and re.search(
+            r"when (?:this creature|~|it) dies, return it to the battlefield", t, re.I):
+        def cb_death_return(game, perm, **_kw):
+            card = perm.card
+            ctrl = perm.controller
+            if card in ctrl.graveyard:
+                ctrl.graveyard.remove(card)
+                game.move_to_battlefield(card, ctrl)
+                game.log(f"{card.name} vuelve al campo tras morir")
+        out["death"] = cb_death_return
     # daño de combate a un jugador
     mcd = re.search(r"whenever [\w' ,]{0,40}? deals combat damage to a player,?\s*"
                     r"(.{0,160})", t, re.I)
@@ -1361,6 +1381,27 @@ def _event_trigger_effect(oracle: str):
                 def cb_ca2(game, perm, attacker=None, defender=None, _e=_eff, **_kw):
                     _e(game, perm.controller)
                 out["creature_attacks"] = cb_ca2
+
+    # auto-pump al atacar: "whenever this creature attacks, it gets +X/+Y until end
+    # of turn[, where X is the number of ...]" (el bono puede ser fijo o variable).
+    mas = re.search(r"whenever (?:this creature|~|it) attacks,? it gets "
+                    r"([+-](?:\d+|x))/([+-](?:\d+|x)) until end of turn", t, re.I)
+    if mas and "attacks" not in out:
+        mx = re.search(r"where x is the (number of [\w' ]+?)(?:\.|,|$)", t, re.I)
+        _cntf = _count_fn(mx.group(1)) if mx else None
+
+        def _amt(tok, game, ctrl, _c=_cntf):
+            sign = -1 if tok[0] == "-" else 1
+            body = tok[1:]
+            if body.lower() == "x":
+                return sign * (_c(game, ctrl) if _c else 0)
+            return sign * int(body)
+
+        def cb_atk_self(game, perm, _dp=mas.group(1), _dt=mas.group(2), **_kw):
+            ctrl = perm.controller
+            perm.temp_pt[0] += _amt(_dp, game, ctrl)
+            perm.temp_pt[1] += _amt(_dt, game, ctrl)
+        out["attacks"] = cb_atk_self
 
     # landfall: "whenever a land enters (the battlefield) under your control, …" /
     # "Landfall — …". El evento landfall es self-scoped (solo tus tierras).
@@ -1712,11 +1753,21 @@ def _static_anthem(oracle: str):
     m = re.search(r"(?:other )?([a-z]+) you control get ([+-]\d+)/([+-]\d+)", t)
     dp = dt = 0
     subtype = None
+    scope = "you"
     if m:
         noun = m.group(1)
         dp, dt = int(m.group(2)), int(m.group(3))
         if noun not in ("creatures", "creature"):
             subtype = (noun[:-1] if noun.endswith("s") else noun).capitalize()
+    else:
+        # debuff a los RIVALES: "creatures your opponents control get -1/-0"
+        mo = re.search(r"([a-z]+) (?:your )?opponents control get ([+-]\d+)/([+-]\d+)", t)
+        if mo:
+            scope = "opp"
+            noun = mo.group(1)
+            dp, dt = int(mo.group(2)), int(mo.group(3))
+            if noun not in ("creatures", "creature"):
+                subtype = (noun[:-1] if noun.endswith("s") else noun).capitalize()
     kws = set()
     mk = re.search(r"(?:other )?([a-z]+) you control (?:get [+-]\d+/[+-]\d+ and )?"
                    r"have ([a-z ,and]+?)(?:\.|$|until)", t)
@@ -1731,11 +1782,17 @@ def _static_anthem(oracle: str):
         return None, set(), None
     others = "other " in t
 
-    def sm(source, target, _dp=dp, _dt=dt, _o=others, _sub=subtype):
-        if not target.is_creature() or target.controller is not source.controller:
+    def sm(source, target, _dp=dp, _dt=dt, _o=others, _sub=subtype, _sc=scope):
+        if not target.is_creature():
             return (0, 0)
-        if _o and target is source:
-            return (0, 0)
+        if _sc == "opp":                      # aplica a criaturas de los RIVALES
+            if target.controller is source.controller:
+                return (0, 0)
+        else:                                 # aplica a las tuyas
+            if target.controller is not source.controller:
+                return (0, 0)
+            if _o and target is source:
+                return (0, 0)
         if _sub and not target.has_subtype(_sub):
             return (0, 0)
         return (_dp, _dt)
@@ -2921,8 +2978,9 @@ def _generic_amount_effect(oracle: str):
             return lambda game, ctrl, *_a, _m=_modes: _modal_run(game, ctrl, _m)
 
     # ritual de maná: "add {C}{C}{C}", "add {G}{G}", "add N mana of any color" ->
-    # maná flotante (genérico) que sirve para el próximo hechizo del mismo turno.
-    mr = re.match(r"add (.+)", t)
+    # maná flotante (genérico). re.search (no match) para tomarlo también cuando va
+    # tras un disparo ("when ~ enters, add {C}{C}{C}").
+    mr = re.search(r"(?:^|[,:] )add (.+)", t)
     if mr and ("mana" in mr.group(1) or re.search(r"\{[wubrgc0-9]\}", mr.group(1))):
         seg = mr.group(1)
         syms = len(re.findall(r"\{[wubrgc]\}", seg))
@@ -4232,6 +4290,12 @@ def build_card_from_data(data: dict) -> Card:
     _etc = _parse_etb_counters(data.get("oracle_text", ""))
     if _etc:
         card.etb_counters = _etc
+    # "~ enters (the battlefield) tapped" en el texto (no solo el flag de Scryfall):
+    # la criatura/permanente entra girado (no puede atacar/bloquear ese turno).
+    if not card.enters_tapped and re.search(
+            r"enters (?:the battlefield )?tapped(?:\.|,|$| and| unless)",
+            re.sub(r"\s+", " ", (data.get("oracle_text", "") or "")), re.I):
+        card.enters_tapped = True
 
     # estado "cuando ~ no tenga contadores <X>, sacrifícala; crea <ficha>" (Dark
     # Depths -> Marit Lage). Se evalúa en sba() (consistente para cualquier fuente

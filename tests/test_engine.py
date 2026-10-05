@@ -7191,6 +7191,81 @@ def test_enters_with_x_counters_and_bracket_loyalty():
     assert len(pw.loyalty_abilities or []) == 2
 
 
+def test_ability_audit_batch():
+    """Lote de huecos de activación hallados en la auditoría general."""
+    import cardsdb, cards
+    from engine import Game, Player
+
+    def deck():
+        return [cards.creature("z", "1G", 1, 1) for _ in range(5)]
+
+    def duel():
+        g = Game([Player("A", deck(), cards.creature("Cmd", "1G", 1, 1, legendary=True)),
+                  Player("B", deck(), cards.creature("O", "1U", 1, 1, legendary=True))], seed=1)
+        return g, g.players[0], g.players[1]
+
+    # aristócrata "this creature or another ... dies" cuenta su propia muerte
+    g, me, _ = duel()
+    a = g.move_to_battlefield(cardsdb.build_card_from_data({
+        "name": "Ar", "type_line": "Creature — Cleric", "mana_cost": "1B",
+        "power": "1", "toughness": "1",
+        "oracle_text": "Whenever this creature or another creature you control dies, you gain 1 life."}), me)
+    g.resolve_stack()
+    l0 = me.life; g.to_graveyard(a, "t"); g.resolve_stack()
+    assert me.life - l0 == 1
+
+    # "another creature you control dies" NO cuenta su propia muerte
+    g, me, _ = duel()
+    a = g.move_to_battlefield(cardsdb.build_card_from_data({
+        "name": "Ar2", "type_line": "Creature — Cleric", "mana_cost": "1B",
+        "power": "1", "toughness": "1",
+        "oracle_text": "Whenever another creature you control dies, you gain 1 life."}), me)
+    g.resolve_stack()
+    l0 = me.life; g.to_graveyard(a, "t"); g.resolve_stack()
+    assert me.life - l0 == 0
+
+    # debuff a criaturas de los rivales
+    g, me, op = duel()
+    g.move_to_battlefield(cardsdb.build_card_from_data({
+        "name": "Deb", "type_line": "Enchantment", "mana_cost": "2B",
+        "oracle_text": "Creatures your opponents control get -1/-0."}), me)
+    foe = g.move_to_battlefield(cards.creature("Foe", "2U", 2, 2), op)
+    mine = g.move_to_battlefield(cards.creature("Mine", "2G", 2, 2), me)
+    assert foe.power == 1 and mine.power == 2
+
+    # "enters tapped" desde el texto
+    c = cardsdb.build_card_from_data({
+        "name": "Tap", "type_line": "Creature — Beast", "mana_cost": "2",
+        "power": "2", "toughness": "2", "oracle_text": "This creature enters tapped."})
+    assert c.enters_tapped
+
+    # dies -> vuelve al campo
+    g, me, _ = duel()
+    sk = g.move_to_battlefield(cardsdb.build_card_from_data({
+        "name": "Skel", "type_line": "Creature — Skeleton", "mana_cost": "1B",
+        "power": "1", "toughness": "1",
+        "oracle_text": "When this creature dies, return it to the battlefield under its owner's control."}), me)
+    g.resolve_stack(); g.to_graveyard(sk, "t"); g.resolve_stack()
+    assert any(x.name == "Skel" for x in me.battlefield)
+
+    # ETB "add {C}{C}{C}"
+    g, me, _ = duel()
+    rock = cardsdb.build_card_from_data({
+        "name": "Rit", "type_line": "Creature — Human", "mana_cost": "2",
+        "power": "1", "toughness": "1", "oracle_text": "When this creature enters, add {C}{C}{C}."})
+    assert rock.on_etb is not None
+    m0 = me.mana_pool; g.move_to_battlefield(rock, me); g.resolve_stack()
+    assert me.mana_pool - m0 == 3
+
+    # auto-pump variable al atacar
+    atk = cardsdb.build_card_from_data({
+        "name": "Sh", "type_line": "Creature — Shaman", "mana_cost": "2G",
+        "power": "1", "toughness": "1",
+        "oracle_text": "Whenever this creature attacks, it gets +X/+0 until end of turn, "
+                       "where X is the number of creatures you control."})
+    assert "attacks" in atk.triggers
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

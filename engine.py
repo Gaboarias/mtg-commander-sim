@@ -1032,6 +1032,15 @@ class Game:
             # carta ya volvió al campo y NO debe ir al cementerio.
             relocated = bool(perm.card.on_death(self, ctrl, perm))
         self.emit("death", player=ctrl, perm=perm)
+        # disparo de muerte PROPIA: emit() escanea el campo y la carta ya no está,
+        # así que su propio triggers["death"] (aristócratas "this creature or ...",
+        # criaturas que vuelven al morir) se despacha aparte.
+        _own_death = (perm.card.triggers or {}).get("death")
+        if _own_death:
+            self.stack.append(StackObject(
+                ctrl,
+                (lambda g, _cb=_own_death, _p=perm, _pl=ctrl: _cb(g, _p, player=_pl, self_death=True)),
+                source=perm, label=f"death-self:{perm.name}", kind="trigger"))
         if perm.is_token:
             return
         if relocated:
