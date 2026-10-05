@@ -468,10 +468,32 @@ def _tricky_commander():
     c = creature("Ezuri, Claw of Progress", "2GU", 3, 3, legendary=True,
                  tags=("engine",), color_id=(G, U))
 
-    def _attacks(game, perm, **kw):     # al atacar, tus criaturas ganan +1/+1
-        for p in perm.controller.creatures():
-            game.add_counters(p, "+1/+1", 1)
-    c.triggers = {"attacks": _attacks}
+    def _creature_enters(game, perm, entered=None, **kw):
+        # "Siempre que una criatura que controlás con fuerza 2 o menos entra,
+        #  ganás un contador de experiencia."
+        if entered is None or entered.controller is not perm.controller:
+            return
+        if entered is perm or (entered.power or 0) > 2:
+            return
+        ctrl = perm.controller
+        ctrl.experience = getattr(ctrl, "experience", 0) + 1
+        game.log(f"{ctrl.name}: Ezuri → +1 experiencia (total {ctrl.experience})")
+
+    def _begin_combat(game, perm, **kw):
+        # "Al comienzo del combate en tu turno, pon X contadores +1/+1 en OTRA
+        #  criatura objetivo que controlás, X = tu cantidad de experiencia."
+        ctrl = perm.controller
+        x = getattr(ctrl, "experience", 0)
+        if x <= 0:
+            return
+        others = [p for p in ctrl.creatures() if p is not perm]
+        if not others:
+            return                       # exige "otra" criatura: sin ella, no hace nada
+        target = max(others, key=lambda p: (p.power or 0) + (p.toughness or 0))
+        game.add_counters(target, "+1/+1", x)
+        game.log(f"{ctrl.name}: Ezuri pone {x} contador(es) +1/+1 en {target.name}")
+
+    c.triggers = {"creature_enters": _creature_enters, "begin_combat": _begin_combat}
     return c
 
 

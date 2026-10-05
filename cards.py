@@ -335,6 +335,10 @@ def _quintorius_lgy(game, perm, **kw):
     Espiritu 3/2."""
     if kw.get("player") is not perm.controller:
         return
+    # "Esta habilidad se dispara solo una vez cada turno."
+    if getattr(perm, "_quint_last_turn", None) == game.turn:
+        return
+    perm._quint_last_turn = game.turn
     make_token(game, perm.controller, "Spirit", 3, 2)
     game.log(f"{perm.controller.name}: Quintorius crea un Spirit 3/2")
 
@@ -616,13 +620,12 @@ def _kang_draw(game, perm, **kw):
     if kw.get("count") != 2:
         return
     ctrl = perm.controller
-    drained = 0
-    for o in game.opponents(ctrl):
-        game.deal_damage(perm, o, 1)
-        drained += 1
-    game.gain_life(ctrl, drained)
-    if drained:
-        game.log(f"{ctrl.name}: Kang drena {drained} (2da carta del turno)")
+    opps = game.opponents(ctrl)
+    for o in opps:
+        game.deal_damage(perm, o, 1)      # "cada oponente pierde 1 vida"
+    if opps:
+        game.gain_life(ctrl, 1)           # "y ganás 1 vida" (1 fija, NO por oponente)
+        game.log(f"{ctrl.name}: Kang — cada oponente pierde 1, ganás 1 (2da carta del turno)")
 
 
 def Kang():

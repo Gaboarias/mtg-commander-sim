@@ -6960,6 +6960,65 @@ def test_class_level_up_requires_previous_level():
     assert g.activate_ability(pm, 1) is True and pm.counters["level"] == 3
 
 
+# -- comandantes: habilidades fieles al oráculo --------------------------- #
+def test_ezuri_experience_and_combat():
+    import cards, decks
+    from engine import Game, Player
+    ez = decks._tricky_commander()
+    me = Player("Yo", [cards.land("Forest", ["G"], basic=True) for _ in range(6)], ez)
+    op = Player("Op", [cards.land("Island", ["U"], basic=True) for _ in range(6)],
+                cards.creature("X", "1U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    ezp = g.move_to_battlefield(ez, me); ezp.summoning_sick = False; g.resolve_stack()
+    for i in range(3):                       # 3 criaturas fuerza<=2 -> 3 experiencia
+        g.move_to_battlefield(cards.creature(f"b{i}", "G", 1, 1), me); g.resolve_stack()
+    big = g.move_to_battlefield(cards.creature("grande", "2G", 3, 3), me)  # fuerza 3: no cuenta
+    big.summoning_sick = False; g.resolve_stack()
+    assert getattr(me, "experience", 0) == 3
+    g._begin_combat(me); g.resolve_stack()   # X=3 en OTRA criatura (la mejor)
+    assert (big.power, big.toughness) == (6, 6)
+
+
+def test_kang_second_draw_gains_only_one():
+    import cards
+    from engine import Game, Player
+    kg = cards.Kang()
+    me = Player("K", [cards.land("Swamp", ["B"], basic=True) for _ in range(6)], kg)
+    o2 = Player("A", [cards.land("Plains", ["W"], basic=True) for _ in range(6)],
+                cards.creature("Y", "1W", 1, 1, legendary=True))
+    o3 = Player("B", [cards.land("Plains", ["W"], basic=True) for _ in range(6)],
+                cards.creature("Z", "1W", 1, 1, legendary=True))
+    g = Game([me, o2, o3], seed=1)
+    g.move_to_battlefield(kg, me); g.resolve_stack()
+    l0, a0, b0 = me.life, o2.life, o3.life
+    g.emit("draw", player=me, count=2); g.resolve_stack()
+    assert me.life - l0 == 1              # gana 1 fija, NO 1 por oponente
+    assert a0 - o2.life == 1 and b0 - o3.life == 1
+
+
+def test_quintorius_spirit_once_per_turn():
+    import cards
+    from engine import Game, Player
+    q = cards.Quintorius()
+    me = Player("Q", [cards.land("Mountain", ["R"], basic=True) for _ in range(6)], q)
+    op = Player("O", [cards.land("Plains", ["W"], basic=True) for _ in range(6)],
+                cards.creature("W", "1W", 1, 1, legendary=True))
+    g = Game([me, op], seed=1); g.turn = 5
+    g.move_to_battlefield(q, me); g.resolve_stack()
+    for _ in range(2):
+        me.graveyard.append(cards.land("Mountain", ["R"], basic=True))
+    def spirits():
+        return sum(1 for p in me.battlefield if p.name == "Spirit")
+    s0 = spirits()
+    g.leave_graveyard(me, me.graveyard[0], dest="exile"); g.resolve_stack()
+    g.leave_graveyard(me, me.graveyard[0], dest="exile"); g.resolve_stack()
+    assert spirits() - s0 == 1            # tope: una vez por turno
+    g.turn = 6
+    me.graveyard.append(cards.land("Mountain", ["R"], basic=True))
+    g.leave_graveyard(me, me.graveyard[0], dest="exile"); g.resolve_stack()
+    assert spirits() - s0 == 2            # nuevo turno -> otra vez
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
