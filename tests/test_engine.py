@@ -767,6 +767,35 @@ def test_choose_creature_type_anthem():
     assert other.power == 2                                   # no-elfo no cambia
 
 
+def test_tap_for_mana_ability_without_scryfall_data():
+    # regresión: "{T}: Add one mana of any color" (Patchwork Banner) debe ser una
+    # fuente de maná aunque Scryfall no traiga produced_mana (carta offline).
+    import cardsdb
+    from engine import Game, Player
+    import cards
+    banner = cardsdb.build_card_from_data({
+        "name": "Patchwork Banner", "type_line": "Artifact", "mana_cost": "{3}",
+        "oracle_text": "As Patchwork Banner enters the battlefield, choose a creature type.\n"
+                       "Creatures you control of the chosen type get +1/+1.\n"
+                       "{T}: Add one mana of any color. Spend this mana only to cast a "
+                       "creature spell of the chosen type."})
+    assert banner.produces is not None                        # ES fuente de maná
+    me = Player("yo", [cards.creature("z", "1B", 1, 1) for _ in range(10)],
+                cards.creature("Cmd", "2B", 3, 3, legendary=True))
+    op = Player("op", [cards.creature("z", "1B", 1, 1) for _ in range(10)],
+                cards.creature("Om", "2U", 1, 1, legendary=True))
+    g = Game([me, op], seed=1)
+    before = me.available_mana()
+    pm = g.move_to_battlefield(banner, me); g.resolve_stack()
+    assert me.available_mana() == before + 1                  # suma 1 maná (a elegir)
+    assert set(banner.produces(pm, me)) == {"W", "U", "B", "R", "G"}
+    # colores específicos: "{T}: Add {R} or {G}."
+    rock = cardsdb.build_card_from_data({
+        "name": "Dual Rock", "type_line": "Artifact", "mana_cost": "{2}",
+        "oracle_text": "{T}: Add {R} or {G}."})
+    assert rock.produces is not None and set(rock.produces(None, None)) == {"R", "G"}
+
+
 def test_choose_creature_type_offers_players_tribe():
     # con MUCHOS tipos distintos en el mazo, la tribu real del jugador (Spirit)
     # debe seguir apareciendo entre las opciones (antes se recortaba a 14 en orden

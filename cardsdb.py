@@ -4158,6 +4158,26 @@ def build_card_from_data(data: dict) -> Card:
         card.produces = (lambda perm, pl, _o=opts: dict(_o))
         card.tags = card.tags | {"ramp"}
 
+    # fuente de maná "{T}: Add ..." que Scryfall no trajo como produced_mana
+    # (cartas caseras/offline, p. ej. Patchwork Banner). El parser de activadas
+    # descarta el maná de coste trivial esperando `produces`; si nadie lo setea,
+    # la habilidad de maná quedaba muerta. Acá la reconstruimos como `produces`
+    # (una opción = UN maná a elegir; ignoramos la restricción de "gastarlo solo
+    # para X", una simplificación aceptable).
+    if card.produces is None and "land" not in types:
+        _mt = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "")).lower()
+        mm = re.search(r"\{t\}:\s*add ([^.]+)", _mt)
+        if mm:
+            seg = mm.group(1)
+            if "any color" in seg:
+                opts = {c: 1 for c in (W, U, B, R, G)}
+            else:
+                syms = re.findall(r"\{([wubrgc])\}", seg)
+                opts = {_COLOR_MAP[s.upper()]: 1 for s in syms} if syms else None
+            if opts:
+                card.produces = (lambda perm, pl, _o=opts: dict(_o))
+                card.tags = card.tags | {"ramp"}
+
     # SAGA (encantamiento con capítulos): aproximación jugable. Al entrar corre el
     # capítulo I; en cada mantenimiento del dueño avanza un capítulo (contador de
     # lore) y se sacrifica al terminar el último. Se cablea ANTES de la capa genérica.

@@ -714,11 +714,14 @@ class Policy:
 
         keep = 0
         if self.level != "novato":
-            # no atacar con todo si un tercero amenaza (guardar bloqueadores)
+            # no atacar con todo si un tercero amenaza (guardar bloqueadores).
+            # AVANZADO es más agresivo: solo se reserva ante una amenaza casi letal
+            # (0.9 de su vida); intermedio es más cauto (0.6).
             max_other = max((sum(c.power for c in o.creatures())
                              for o in opps if o is not target), default=0)
             attackers.sort(key=lambda c: c.power, reverse=True)
-            if max_other >= me.life * 0.6:
+            thresh = 0.9 if self.level == "avanzado" else 0.6
+            if max_other >= me.life * thresh:
                 keep = max(1, len(attackers) // 3)
         sending = attackers[:len(attackers) - keep] if keep else attackers
         sending = list(sending)
