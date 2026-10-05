@@ -525,7 +525,7 @@ class StackObject:
 
 class Game:
     SELF_SCOPED = {"upkeep", "end_step", "draw", "landfall", "cast", "begin_combat",
-                   "gain_life", "token_created"}
+                   "gain_life", "token_created", "cards_exiled"}
     # descripción amigable de cada evento, para el resumen de habilidades
     EVENT_KIND = {
         "etb": "cuando algo entra al campo", "landfall": "al jugar una tierra",
@@ -1127,6 +1127,7 @@ class Game:
         player.graveyard.remove(card)
         if dest == "exile":
             player.exile.append(card)
+            self.emit("cards_exiled", player=player, count=1)   # exilio desde el cementerio
         elif dest == "hand":
             player.hand.append(card)
         self.emit("leaves_graveyard", player=player, card=card)
@@ -2568,7 +2569,10 @@ class Game:
         self.log(f"‹turno› {p.name}")
         # UNTAP
         for perm in p.battlefield:
-            perm.tapped = False
+            if getattr(perm, "frozen", False):
+                perm.frozen = False          # "no se endereza en su próximo enderezar": salta uno
+            else:
+                perm.tapped = False
             perm.summoning_sick = False
             perm.damage = 0
             perm.activated_this_turn = False

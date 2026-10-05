@@ -7303,6 +7303,61 @@ def test_target_player_human_picks_opponent():
     assert g.players[1].life == 17 and g.players[2].life == 40
 
 
+def test_targeted_spell_fallback_counter_and_tap():
+    import cardsdb, cards
+    from engine import Game, Player
+    # "Put a +1/+1 counter on target creature" como hechizo (antes sin efecto)
+    grow = cardsdb.build_card_from_data({
+        "name": "Grow", "type_line": "Instant", "mana_cost": "1G",
+        "oracle_text": "Put a +1/+1 counter on target creature. It gains trample until end of turn."})
+    assert grow.on_cast_resolve is not None
+    g = Game([Player("A", [cards.creature("z", "1G", 1, 1) for _ in range(5)],
+                     cards.creature("Cmd", "1G", 1, 1, legendary=True)),
+              Player("B", [cards.creature("z", "1U", 1, 1) for _ in range(5)],
+                     cards.creature("O", "1U", 1, 1, legendary=True))], seed=1)
+    me, op = g.players
+    bear = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    grow.on_cast_resolve(g, me, [bear]); g.sba()
+    assert (bear.power, bear.toughness) == (3, 3)
+    # "Tap target creature. It does not untap during its controller's next untap step."
+    frost = cardsdb.build_card_from_data({
+        "name": "Frost", "type_line": "Instant", "mana_cost": "1U",
+        "oracle_text": "Tap target creature. It does not untap during its controller's next untap step."})
+    assert frost.on_cast_resolve is not None
+    foe = g.move_to_battlefield(cards.creature("Foe", "2U", 2, 2), op); foe.tapped = False
+    frost.on_cast_resolve(g, me, [foe])
+    assert foe.tapped and getattr(foe, "frozen", False)
+    g.begin_turn(op)                          # salta un enderezar (sigue girada)
+    assert foe.tapped and not getattr(foe, "frozen", False)
+
+
+def test_laelia_exile_counter_and_impulse():
+    import cardsdb, cards
+    from engine import Game, Player
+    oracle = ("Haste\n"
+              "Whenever Laelia, the Blade Reforged attacks, exile the top card of your "
+              "library. You may play that card this turn.\n"
+              "Whenever one or more cards are put into exile from your library and/or your "
+              "graveyard, put a +1/+1 counter on Laelia, the Blade Reforged.")
+    c = cardsdb.build_card_from_data({
+        "name": "Laelia, the Blade Reforged", "type_line": "Legendary Creature — Spirit Warrior",
+        "mana_cost": "2R", "power": "2", "toughness": "2", "keywords": ["Haste"],
+        "oracle_text": oracle})
+    assert "attacks" in c.triggers and "cards_exiled" in c.triggers
+    g = Game([Player("A", [cards.creature("lib", "1R", 1, 1) for _ in range(10)],
+                     cards.creature("Cmd", "1R", 1, 1, legendary=True)),
+              Player("B", [cards.creature("z", "1U", 1, 1) for _ in range(10)],
+                     cards.creature("O", "1U", 1, 1, legendary=True))], seed=1)
+    me = g.players[0]
+    lae = g.move_to_battlefield(c, me); lae.summoning_sick = False
+    c.triggers["attacks"](g, lae); g.resolve_stack()
+    assert len(me.impulse) == 1                       # carta exiliada jugable este turno
+    assert (lae.power, lae.toughness) == (3, 3)       # +1/+1 por exiliar de biblioteca
+    me.graveyard.append(cards.creature("gy", "1R", 1, 1))
+    g.leave_graveyard(me, me.graveyard[0], dest="exile"); g.resolve_stack()
+    assert (lae.power, lae.toughness) == (4, 4)       # +1/+1 por exiliar del cementerio
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

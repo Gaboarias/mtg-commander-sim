@@ -753,12 +753,16 @@ def _fragment_effect(seg: str):
                 game.add_counters(tok, "+1/+1", _n)
                 game.log(f"Incubar {_n}")
         return incubate, None, 1
-    # girar una criatura objetivo
-    if re.search(r"\btap target creature", seg, re.I) and "untap" not in seg.lower():
+    # girar una criatura objetivo (acepta el rider "does not untap…"; solo evita
+    # confundirse con "untap target creature", que es lo contrario)
+    if re.search(r"\btap target creature", seg, re.I) and not re.search(
+            r"\buntap target", seg, re.I):
         def tapc(game, ctrl, targets):
             for tg in (targets or []):
                 if hasattr(tg, "tapped"):
                     tg.tapped = True
+                    if re.search(r"does ?n'?o?t untap", seg, re.I):
+                        tg.frozen = True            # no se endereza en su próximo enderezar
         return tapc, "opp_creature", 1
     spec = _targeted_spell(seg)
     if spec is not None:
@@ -1432,6 +1436,16 @@ def _event_trigger_effect(oracle: str):
                 def cb_lf(game, perm, _e=eff, **_kw):
                     _e(game, perm.controller)
                 out["landfall"] = cb_lf
+
+    # Laelia: "whenever one or more cards are put into exile from your library
+    # and/or your graveyard, put N +1/+1 counter(s) on ~" -> contador a sí misma.
+    mex = re.search(r"whenever one or more cards? (?:are|is) put into exile from "
+                    r"your (?:library|graveyard)[^,]*,\s*put (\w+) \+1/\+1 counters? on",
+                    t, re.I)
+    if mex and (nex := _count_word(mex.group(1))) and "cards_exiled" not in out:
+        def cb_exiled(game, perm, _n=nex, **_kw):
+            game.add_counters(perm, "+1/+1", _n)
+        out["cards_exiled"] = cb_exiled
 
     # inicio de combate: "at the beginning of combat on your turn, …"
     mbc = re.search(r"at the beginning of combat on your turn,?\s*(.{0,160})", t, re.I)
@@ -4059,6 +4073,7 @@ def _generic_amount_effect(oracle: str):
             if moved:
                 game.log(f"{ctrl.name} exilia del tope {', '.join(moved)} "
                          f"y puede jugarla(s) este turno")
+                game.emit("cards_exiled", player=ctrl, count=len(moved))  # Laelia, etc.
         return eff
 
     # reanimar al campo desde el cementerio (el TUYO, o CUALQUIERA con "from a
@@ -4615,6 +4630,18 @@ def build_card_from_data(data: dict) -> Card:
                 # solo como ETB si el texto tiene un disparo de entrada; si el efecto
                 # pertenece a otro disparo (p. ej. "whenever ~ attacks"), no lo duplicamos
                 card.on_etb = geff
+
+    # último recurso para hechizos DIRIGIDOS: instant/sorcery aún sin efecto cuyo
+    # texto reconozca _fragment_effect (p. ej. "put a +1/+1 counter on target
+    # creature", "tap target creature"). Va DESPUÉS del genérico para no pisar los
+    # cableados más específicos (burn/bolster/etc.).
+    if {"instant", "sorcery"} & types and not card.modes and not card.on_cast_resolve:
+        _fe, _fspec, _fcount = _fragment_effect(data.get("oracle_text", ""))
+        if _fe is not None:
+            card.on_cast_resolve = _fe
+            if _fspec is not None:
+                card.target_spec = _fspec
+                card.target_count = max(1, _fcount)
 
     # ETB dirigido en un PERMANENTE (p. ej. destruir criatura/tierra al entrar):
     # se cablea aunque tenga tag removal/wipe (esos tags apuntan al camino de CAST,
