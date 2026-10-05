@@ -1272,6 +1272,25 @@ def _attack_trigger_effect(oracle: str):
         def trig_connive(game, perm, _n=ncon or 1, **_kw):
             _do_connive(game, perm, _n)
         return trig_connive
+    # "defending player / that player loses N life" o "deals N damage to defending
+    # player": afecta al jugador atacado (defender viene en el disparo).
+    mdp = re.search(r"(?:defending player|that player) loses (\w+) life", body, re.I)
+    mdd = re.search(r"deals? (\w+) damage to (?:defending player|that player)", body, re.I)
+    if mdp or mdd:
+        is_dmg = mdd is not None
+        nm = (mdd if is_dmg else mdp).group(1)
+        amt = _count_word(nm) or 1
+
+        def trig_def(game, perm, defender=None, _n=amt, _dmg=is_dmg, **_kw):
+            pl = defender if hasattr(defender, "life") else getattr(defender, "controller", None)
+            if pl is None or not hasattr(pl, "life"):
+                return
+            if _dmg:
+                game.deal_damage(perm, pl, _n)
+            else:
+                pl.life -= _n
+            game.log(f"{perm.name}: {pl.name} pierde {_n} de vida (ataque)")
+        return trig_def
     eff, _spec, _count = _fragment_effect(body)
     if eff is None:
         return None
@@ -1625,8 +1644,28 @@ def _recurring_trigger_effects(oracle: str):
     for m in re.finditer(r"at the beginning of (your|each(?: player'?s?)?) "
                          r"(upkeep|end step|draw step)[,.]?\s*(.{0,160})", t, re.I):
         ev = "end_step" if "end" in m.group(2).lower() else "upkeep"
-        eff = _generic_amount_effect(m.group(3))
-        if eff is None or ev in out:
+        if ev in out:
+            continue
+        body = m.group(3)
+        # "put N +1/+1 counter(s) on target creature you control": el genérico no lo
+        # cubre (va a una criatura propia elegida; humano elige, bot la mejor).
+        msc = re.search(r"put (\w+) \+1/\+1 counters? on (?:up to \w+ )?"
+                        r"target creature you control", body, re.I)
+        if msc and (nn := _count_word(msc.group(1))):
+            def cb_up(game, perm, _n=nn, **_kw):
+                ctrl = perm.controller
+                pool = sorted(ctrl.creatures(),
+                              key=lambda p: (p.power + p.toughness), reverse=True)
+                if not pool:
+                    return
+                cands = [(f"{p.name} {p.power}/{p.toughness}", p) for p in pool]
+                _human_target_choice(game, ctrl, "etb_target",
+                                     f"Elegí una criatura (+{_n}/+{_n})", cands,
+                                     lambda pm, _k=_n: game.add_counters(pm, "+1/+1", _k))
+            out[ev] = cb_up
+            continue
+        eff = _generic_amount_effect(body)
+        if eff is None:
             continue
 
         def cb(game, perm, _e=eff, **_kw):

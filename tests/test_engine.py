@@ -7358,6 +7358,35 @@ def test_laelia_exile_counter_and_impulse():
     assert (lae.power, lae.toughness) == (4, 4)       # +1/+1 por exiliar del cementerio
 
 
+def test_attack_defender_loses_life_and_upkeep_counter():
+    import cardsdb, cards
+    from engine import Game, Player
+    # "whenever this creature attacks, defending player loses N life"
+    rat = cardsdb.build_card_from_data({
+        "name": "Rat", "type_line": "Creature — Rat", "mana_cost": "1B",
+        "power": "1", "toughness": "1",
+        "oracle_text": "Whenever this creature attacks, defending player loses 1 life."})
+    assert "attacks" in rat.triggers
+    g = Game([Player("A", [cards.creature("z", "1B", 1, 1) for _ in range(5)],
+                     cards.creature("Cmd", "1B", 1, 1, legendary=True)),
+              Player("B", [cards.creature("z", "1U", 1, 1) for _ in range(5)],
+                     cards.creature("O", "1U", 1, 1, legendary=True))], seed=1)
+    me, op = g.players
+    r = g.move_to_battlefield(rat, me); r.summoning_sick = False
+    l0 = op.life
+    rat.triggers["attacks"](g, r, defender=op); g.resolve_stack()
+    assert op.life == l0 - 1
+    # "at the beginning of your upkeep, put a +1/+1 counter on target creature you control"
+    grow = cardsdb.build_card_from_data({
+        "name": "Grower", "type_line": "Enchantment", "mana_cost": "2G",
+        "oracle_text": "At the beginning of your upkeep, put a +1/+1 counter on target creature you control."})
+    assert "upkeep" in grow.triggers
+    gp = g.move_to_battlefield(grow, me)
+    bear = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    grow.triggers["upkeep"](g, gp); g.resolve_stack()
+    assert (bear.power, bear.toughness) == (3, 3)
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
