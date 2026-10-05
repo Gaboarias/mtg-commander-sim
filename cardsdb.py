@@ -788,13 +788,17 @@ def _fragment_effect(seg: str):
 
         def burnp(game, ctrl, targets, _n=n, _x=is_x):
             amt = getattr(game, "spell_x", 0) if _x else _n
+            if not amt:
+                return
             tgts = [t for t in (targets or []) if hasattr(t, "life")]  # jugadores
-            if not tgts:
-                opps = game.opponents(ctrl)
-                tgts = [min(opps, key=lambda o: o.life)] if opps else []
-            for tg in tgts:
-                game.deal_damage(None, tg, amt)
-                game.log(f"{ctrl.name}: {amt} de daño a {tg.name}")
+            if tgts:                                   # objetivo ya elegido
+                for tg in tgts:
+                    game.deal_damage(None, tg, amt)
+                    game.log(f"{ctrl.name}: {amt} de daño a {tg.name}")
+            else:                                      # si no, el humano elige el rival
+                _pick_opponent(game, ctrl, lambda o, _a=amt: (
+                    game.deal_damage(None, o, _a),
+                    game.log(f"{ctrl.name}: {_a} de daño a {o.name}")))
         return burnp, "opp_player", 1
     geff = _generic_amount_effect(seg)
     if geff is None:
@@ -861,6 +865,8 @@ def _modal_targets_for(game, ctrl, spec):
     if not spec:
         return []
     perms = [p for pl in game.players for p in pl.battlefield]
+    if spec == "opp_player":
+        return [(f"{o.name} ({o.life} de vida)", o) for o in game.opponents(ctrl)]
     if spec == "opp_creature":
         pool = [pm for pm in perms if pm.is_creature()
                 and pm.controller is not ctrl and game.can_target(ctrl, pm)]
@@ -2281,6 +2287,23 @@ def _human_target_choice(game, ctrl, kind, prompt, options, apply_one,
         apply_one(options[0][1])
 
 
+def _pick_opponent(game, ctrl, apply_one):
+    """Elegir a QUÉ rival afecta un efecto 'target player/opponent'. El humano lo
+    elige (pending_choice); el bot va al de menos vida. Con un solo rival, directo."""
+    opps = game.opponents(ctrl)
+    if not opps:
+        return
+    if len(opps) == 1:
+        apply_one(opps[0])
+        return
+    if ctrl is getattr(game, "interactive_human", None):
+        cands = [(f"{o.name} ({o.life} de vida)", o) for o in opps]
+        _human_target_choice(game, ctrl, "player_target",
+                             "Elegí a qué rival", cands, apply_one)
+    else:
+        apply_one(min(opps, key=lambda o: o.life))
+
+
 def _shuffle_graveyard_into_library(game, ctrl):
     """'Shuffle any number of target cards from your graveyard into your library':
     multi-selector. El humano elige de a una (puede parar con 'ninguna más'); el
@@ -3012,19 +3035,25 @@ def _generic_amount_effect(oracle: str):
 
             def eff(game, ctrl, *_a, _c=cnt, _each=each):
                 n = max(0, _c(game, ctrl))
-                opps = game.opponents(ctrl)
-                for o in (opps if _each else opps[:1]):
-                    o.life -= n
-                game.log(f"{ctrl.name}: el rival pierde {n} de vida")
+                if not n:
+                    return
+                if _each:
+                    for o in game.opponents(ctrl):
+                        o.life -= n
+                    game.log(f"{ctrl.name}: cada rival pierde {n} de vida")
+                else:
+                    _pick_opponent(game, ctrl, lambda o, _n=n: (
+                        setattr(o, "life", o.life - _n),
+                        game.log(f"{ctrl.name}: {o.name} pierde {_n} de vida")))
             return eff
         if re.search(r"deals? damage", t):
             def eff(game, ctrl, *_a, _c=cnt):
                 n = max(0, _c(game, ctrl))
-                opps = game.opponents(ctrl)
-                if opps and n:
-                    tgt = min(opps, key=lambda o: o.life)
-                    game.deal_damage(None, tgt, n)
-                    game.log(f"{ctrl.name}: {n} de daño a {tgt.name}")
+                if not n:
+                    return
+                _pick_opponent(game, ctrl, lambda o, _n=n: (
+                    game.deal_damage(None, o, _n),
+                    game.log(f"{ctrl.name}: {_n} de daño a {o.name}")))
             return eff
         if re.search(r"gets \+x/\+x", t):
             def eff(game, ctrl, *_a, _c=cnt):
@@ -3445,6 +3474,21 @@ def _generic_amount_effect(oracle: str):
                      + (" y él gana vida" if _gain else ""))
         return eff
 
+    # drenaje dirigido fijo: "target player/opponent loses N life" -> el humano
+    # elige el rival; el bot va al de menos vida.
+    m = re.search(r"target (?:player|opponent) loses (\w+) life", t)
+    if m and (n := _count_word(m.group(1))):
+        gain = bool(re.search(r"you gain (that much|\w+) life", t))
+        def eff(game, ctrl, *_a, _n=n, _gain=gain):
+            def _do(o, _n2=_n, _g=_gain):
+                o.life -= _n2
+                if _g:
+                    game.gain_life(ctrl, _n2)
+                game.log(f"{ctrl.name}: {o.name} pierde {_n2} de vida"
+                         + (" y él gana vida" if _g else ""))
+            _pick_opponent(game, ctrl, _do)
+        return eff
+
     # pérdida de vida propia: "you lose N life" (drawback; Vampire Lacerator…),
     # con condición opcional "unless an opponent has X or less life".
     m = re.search(r"you lose (\w+) life", t)
@@ -3509,11 +3553,20 @@ def _generic_amount_effect(oracle: str):
 
         def eff(game, ctrl, *_a, _n=n, _x=is_x):
             amt = getattr(game, "spell_x", 0) if _x else _n
-            opps = game.opponents(ctrl)
-            if opps and amt:
-                tgt = min(opps, key=lambda o: o.life)
-                game.deal_damage(None, tgt, amt)
-                game.log(f"{ctrl.name}: {amt} de daño a {tgt.name}")
+            if not amt:
+                return
+            # el 3er arg es lista de objetivos (camino de CAST) o el permanente
+            # (camino ETB). Sólo honramos objetivos ya elegidos si vino una lista.
+            pre = next((a for a in _a if isinstance(a, (list, tuple))), None)
+            tgts = [t for t in (pre or []) if hasattr(t, "life")]
+            if tgts:
+                for tg in tgts:
+                    game.deal_damage(None, tg, amt)
+                    game.log(f"{ctrl.name}: {amt} de daño a {tg.name}")
+                return
+            _pick_opponent(game, ctrl, lambda o, _amt=amt: (   # si no, el humano elige
+                game.deal_damage(None, o, _amt),
+                game.log(f"{ctrl.name}: {_amt} de daño a {o.name}")))
         return eff
 
     # fijar / duplicar el total de vida

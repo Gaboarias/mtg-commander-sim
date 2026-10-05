@@ -7266,6 +7266,43 @@ def test_ability_audit_batch():
     assert "attacks" in atk.triggers
 
 
+def test_target_player_human_picks_opponent():
+    # "deals N damage to target player" disparado por el humano abre un selector de
+    # rival (antes auto-apuntaba al de menos vida sin dejar elegir).
+    import cardsdb, cards, interactive, decks
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Zappy", "type_line": "Creature — Goblin", "mana_cost": "1R",
+        "power": "2", "toughness": "2",
+        "oracle_text": "When Zappy enters, it deals 3 damage to target player."})
+    defs = [("Tu",) + decks.build("marvel"),
+            ("R1",) + decks.build("strixhaven"),
+            ("R2",) + decks.build("kang")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3); ig.keep([])
+    hu = ig.human(); ig.g.active_index = ig.g.players.index(hu)
+    ig.g.move_to_battlefield(c, hu); ig.g.resolve_stack()
+    pc = ig.g.pending_choice
+    assert pc is not None and pc["kind"] == "player_target" and len(pc["options"]) == 2
+    tgt = ig.g.players[2]; l0 = tgt.life
+    pc["_apply"](1); ig.g.resolve_stack()            # elegir el 2do rival
+    assert tgt.life == l0 - 3
+
+    # el bot sin humano auto-apunta al de menos vida
+    g = Game([Player("Bot", [cards.creature("z", "1R", 1, 1) for _ in range(5)],
+                     cards.creature("C", "1R", 1, 1, legendary=True)),
+              Player("A", [cards.creature("z", "1U", 1, 1) for _ in range(5)],
+                     cards.creature("O", "1U", 1, 1, legendary=True)),
+              Player("B", [cards.creature("z", "1U", 1, 1) for _ in range(5)],
+                     cards.creature("O2", "1U", 1, 1, legendary=True))], seed=1)
+    g.players[1].life = 20
+    g.move_to_battlefield(cardsdb.build_card_from_data({
+        "name": "Z", "type_line": "Creature — Goblin", "mana_cost": "1R",
+        "power": "2", "toughness": "2",
+        "oracle_text": "When Z enters, it deals 3 damage to target player."}), g.players[0])
+    g.resolve_stack()
+    assert g.players[1].life == 17 and g.players[2].life == 40
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
