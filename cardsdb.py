@@ -1368,11 +1368,23 @@ def _event_trigger_effect(oracle: str):
                    r"(?: the battlefield)?(?: under your control)?,?\s*)(.{0,160})",
                    t, re.I)
     if ml:
-        eff = _generic_amount_effect(ml.group(1))
-        if eff is not None:
-            def cb_lf(game, perm, _e=eff, **_kw):
-                _e(game, perm.controller)
+        body_lf = ml.group(1)
+        # "put N +1/+1 counter(s) on this/~/<su nombre>" (Vinelasher Kudzu): el
+        # contador va a la PROPIA criatura, no al controlador (ni a un objetivo).
+        # El lookahead evita confundirlo con "... on target/each/another creature".
+        msc = re.search(r"put (\w+) \+1/\+1 counters? on "
+                        r"(?!target|each|another|a |an |up to|that )"
+                        r"(?:this creature|this|it|~|[a-z][\w' ,]+)", body_lf, re.I)
+        if msc and (n_lf := _count_word(msc.group(1))):
+            def cb_lf(game, perm, _n=n_lf, **_kw):
+                game.add_counters(perm, "+1/+1", _n)
             out["landfall"] = cb_lf
+        else:
+            eff = _generic_amount_effect(body_lf)
+            if eff is not None:
+                def cb_lf(game, perm, _e=eff, **_kw):
+                    _e(game, perm.controller)
+                out["landfall"] = cb_lf
 
     # inicio de combate: "at the beginning of combat on your turn, …"
     mbc = re.search(r"at the beginning of combat on your turn,?\s*(.{0,160})", t, re.I)

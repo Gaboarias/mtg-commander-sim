@@ -7137,6 +7137,33 @@ def test_each_creature_self_damage_both_wordings():
         assert small.damage == 1                  # 1 power -> 1 a sí misma -> vive
 
 
+def test_landfall_self_plus_counter():
+    # "Whenever a land enters under your control, put a +1/+1 counter on ~"
+    # (Vinelasher Kudzu): el contador va a la PROPIA criatura.
+    import cardsdb, cards
+    from engine import Game, Player
+    c = cardsdb.build_card_from_data({
+        "name": "Vinelasher Kudzu", "type_line": "Creature — Plant",
+        "mana_cost": "{1}{G}", "power": "0", "toughness": "2",
+        "oracle_text": "Whenever a land enters the battlefield under your control, "
+                       "put a +1/+1 counter on Vinelasher Kudzu."})
+    assert "landfall" in c.triggers
+    g = Game([Player("A", [cards.land("Forest", ["G"], basic=True) for _ in range(5)],
+                     cards.creature("Cmd", "1G", 1, 1, legendary=True)),
+              Player("B", [cards.creature("z", "1U", 1, 1) for _ in range(5)],
+                     cards.creature("O", "1U", 1, 1, legendary=True))], seed=1)
+    me = g.players[0]
+    k = g.move_to_battlefield(c, me); g.resolve_stack()
+    g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me); g.resolve_stack()
+    assert (k.power, k.toughness) == (1, 3)      # 0/2 -> 1/3
+    # "target creature" en landfall NO debe tratarse como a-sí-misma
+    c2 = cardsdb.build_card_from_data({
+        "name": "Y", "type_line": "Enchantment", "mana_cost": "{2}",
+        "oracle_text": "Whenever a land you control enters, put a +1/+1 counter "
+                       "on target creature."})
+    assert "landfall" not in c2.triggers
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run
