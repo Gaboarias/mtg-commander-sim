@@ -7418,6 +7418,45 @@ def test_modal_on_death_opens_choice():
     assert (ally.power, ally.toughness) == (4, 4)
 
 
+def test_human_turn_not_skipped_by_stale_queued_choice():
+    # Regresión: una decisión encolada (choice_queue) que sobró de un turno rival
+    # y se muestra DURANTE el turno propio del humano NO debe terminar su turno.
+    # Antes: al resolverla se marcaba _draining y se llamaba _advance_to_human,
+    # saltando el resto del turno (p. ej. "bajás una tierra, activás algo y se
+    # acaba el turno").
+    import interactive, decks
+    defs = [("Tu",) + decks.build("lorehold"), ("R",) + decks.build("tricky"),
+            ("K",) + decks.build("kang")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    assert ig.phase == "main" and ig.g.active_index == ig.human_index
+    turn0 = ig.g.turn
+
+    # Una decisión obsoleta quedó encolada (como si un efecto rival la hubiese
+    # dejado) y aún no se drenó al empezar mi turno.
+    def stale():
+        ig.g.pending_choice = {
+            "kind": "stale", "prompt": "obsoleta", "allow_none": False,
+            "options": [{"i": 0, "name": "A"}], "_apply": lambda idx: None,
+        }
+    ig.g.choice_queue.append(stale)
+
+    # El humano activa algo en SU turno que abre su propia decisión (ruta humana).
+    ig.g.pending_choice = {
+        "kind": "mia", "prompt": "mía", "allow_none": False,
+        "options": [{"i": 0, "name": "x"}], "_apply": lambda idx: None,
+    }
+    assert ig._draining is False
+    ig.resolve_choice(0)                 # resuelve la mía -> aflora la obsoleta
+    assert ig._draining is False         # NO marcar draining en mi propio turno
+    assert (ig.g.pending_choice or {}).get("kind") == "stale"
+    ig.resolve_choice(0)                 # resuelve la obsoleta
+    # el turno del humano sigue siendo el suyo, en la MISMA vuelta: no se saltó.
+    assert ig.g.turn == turn0
+    assert ig.g.active_index == ig.human_index
+    assert ig.phase == "main"
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

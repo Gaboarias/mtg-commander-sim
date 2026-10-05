@@ -182,6 +182,11 @@ class InteractiveGame:
                     continue
                 self.phase = "main"
                 self.attacked = False
+                # drenar decisiones que hayan quedado encoladas (p. ej. de un
+                # disparo en mi mantenimiento): se muestran ahora, al inicio de
+                # mi turno, sin marcar _draining (ya es mi turno), para que no
+                # afloren a mitad de una jugada ni terminen el turno.
+                self._surface_queued_choice()
                 return
             n0 = len(self.g.log_lines)
             paused = self._ai_turn(p)     # pausó porque me atacan
@@ -202,7 +207,13 @@ class InteractiveGame:
             except Exception:
                 continue
         if self.g.pending_choice is not None:
-            self._draining = True
+            # OJO: solo marcamos "draining" (reanudar el avance de turnos al
+            # resolver) cuando estamos avanzando por turnos RIVALES. Si es el
+            # turno propio del humano, una decisión encolada debe mostrarse sin
+            # terminar su turno: marcar _draining acá haría que resolverla llame
+            # a _advance_to_human y se salte el resto de SU turno.
+            if self.g.active_index != self.human_index:
+                self._draining = True
             return True
         return False
 
