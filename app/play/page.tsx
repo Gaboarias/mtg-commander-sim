@@ -8,6 +8,21 @@ import { download, fileStamp } from "../download";
 import { Icon } from "../icons";
 import { Help } from "../Help";
 
+// etiquetas cortas de keywords (mismo criterio que el tablero)
+const KW_SHORT: Record<string, string> = {
+  flying: "vuela", reach: "alcance", first_strike: "1er golpe", double_strike: "doble golpe",
+  deathtouch: "mortal", trample: "arrolla", lifelink: "vínculo", vigilance: "vigila",
+  haste: "prisa", menace: "amenaza", indestructible: "indestr.", hexproof: "antimaleficio",
+  shroud: "velo", defender: "muro", flash: "destello", prowess: "prowess",
+  infect: "infectar", toxic: "toxic", wither: "marchitar", unblockable: "imbloqueable",
+  protection: "protección",
+};
+// daño efectivo que entra de un atacante sin bloquear (doble golpe pega 2 veces)
+function effDamage(a: { power: number; keywords?: string[] }): number {
+  const p = Math.max(0, a.power || 0);
+  return (a.keywords || []).includes("double_strike") ? p * 2 : p;
+}
+
 const TURN_MARK = "‹turno› ";
 // Agrupa el relato por turno: cada línea "‹turno› Nombre" abre un grupo nuevo.
 // Lo previo al primer turno (mulligan, preparación) va a un grupo sin encabezado.
@@ -43,7 +58,7 @@ type CastOpt = { i?: number; name: string; zone: string; cost: string; tax?: num
 type Legal = {
   lands: { i: number; name: string }[];
   casts: CastOpt[];
-  attackers: { uid: number; name: string; power: number; toughness: number }[];
+  attackers: { uid: number; name: string; power: number; toughness: number; keywords?: string[] }[];
   activatables: Activatable[];
   abilities?: PermAbility[];
   impulse?: { i: number; name: string; cost: string; is_land: boolean; playable: boolean }[];
@@ -1079,6 +1094,50 @@ export default function Play() {
                     })}
                   </div>
                 )}
+                {picked.size > 0 && (() => {
+                  const at = legal?.attack_targets || [];
+                  const multi = at.length > 1;
+                  const defPos = atkTarget ?? 0;
+                  const pickedAtk = [...picked]
+                    .map((uid) => legal!.attackers.find((a) => a.uid === uid))
+                    .filter((a): a is NonNullable<typeof a> => !!a);
+                  const dmgByPos: Record<number, number> = {};
+                  for (const a of pickedAtk) {
+                    const pos = multi ? (atkAssign[a.uid] ?? defPos) : defPos;
+                    dmgByPos[pos] = (dmgByPos[pos] || 0) + effDamage(a);
+                  }
+                  return (
+                    <div className="act-block atk-summary" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+                      <span className="act-label">Atacantes y habilidades:</span>
+                      <div className="atk-chips">
+                        {pickedAtk.map((a) => (
+                          <span key={a.uid} className="atk-chip">
+                            <b>{a.name}</b> <span className="atk-pt">{a.power}/{a.toughness}</span>
+                            {(a.keywords || []).filter((k) => KW_SHORT[k]).map((k) => (
+                              <span key={k} className="atk-kw" title={k}>{KW_SHORT[k]}</span>
+                            ))}
+                          </span>
+                        ))}
+                      </div>
+                      <span className="act-label">Daño que enviás:</span>
+                      <div className="atk-dmg">
+                        {Object.entries(dmgByPos).map(([pos, dmg]) => {
+                          const t = at[Number(pos)] || at[0];
+                          const lethal = !!t && !t.pw_uid && dmg >= t.life;
+                          return (
+                            <span key={pos} className={`dmg-to ${lethal ? "lethal" : ""}`}>
+                              <Icon name="swords" size={12} /> {dmg} a <b>{t?.name ?? "rival"}</b>
+                              {t ? <span className="muted"> ({t.pw_uid ? `${t.life}⬧` : `${t.life}♥`}{lethal ? " · letal" : ""})</span> : null}
+                            </span>
+                          );
+                        })}
+                      </div>
+                      <span className="hint-muted" style={{ fontSize: ".72rem" }}>
+                        Daño sin contar bloqueos (el rival puede bloquear). Doble golpe cuenta ×2.
+                      </span>
+                    </div>
+                  );
+                })()}
                 <div className="act-block">
                   <button className="go" onClick={() => {
                     const at = legal?.attack_targets || [];

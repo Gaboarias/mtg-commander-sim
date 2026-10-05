@@ -532,6 +532,16 @@ button.ghost:disabled:hover { background: transparent; border-color: var(--borde
 .act-block .ghost, .act-block .go { padding: 6px 12px; }
 .act-block .pw-ab { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 260px; text-align: left; }
 .act-block .pw-ab .pw-txt { font-style: normal; color: var(--muted); font-size: .78rem; line-height: 1.15; white-space: normal; }
+/* resumen de ataque: atacantes con sus keywords + daño por rival */
+.atk-summary { background: rgba(58,90,168,.08); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.atk-summary .hint-muted { color: var(--muted); }
+.atk-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.atk-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; font-size: .82rem; color: #eef1f6; }
+.atk-chip .atk-pt { color: #ffd27a; font-weight: 700; font-size: .78rem; }
+.atk-chip .atk-kw { background: rgba(10,12,16,.7); color: #d7dee9; font-size: .62rem; font-weight: 600; padding: 0 5px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+.atk-dmg { display: flex; flex-wrap: wrap; gap: 8px; }
+.dmg-to { display: inline-flex; align-items: center; gap: 4px; font-size: .9rem; font-weight: 600; color: #e9edf4; background: rgba(224,104,79,.14); border: 1px solid rgba(224,104,79,.4); border-radius: 999px; padding: 2px 10px; }
+.dmg-to.lethal { background: rgba(224,104,79,.3); border-color: #e0684f; color: #fff; }
 .cardmini.sel-able { outline: 1px dashed rgba(216,178,58,.6); outline-offset: 1px; }
 .cardmini.sel { outline: 2px solid var(--accent); box-shadow: 0 0 0 2px rgba(216,178,58,.5); }
 

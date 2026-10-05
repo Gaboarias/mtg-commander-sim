@@ -1254,7 +1254,8 @@ class InteractiveGame:
                 for pm in p.creatures():
                     if pm.can_attack():
                         attackers.append({"uid": pm.uid, "name": pm.name,
-                                          "power": pm.power, "toughness": pm.toughness})
+                                          "power": pm.power, "toughness": pm.toughness,
+                                          "keywords": sorted(pm.keywords)})
             for pm in p.battlefield:
                 if ("planeswalker" in pm.card.types and not pm.activated_this_turn
                         and pm.card.loyalty_abilities):
