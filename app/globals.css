@@ -530,6 +530,19 @@ button.ghost:disabled:hover { background: transparent; border-color: var(--borde
 .dead-badge { margin-left: 6px; font-size: .62rem; background: #7a2b2b; color: #fff; border-radius: 999px; padding: 1px 7px; vertical-align: middle; font-weight: 700; }
 .seat-meta .cmdr-dmg, .seat-meta .poison { font-variant-numeric: tabular-nums; }
 .seat-meta .cmdr-dmg.fatal, .seat-meta .poison.fatal { color: #e0684f; font-weight: 700; }
+/* chips de ESTADO destacados (veneno, daño de comandante, experiencia, energía) */
+.seat-status { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.status-chip { display: inline-flex; align-items: center; gap: 4px; font-size: .74rem;
+  font-weight: 700; padding: 2px 8px; border-radius: 999px; font-variant-numeric: tabular-nums;
+  line-height: 1.3; }
+.status-chip.danger { background: rgba(224,104,79,.16); color: #ffb3a3;
+  box-shadow: inset 0 0 0 1px rgba(224,104,79,.45); }
+.status-chip.danger.near { background: rgba(224,104,79,.28); color: #ffd0c6; }
+.status-chip.danger.fatal { background: #e0684f; color: #fff;
+  box-shadow: 0 0 10px -2px #e0684f; animation: statuspulse 1.1s ease-in-out infinite; }
+.status-chip.res { background: rgba(58,90,168,.2); color: #cfe0ff;
+  box-shadow: inset 0 0 0 1px rgba(58,90,168,.5); }
+@keyframes statuspulse { 0%,100% { opacity: 1; } 50% { opacity: .62; } }
 .legend-grid .k-cmdr { color: var(--text); }
 
 /* --- Jugar (Fase 2) --------------------------------------------------- */

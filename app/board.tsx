@@ -15,7 +15,8 @@ export type Perm = {
 export type PlayerState = {
   name: string; life: number; lost: boolean; hand: number; library: number;
   commander: string[]; cmdr_tax: number; cmdr_damage?: Record<string, number>;
-  poison?: number; graveyard: string[]; exile?: string[]; battlefield: Perm[];
+  poison?: number; experience?: number; energy?: number;
+  graveyard: string[]; exile?: string[]; battlefield: Perm[];
   hand_cards?: { i: number; name: string; is_land: boolean; cost: string }[];
 };
 
@@ -199,17 +200,35 @@ export function Seat({
           )
         )}
         <span title="comandante"><Icon name="crown" size={13} /> {p.commander.join(", ") || "—"}</span>
-        {maxCmdr > 0 && (
-          <span className={`cmdr-dmg ${maxCmdr >= 21 ? "fatal" : ""}`} title="daño de comandante recibido (21 elimina)">
-            <Icon name="sword" size={13} /> {maxCmdr}/21
-          </span>
-        )}
-        {(p.poison || 0) > 0 && (
-          <span className={`poison ${(p.poison || 0) >= 10 ? "fatal" : ""}`} title="veneno (10 elimina)">
-            <Icon name="poison" size={13} /> {p.poison}/10
-          </span>
-        )}
       </div>
+      {/* chips de ESTADO destacados: peligros (veneno, daño de comandante) y recursos
+          (experiencia, energía). Solo aparecen cuando hay algo que mostrar. */}
+      {(maxCmdr > 0 || (p.poison || 0) > 0 || (p.experience || 0) > 0 || (p.energy || 0) > 0) && (
+        <div className="seat-status">
+          {(p.poison || 0) > 0 && (
+            <span className={`status-chip danger ${(p.poison || 0) >= 8 ? "near" : ""} ${(p.poison || 0) >= 10 ? "fatal" : ""}`}
+              title="veneno (10 elimina)">
+              <Icon name="poison" size={12} /> {p.poison}/10 veneno
+            </span>
+          )}
+          {maxCmdr > 0 && (
+            <span className={`status-chip danger ${maxCmdr >= 18 ? "near" : ""} ${maxCmdr >= 21 ? "fatal" : ""}`}
+              title="daño de comandante recibido (21 elimina)">
+              <Icon name="sword" size={12} /> {maxCmdr}/21 cmdr
+            </span>
+          )}
+          {(p.experience || 0) > 0 && (
+            <span className="status-chip res" title="contadores de experiencia">
+              <Icon name="medal" size={12} /> {p.experience} exp
+            </span>
+          )}
+          {(p.energy || 0) > 0 && (
+            <span className="status-chip res" title="contadores de energía">
+              <Icon name="bolt" size={12} /> {p.energy} energía
+            </span>
+          )}
+        </div>
+      )}
       {nonlands.length > 0 && (() => {
         // agrupar fichas idénticas en una pila; lo que requiere interacción propia
         // (seleccionable/seleccionada) o no es ficha se dibuja individual

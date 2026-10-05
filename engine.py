@@ -697,6 +697,8 @@ class Game:
             "cmdr_tax": p.cmdr_tax,
             "cmdr_damage": dict(p.cmdr_damage),   # daño de comandante RECIBIDO
             "poison": p.poison,
+            "experience": getattr(p, "experience", 0),   # contadores de experiencia (Ezuri…)
+            "energy": getattr(p, "energy", 0),            # contadores de energía
             "graveyard": [c.name for c in p.graveyard],
             "exile": [c.name for c in p.exile],
             "battlefield": [self._perm_state(pm) for pm in p.battlefield],
