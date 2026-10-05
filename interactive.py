@@ -1594,6 +1594,26 @@ class InteractiveGame:
             "ability_feed": self.g.ability_events[-10:],
         }
 
+    def _card_brief(self, c):
+        """Resumen de una carta para los modales de decisión (scry/revelar):
+        coste, P/T, tipo y keywords, para no decidir a ciegas."""
+        if c is None:
+            return None
+        types = sorted(getattr(c, "types", set()) or set())
+        subs = list(getattr(c, "subtypes", ()) or ())
+        type_line = " ".join(t.capitalize() for t in types)
+        if subs:
+            type_line += " — " + " ".join(s.capitalize() for s in subs)
+        is_crea = c.is_creature()
+        return {
+            "name": c.name,
+            "cost": _cost_str(c) if getattr(c, "cost", None) is not None else "",
+            "pt": (f"{c.power}/{c.toughness}" if is_crea else None),
+            "type": type_line,
+            "keywords": sorted(getattr(c, "keywords", set()) or set()),
+            "is_land": c.is_land(),
+        }
+
     def _choice_state(self):
         pc = self.g.pending_choice
         if not pc:
@@ -1601,7 +1621,8 @@ class InteractiveGame:
         return {"kind": pc.get("kind"), "prompt": pc.get("prompt"),
                 "options": pc.get("options", []),
                 "allow_none": bool(pc.get("allow_none")),
-                "card": pc.get("card")}
+                "card": pc.get("card"),
+                "card_detail": self._card_brief(pc.get("card_obj"))}
 
     def resolve_choice(self, index=None):
         """El humano eligió una opción de una decisión pendiente (revelar, etc.)."""

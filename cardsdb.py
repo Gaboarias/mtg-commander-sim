@@ -2577,6 +2577,7 @@ def _scry_surveil_effect(n, to_graveyard, draw_n=0, draw_first=False, fateseal=F
                 "kind": kind,
                 "prompt": f"{head} — carta {st['i'] + 1} de {len(looked)}: {c.name}",
                 "card": c.name,
+                "card_obj": c,
                 "options": [{"i": 0, "name": "Dejar arriba"}, {"i": 1, "name": dest}],
                 "allow_none": False,
                 "_apply": _apply,
@@ -2748,6 +2749,7 @@ def _explore_effect():
                 "prompt": f"Explorás: {top.name} (no es tierra). +1/+1 al explorador. "
                           f"¿La dejás arriba o la mandás al cementerio?",
                 "card": top.name,
+                "card_obj": top,
                 "options": [{"i": 0, "name": "Dejar arriba"}, {"i": 1, "name": "Al cementerio"}],
                 "allow_none": False,
                 "_apply": _apply,

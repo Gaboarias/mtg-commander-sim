@@ -85,6 +85,24 @@ class Policy:
         worst = max((board_power(o) for o in opps), default=0)
         return (mine - worst) + me.life // 3 + len(me.hand) * 2
 
+    def _threat_rank(self, opps):
+        """Ordena rivales por amenaza (poder de tablero + vida). Devuelve
+        id(o) -> rango, 0 = ARQUIENEMIGO (el que va ganando). Así la IA presiona
+        al líder en vez de repartir parejo o dejar tranquilo al humano cuando va
+        adelante."""
+        def thr(o):
+            v = o.life // 3
+            for pm in o.creatures():
+                v += (pm.power or 0) + (pm.toughness or 0)
+                phas = getattr(pm, "has", lambda _k: False)
+                for k in ("flying", "trample", "double_strike", "menace",
+                          "deathtouch", "unblockable"):
+                    if phas(k):
+                        v += 2
+            return v
+        ordered = sorted(opps, key=thr, reverse=True)
+        return {id(o): i for i, o in enumerate(ordered)}
+
     def _under_pressure(self, game, me) -> bool:
         """¿Estoy bajo presión? (poca vida o un tablero rival amenazante)."""
         if me.life <= 12:
@@ -670,8 +688,9 @@ class Policy:
         killable = [o for o in opps if atk_power - defense(o)[1] >= o.life]
         if killable:
             return min(killable, key=lambda o: o.life)
-        # 2) el más indefenso: menos bloqueadores -> menos capacidad de soak -> vida baja
-        return min(opps, key=lambda o: (defense(o)[0], defense(o)[1], o.life))
+        # 2) entre los menos defendidos, apuntar al ARQUIENEMIGO (el que va ganando)
+        rank = self._threat_rank(opps)
+        return min(opps, key=lambda o: (defense(o)[0], rank[id(o)], defense(o)[1]))
 
     # -- ataque ----------------------------------------------------------- #
     def declare_attackers(self, game, me):
@@ -765,24 +784,31 @@ class Policy:
             return False
 
         killable = {id(o) for o in opps if atk_power - defense(o) >= o.life}
+        rank = self._threat_rank(opps)                      # 0 = arquienemigo
+        # orden de preferencia: rematables primero, luego menos defensa, luego líder
         order = sorted(opps, key=lambda o: (0 if id(o) in killable else 1,
-                                            defense(o), o.life))
+                                            defense(o), rank[id(o)]))
         soak = {id(o): defense(o) for o in opps}
         need = {id(o): o.life + defense(o) for o in opps}   # daño para asegurar letal
         count = {id(o): 0 for o in opps}
         committed = {id(o): 0 for o in opps}
         fair = max(1, -(-len(sending) // len(opps)))        # ceil: cuota pareja por rival
+        # avanzado concentra: al ARQUIENEMIGO le da cuota doble antes de desbordar,
+        # para cerrarle la partida al que va ganando en vez de repartir parejo.
+        arch = next((o for o in opps if rank[id(o)] == 0), None)
+        fair_of = {id(o): (fair * 2 if (self.level == "avanzado" and o is arch) else fair)
+                   for o in opps}
         assign = {}
         for atk in sorted(sending, key=lambda c: c.power, reverse=True):
             def key(o, atk=atk):
                 # un rival queda 'saturado' al asegurar su remate (rematables) o al
-                # llegar a su cuota pareja (no rematables); entonces desborda al próximo.
+                # llegar a su cuota (no rematables); entonces desborda al próximo.
                 # Pero nunca derrama a un rival donde el atacante moriría pudiendo pegar
                 # gratis en otro: ese cambio desfavorable va último.
                 if id(o) in killable:
                     satisfied = committed[id(o)] >= need[id(o)]
                 else:
-                    satisfied = count[id(o)] >= fair
+                    satisfied = count[id(o)] >= fair_of[id(o)]
                 return (could_die(atk, o), satisfied,
                         max(0, soak[id(o)]), order.index(o))
             best = min(order, key=key)

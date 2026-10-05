@@ -90,7 +90,8 @@ type Combat = {
 };
 type Mulligan = { mulls: number; to_bottom: number; lands: number };
 type ChoiceOpt = { i: number; name: string; is_land?: boolean; ok?: boolean };
-type Choice = { kind: string; prompt: string; options: ChoiceOpt[]; allow_none: boolean; card?: string };
+type CardDetail = { name: string; cost: string; pt: string | null; type: string; keywords: string[]; is_land: boolean };
+type Choice = { kind: string; prompt: string; options: ChoiceOpt[]; allow_none: boolean; card?: string; card_detail?: CardDetail | null };
 type ReactState = {
   spell: string; from: string; kind?: string;
   responses: { i: number; name: string; cost: string; target_spec?: string | null }[];
@@ -1305,14 +1306,35 @@ export default function Play() {
               <h3><Icon name="book" size={17} /> {title}</h3>
               {hint && <p className="muted" style={{ marginTop: 2, fontSize: ".82rem", opacity: .85 }}>{hint}</p>}
               <p className="muted" style={{ marginTop: 2 }}>{ch.prompt}</p>
-              {ch.card && (
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, margin: "8px 0 12px" }}>
-                  {art[ch.card]
-                    ? <div className="inspect-art" style={{ backgroundImage: `url(${art[ch.card]})` }} />
-                    : <div className="inspect-art ph"><span>{ch.card}</span></div>}
-                  <b style={{ fontSize: "1.02rem" }}>{ch.card}</b>
-                </div>
-              )}
+              {ch.card && (() => {
+                const d = ch.card_detail;
+                return (
+                  <div className="choice-card">
+                    {art[ch.card]
+                      ? <div className="inspect-art" style={{ backgroundImage: `url(${art[ch.card]})` }} />
+                      : <div className="inspect-art ph"><span>{ch.card}</span></div>}
+                    <div className="choice-card-info">
+                      <b style={{ fontSize: "1.02rem" }}>{ch.card}</b>
+                      {d && (
+                        <>
+                          <div className="choice-card-line">
+                            {d.cost ? <span className="choice-cost">{d.cost}</span> : null}
+                            {d.pt ? <span className="choice-pt">{d.pt}</span> : null}
+                          </div>
+                          {d.type ? <span className="choice-type">{d.type}</span> : null}
+                          {d.keywords.length > 0 && (
+                            <div className="choice-kws">
+                              {d.keywords.filter((k) => KW_SHORT[k]).map((k) => (
+                                <span key={k} className="atk-kw" title={k}>{KW_SHORT[k]}</span>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
               <div className="target-list">
                 {ch.options.map((o) => (
                   <button

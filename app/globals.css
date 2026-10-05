@@ -542,6 +542,15 @@ button.ghost:disabled:hover { background: transparent; border-color: var(--borde
 .atk-dmg { display: flex; flex-wrap: wrap; gap: 8px; }
 .dmg-to { display: inline-flex; align-items: center; gap: 4px; font-size: .9rem; font-weight: 600; color: #e9edf4; background: rgba(224,104,79,.14); border: 1px solid rgba(224,104,79,.4); border-radius: 999px; padding: 2px 10px; }
 .dmg-to.lethal { background: rgba(224,104,79,.3); border-color: #e0684f; color: #fff; }
+/* detalle de carta en el modal de decisión (scry/revelar): arte + coste/P-T/tipo/keywords */
+.choice-card { display: flex; gap: 12px; align-items: flex-start; margin: 10px 0 12px; }
+.choice-card .inspect-art { flex: 0 0 auto; }
+.choice-card-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.choice-card-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.choice-cost { font-weight: 700; color: #cfe0ff; }
+.choice-pt { font-weight: 800; color: #ffd27a; background: rgba(0,0,0,.35); border-radius: 4px; padding: 0 6px; }
+.choice-type { color: var(--muted); font-size: .85rem; }
+.choice-kws { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .cardmini.sel-able { outline: 1px dashed rgba(216,178,58,.6); outline-offset: 1px; }
 .cardmini.sel { outline: 2px solid var(--accent); box-shadow: 0 0 0 2px rgba(216,178,58,.5); }
 
