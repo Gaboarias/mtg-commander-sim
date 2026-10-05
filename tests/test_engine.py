@@ -7387,6 +7387,37 @@ def test_attack_defender_loses_life_and_upkeep_counter():
     assert (bear.power, bear.toughness) == (3, 3)
 
 
+def test_modal_on_death_opens_choice():
+    # "When ~ dies, choose one — ..." (Ao) abre el selector de modo al morir
+    # (antes el cuerpo se truncaba a 160 y el modal no se armaba).
+    import cardsdb, cards
+    from engine import Game, Player
+    oracle = ("Flying, vigilance\n"
+              "When Ao, the Dawn Sky dies, choose one —\n"
+              "• Look at the top seven cards of your library. Put any number of nonland "
+              "permanent cards with total mana value 4 or less from among them onto the "
+              "battlefield. Put the rest on the bottom of your library in a random order.\n"
+              "• Put two +1/+1 counters on each permanent you control that's a creature or Vehicle.")
+    c = cardsdb.build_card_from_data({
+        "name": "Ao, the Dawn Sky", "type_line": "Legendary Creature — Dragon Spirit",
+        "mana_cost": "3WW", "power": "5", "toughness": "4",
+        "keywords": ["Flying", "Vigilance"], "oracle_text": oracle})
+    assert c.on_death is not None
+    g = Game([Player("Tu", [cards.creature("z", "1W", 1, 1) for _ in range(8)],
+                     cards.creature("C", "1W", 1, 1, legendary=True)),
+              Player("B", [cards.creature("z", "1U", 1, 1) for _ in range(8)],
+                     cards.creature("O", "1U", 1, 1, legendary=True))], seed=1)
+    me = g.players[0]; g.interactive_human = me
+    ao = g.move_to_battlefield(c, me)
+    ally = g.move_to_battlefield(cards.creature("Ally", "1W", 2, 2), me)
+    g.resolve_stack()
+    g.to_graveyard(ao, "muere"); g.resolve_stack()
+    pc = g.pending_choice
+    assert pc is not None and pc["kind"] == "mode" and len(pc["options"]) == 2
+    pc["_apply"](1); g.resolve_stack()                 # modo: +2/+2 a cada criatura
+    assert (ally.power, ally.toughness) == (4, 4)
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

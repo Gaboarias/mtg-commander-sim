@@ -638,6 +638,17 @@ def _fragment_effect(seg: str):
             game.sba()
             game.log(f"{ctrl.name}: sus criaturas +{_p}/+{_t} este turno")
         return team_pump, None, 1
+    # poner N +1/+1 en CADA criatura (o criatura/Vehicle) que controlás (Ao, etc.)
+    mec = re.search(r"put (\w+) \+1/\+1 counters? on each (?:permanent you control that'?s "
+                    r"a creature or vehicle|creature you control|other creature you control)",
+                    seg, re.I)
+    if mec and (nec := _count_word(mec.group(1))):
+        other = "other creature" in seg.lower()
+        def put_each(game, ctrl, targets, _n=nec, _o=other, _src=None):
+            for pm in list(ctrl.creatures()):
+                game.add_counters(pm, "+1/+1", _n)
+            game.log(f"{ctrl.name}: +{_n}/+{_n} a cada criatura que controla")
+        return put_each, None, 1
     # poner contadores +1/+1 en una criatura objetivo (incluye "up to one target")
     mc = re.search(r"put (\w+) \+1/\+1 counters? on (?:up to \w+ )?target creature", seg, re.I)
     if mc and _count_word(mc.group(1)):
@@ -1759,6 +1770,16 @@ def _death_self_effect(oracle: str, name: str = ""):
     if not m:
         return None
     body = m.group(1)
+    # disparo de muerte MODAL ("when ~ dies, choose one — …"): los modos se parsean
+    # del oráculo COMPLETO (la captura del cuerpo se trunca a 160 y los perdería).
+    if re.search(r"\bchoose (one|two|three|one or more|one or both)\b", body, re.I):
+        _parsed = _parse_modes(oracle)
+        if _parsed is not None:
+            _modes = _parsed[0]
+
+            def on_death(game, ctrl, perm, _m=_modes):
+                _modal_run(game, ctrl, _m)
+            return on_death
     # "put N +1/+1 counters on <the creature/target>": no aplica al morir; ignoramos
     eff = _generic_amount_effect(body)
     if eff is None:
