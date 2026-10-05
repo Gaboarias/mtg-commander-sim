@@ -443,8 +443,28 @@ def _lorehold_draw():
 # TRICKY (G/U) — contadores
 # --------------------------------------------------------------------------- #
 
+def _omo_commander():
+    """Omo, Queen of Vesuva — comandante real del precon Tricky Terrain (MH3).
+    Se construye vía build_card_from_data para reusar el cableado probado de
+    'enters or attacks -> everything counter'. Coste cmc 3 (lo más cercano al
+    real {2}{G/U}, que usa híbrido no soportado por parse_cost)."""
+    import cardsdb
+    c = cardsdb.build_card_from_data({
+        "name": "Omo, Queen of Vesuva", "mana_cost": "{1}{G}{U}", "cmc": 3,
+        "type_line": "Legendary Creature — Shapeshifter Noble",
+        "power": "1", "toughness": "5",
+        "oracle_text": ("Whenever Omo, Queen of Vesuva enters or attacks, put an "
+                        "everything counter on each of up to one target land and up to "
+                        "one target creature. Each land with an everything counter on it "
+                        "is every land type in addition to its other types. Each nonland "
+                        "creature with an everything counter on it is every creature type."),
+        "keywords": []})
+    c.tags = set(c.tags) | {"engine"}
+    return c
+
+
 def tricky():
-    commander = _tricky_commander()
+    commander = _omo_commander()
     d = []
     d.append(cards.Managorger())
     d.append(cards.Kalonian())
