@@ -553,6 +553,10 @@ class Game:
         # registro de habilidades que se activaron (para el resumen de la partida):
         # {turn, controller, card, kind}. No crea pasos en la traza.
         self.ability_events: list = []
+        # nombre de la carta cuyo efecto se está resolviendo ahora (ETB, disparo o
+        # hechizo en la pila): se usa para ATRIBUIR en el registro quién causó una
+        # pérdida de vida / daño ("cada rival pierde 2 [Fuente]").
+        self._fx_source = None
         # decisión pendiente del humano (juego interactivo): el motor pausa un
         # efecto que requiere elegir (revelar, etc.) hasta resolve_choice().
         self.interactive_human = None
@@ -631,6 +635,12 @@ class Game:
         self.ability_events.append({
             "turn": self.turn, "controller": who, "card": name, "kind": kind,
         })
+
+    def src_tag(self) -> str:
+        """Sufijo con la carta-fuente del efecto en curso, para atribuir en el
+        registro quién causó una pérdida de vida o daño. Vacío si no se conoce."""
+        s = getattr(self, "_fx_source", None)
+        return f" [{s}]" if s else ""
 
     # -- logging ---------------------------------------------------------- #
     def log(self, msg: str):
@@ -883,7 +893,12 @@ class Game:
             obj = self.stack.pop()
             if obj.controller.lost:
                 continue
-            obj.resolve(self)
+            prev = self._fx_source
+            self._fx_source = getattr(getattr(obj, "source", None), "name", None)
+            try:
+                obj.resolve(self)
+            finally:
+                self._fx_source = prev
             self.sba()
 
     # -- movimiento de cartas -------------------------------------------- #
@@ -986,7 +1001,12 @@ class Game:
         player.battlefield.append(perm)
         if card.on_etb:
             self.note_ability(card, "entra al campo", controller=player)
-            card.on_etb(self, player, perm)
+            prev = self._fx_source
+            self._fx_source = card.name
+            try:
+                card.on_etb(self, player, perm)
+            finally:
+                self._fx_source = prev
         self.emit("etb", player=player, perm=perm)
         # daybound/nightbound: si entra una carta así y no es ni de día ni de noche,
         # se vuelve de día (regla 502/711).

@@ -3114,11 +3114,11 @@ def _generic_amount_effect(oracle: str):
                 if _each:
                     for o in game.opponents(ctrl):
                         o.life -= n
-                    game.log(f"{ctrl.name}: cada rival pierde {n} de vida")
+                    game.log(f"{ctrl.name}: cada rival pierde {n} de vida" + game.src_tag())
                 else:
                     _pick_opponent(game, ctrl, lambda o, _n=n: (
                         setattr(o, "life", o.life - _n),
-                        game.log(f"{ctrl.name}: {o.name} pierde {_n} de vida")))
+                        game.log(f"{ctrl.name}: {o.name} pierde {_n} de vida" + game.src_tag())))
             return eff
         if re.search(r"deals? damage", t):
             def eff(game, ctrl, *_a, _c=cnt):
@@ -3513,7 +3513,7 @@ def _generic_amount_effect(oracle: str):
         def eff(game, ctrl, *_a, _n=n):
             for o in game.opponents(ctrl):
                 game.deal_damage(None, o, _n)
-            game.log(f"{ctrl.name}: {_n} de daño a cada oponente")
+            game.log(f"{ctrl.name}: {_n} de daño a cada oponente" + game.src_tag())
         return eff
 
     # barrida simétrica: "each creature deals damage equal to its (power|toughness)
@@ -3545,7 +3545,7 @@ def _generic_amount_effect(oracle: str):
             if _gain:
                 game.gain_life(ctrl, _n * max(1, len(opps)))
             game.log(f"{ctrl.name}: cada rival pierde {_n} de vida"
-                     + (" y él gana vida" if _gain else ""))
+                     + (" y él gana vida" if _gain else "") + game.src_tag())
         return eff
 
     # drenaje dirigido fijo: "target player/opponent loses N life" -> el humano
@@ -3559,7 +3559,7 @@ def _generic_amount_effect(oracle: str):
                 if _g:
                     game.gain_life(ctrl, _n2)
                 game.log(f"{ctrl.name}: {o.name} pierde {_n2} de vida"
-                         + (" y él gana vida" if _g else ""))
+                         + (" y él gana vida" if _g else "") + game.src_tag())
             _pick_opponent(game, ctrl, _do)
         return eff
 
@@ -3574,7 +3574,7 @@ def _generic_amount_effect(oracle: str):
             if _th is not None and any(o.life <= _th for o in game.opponents(ctrl)):
                 return                              # condición cumplida: no pierde vida
             ctrl.life -= _n
-            game.log(f"{ctrl.name} pierde {_n} de vida")
+            game.log(f"{ctrl.name} pierde {_n} de vida" + game.src_tag())
         return eff
 
     # edict masivo: "each player sacrifices a creature [or planeswalker]"
@@ -3994,7 +3994,7 @@ def _generic_amount_effect(oracle: str):
             if opps:
                 tgt = min(opps, key=lambda o: o.life)
                 tgt.life -= _n
-                game.log(f"{tgt.name} pierde {_n} de vida")
+                game.log(f"{tgt.name} pierde {_n} de vida" + game.src_tag())
         return eff
 
     # edict: "each opponent sacrifices a creature" (variante de "target player")

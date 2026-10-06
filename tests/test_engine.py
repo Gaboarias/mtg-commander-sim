@@ -7533,6 +7533,27 @@ def test_ai_waits_for_ally_before_casting_omo():
     assert any(p.card is omo for p in me.battlefield)        # con aliado, la lanza
 
 
+def test_life_loss_log_names_the_source_card():
+    # Al perder vida por un efecto (ETB/disparo), el registro nombra la carta que lo
+    # causó ("cada rival pierde 2 [Fuente]"), para poder identificar la culpable.
+    import cardsdb, cards
+    from engine import Game, Player
+    me = Player("me", [], cards.creature("cmd", "1", 1, 1))
+    op = Player("op", [], cards.creature("oc", "1", 1, 1))
+    g = Game([me, op], seed=1)
+    me.life = 40; op.life = 40
+    g.interactive_human = None
+    drainer = cardsdb.build_card_from_data({
+        "name": "Fuente de Drenaje", "type_line": "Creature", "mana_cost": "{1}{B}",
+        "power": "2", "toughness": "2",
+        "oracle_text": "When this creature enters, each opponent loses 2 life."})
+    n0 = len(g.log_lines)
+    g.move_to_battlefield(drainer, me)
+    g.resolve_stack(); g.sba()
+    drain_lines = [l for l in g.log_lines[n0:] if "pierde" in l]
+    assert drain_lines and "[Fuente de Drenaje]" in drain_lines[0]
+
+
 def test_state_exposes_graveyard_card_costs():
     # Al revisar una carta del cementerio/exilio el modal debe poder mostrar el
     # coste de maná: el estado expone card_briefs (nombre -> coste/tipo/P-T/kw).
