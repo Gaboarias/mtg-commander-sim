@@ -7559,6 +7559,37 @@ def test_precon_monthly_update_diff_and_fallback():
     assert {p["code"] for p in served} == {"A", "B"}
 
 
+def test_build_test_deck_adds_in_color_combos_and_upgrades():
+    # El "deck de prueba" suma la pieza de combo que falta y staples de mejora, SOLO
+    # en la identidad del comandante (descarta lo off-color), y arma una decklist.
+    import os, sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
+    import _analyze as A
+    cache = {
+        A._norm("Omo"): {"color_identity": ["G", "U"], "type_line": "Legendary Creature", "cmc": 3},
+        A._norm("Cultivate"): {"color_identity": ["G"], "type_line": "Sorcery", "cmc": 3},
+        A._norm("Beast Within"): {"color_identity": ["G"], "type_line": "Instant", "cmc": 3},
+        A._norm("Rhystic Study"): {"color_identity": ["U"], "type_line": "Enchantment", "cmc": 3},
+        A._norm("Swords to Plowshares"): {"color_identity": ["W"], "type_line": "Instant", "cmc": 1},
+        A._norm("Thassa's Oracle"): {"color_identity": ["U"], "type_line": "Creature", "cmc": 2},
+    }
+    parsed = {"commander": "Omo", "cards": [(1, "Forest"), (1, "Island"), (1, "Llanowar Elves")]}
+    combos = {"almost": [
+        {"name": "Oracle win", "missing": ["Thassa's Oracle"]},
+        {"name": "off-color", "missing": ["Swords to Plowshares"]},
+    ]}
+    res = A.build_test_deck(parsed, cache, "Omo", combos)
+    assert res["ok"]
+    combo_names = {c["name"] for c in res["added_combos"]}
+    assert "Thassa's Oracle" in combo_names          # en color (U)
+    assert "Swords to Plowshares" not in combo_names  # off-color (W): descartada
+    upg = {u["name"] for u in res["added_upgrades"]}
+    assert "Sol Ring" in upg and "Cultivate" in upg   # staples en color/incoloros
+    assert "Swords to Plowshares" not in upg          # staple off-color no entra
+    assert res["text"].startswith("Commander\n1 Omo")
+    assert "Thassa's Oracle" in res["text"]
+
+
 def test_inline_etb_loop_is_bounded_not_recursion_error():
     # Regresión: una carta mal modelada que al entrar mete otra con el mismo ETB
     # generaba "maximum recursion depth exceeded" y tiraba la partida. Ahora el tope

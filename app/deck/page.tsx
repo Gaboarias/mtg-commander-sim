@@ -330,6 +330,12 @@ export default function DeckPage() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisErr, setAnalysisErr] = useState<string | null>(null);
+  const [testBuilding, setTestBuilding] = useState(false);
+  const [testSummary, setTestSummary] = useState<{
+    added_combos: { name: string; combo: string }[];
+    added_upgrades: { name: string; role: string }[];
+    cut: string[]; note: string; combos_note?: string;
+  } | null>(null);
   const [hand, setHand] = useState<Row[] | null>(null);
   const [sim, setSim] = useState<SimResult | null>(null);
   const [simming, setSimming] = useState(false);
@@ -898,6 +904,38 @@ export default function DeckPage() {
       setAnalysisErr(e instanceof Error ? e.message : String(e));
     } finally {
       setAnalyzing(false);
+    }
+  }
+
+  async function buildTestDeck() {
+    setTestBuilding(true);
+    setAnalysisErr(null);
+    setTestSummary(null);
+    try {
+      const r = await fetch("/api/testdeck", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: currentDeckText(),
+          commander: resolved?.commander_name || null,
+        }),
+      });
+      const raw = await r.text();
+      let d;
+      try { d = JSON.parse(raw); } catch { throw new Error(`HTTP ${r.status}: ${raw.slice(0, 200)}`); }
+      if (!d.ok) throw new Error(d.error || d.reason || "No se pudo armar el deck de prueba.");
+      // cargar la lista mejorada en el editor y re-resolver
+      setText(d.text);
+      setResolved(null);
+      resolve(d.text);
+      setTestSummary({
+        added_combos: d.added_combos || [], added_upgrades: d.added_upgrades || [],
+        cut: d.cut || [], note: d.note || "", combos_note: d.combos_note,
+      });
+    } catch (e) {
+      setAnalysisErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTestBuilding(false);
     }
   }
 
@@ -1582,10 +1620,51 @@ export default function DeckPage() {
             los combos reales de Commander Spellbook. Tomalo como una guía; los combos
             sí son exactos, por nombre de carta.
           </p>
-          <button className="go" disabled={analyzing} onClick={analyzeDeck}>
-            {analyzing ? "Analizando…" : "Analizar deck"}
-          </button>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <button className="go" disabled={analyzing} onClick={analyzeDeck}>
+              {analyzing ? "Analizando…" : "Analizar deck"}
+            </button>
+            <button className="ghost" disabled={testBuilding} onClick={buildTestDeck}
+              title="Suma las piezas de combo que faltan y staples de mejora, en color, y carga el deck de prueba"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <Icon name="flask" size={14} /> {testBuilding ? "Armando…" : "Crear deck de prueba (combos + mejoras)"}
+            </button>
+          </div>
           {analysisErr && <p className="err" role="alert">Error: {analysisErr}</p>}
+
+          {testSummary && (
+            <div className="card" style={{ marginTop: 10, background: "var(--panel-2)" }}>
+              <h3 style={{ margin: "0 0 4px" }}><Icon name="flask" size={15} /> Deck de prueba armado</h3>
+              <p className="muted" style={{ fontSize: ".82rem", marginTop: 0 }}>{testSummary.note}</p>
+              {testSummary.combos_note && <p className="muted" style={{ fontSize: ".78rem" }}>{testSummary.combos_note}</p>}
+              {testSummary.added_combos.length > 0 && (
+                <div style={{ marginBottom: 6 }}>
+                  <b style={{ fontSize: ".85rem" }}>Piezas de combo sumadas:</b>
+                  <ul className="abil">{testSummary.added_combos.map((c, i) => (
+                    <li key={i}>{c.name} <span className="muted">— completa: {c.combo}</span></li>
+                  ))}</ul>
+                </div>
+              )}
+              {testSummary.added_upgrades.length > 0 && (
+                <div style={{ marginBottom: 6 }}>
+                  <b style={{ fontSize: ".85rem" }}>Mejoras sumadas:</b>
+                  <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+                    {testSummary.added_upgrades.map((u, i) => (
+                      <span key={i} className="chip">{u.name} <span className="muted">· {u.role}</span></span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {testSummary.cut.length > 0 && (
+                <p className="muted" style={{ fontSize: ".82rem" }}>
+                  Cortadas para hacer lugar: {testSummary.cut.join(", ")}.
+                </p>
+              )}
+              <p className="muted" style={{ fontSize: ".82rem" }}>
+                Ya quedó cargado en el editor de arriba — podés editarlo y <b>Simular</b>.
+              </p>
+            </div>
+          )}
 
           <div style={{ marginTop: 12 }}>
             <button className="ghost" onClick={drawHand} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>

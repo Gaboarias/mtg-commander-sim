@@ -464,6 +464,114 @@ def _card_themes(craw):
 # umbral "ideal" por rol (para explicar el hueco que cubre)
 _ROLE_THRESH = {"ramp": 10, "draw": 10, "removal": 8, "wipe": 1, "protection": 3}
 
+# cartas incoloras siempre legales (se pueden sumar sin importar la identidad)
+_COLORLESS_OK = {"sol ring", "arcane signet", "fellwar stone", "command tower"}
+
+
+def build_test_deck(parsed, cache, cmd, combos, target=99):
+    """Arma un DECK DE PRUEBA sumando las recomendaciones de combos y de mejora
+    sobre el mazo recibido. Devuelve {ok, text, commander, added_combos,
+    added_upgrades, cut, deck_size, note}.
+
+    - combos: completa las piezas que FALTAN (1 carta) de los combos 'casi' que están
+      en color (de find_combos()['almost']).
+    - mejora: suma staples por rol (ramp/draw/removal/wipe/protección) que el mazo no
+      tiene, en color.
+    - si se pasa de `target` cartas, corta las más flojas (_cut_candidates), nunca el
+      comandante ni lo recién sumado.
+    """
+    if not cmd:
+        return {"ok": False, "reason": "Falta el comandante para armar el mazo de prueba."}
+
+    def craw(name):
+        return cache.get(_norm(name))
+
+    # identidad: la del comandante, o la unión de las cartas si no se resolvió
+    ident = set((craw(cmd) or {}).get("color_identity") or [])
+    if not ident:
+        for _q, n in parsed["cards"]:
+            ident |= set((craw(n) or {}).get("color_identity") or [])
+
+    owned = {_norm(n) for _q, n in parsed["cards"]}
+    owned.add(_norm(cmd))
+
+    def in_color_addable(name):
+        k = _norm(name)
+        if k in owned:
+            return False
+        if k in _COLORLESS_OK:
+            return True
+        c = craw(name)
+        if not c:
+            return False                       # sin datos: no arriesgar off-color
+        return set(c.get("color_identity") or []) <= ident
+
+    # 1) completar combos 'casi' (la carta que falta), en color
+    added_combos, seen = [], set()
+    for a in (combos or {}).get("almost", []):
+        for miss in a.get("missing", []):
+            k = _norm(miss)
+            if k in seen or not in_color_addable(miss):
+                continue
+            seen.add(k)
+            owned.add(k)
+            added_combos.append({"name": miss, "combo": a.get("name") or a.get("desc") or "combo"})
+            if len(added_combos) >= 6:
+                break
+        if len(added_combos) >= 6:
+            break
+
+    # 2) mejoras: staples por rol que falten, en color
+    added_upg = []
+    for role in ("ramp", "draw", "removal", "wipe", "protection"):
+        for s in _STAPLES[role]:
+            if len(added_upg) >= 10:
+                break
+            if in_color_addable(s):
+                owned.add(_norm(s))
+                added_upg.append({"name": s, "role": _ROLE_ES.get(role, role)})
+        if len(added_upg) >= 10:
+            break
+
+    add_names = [c["name"] for c in added_combos] + [u["name"] for u in added_upg]
+
+    # 3) armar la lista: cartas actuales (menos el comandante) + lo nuevo
+    cmd_norm = _norm(cmd)
+    base = [(q, n) for q, n in parsed["cards"] if _norm(n) != cmd_norm]
+    base_names = {_norm(n) for _q, n in base}
+    new_rows = [(1, n) for n in add_names if _norm(n) not in base_names]
+
+    # 4) recortar si nos pasamos de `target` (sin tocar comandante ni lo sumado)
+    cut = []
+    total = sum(q for q, _n in base) + len(new_rows)
+    if total > target:
+        protected = {_norm(n) for _q, n in new_rows}
+        entries = [(q, n, craw(n)) for q, n in base]
+        cands = [c for c in _cut_candidates(entries, cmd, 0)
+                 if _norm(c["name"]) not in protected]
+        need = total - target
+        to_cut = {_norm(c["name"]) for c in cands[:need]}
+        cut = [c["name"] for c in cands[:need]]
+        base = [(q, n) for q, n in base if _norm(n) not in to_cut]
+
+    # 5) decklist de texto
+    lines = ["Commander", f"1 {cmd}", "", "Deck"]
+    for q, n in base:
+        lines.append(f"{q} {n}")
+    for q, n in new_rows:
+        lines.append(f"{q} {n}")
+    deck_size = 1 + sum(q for q, _n in base) + len(new_rows)
+
+    note = (f"Sumé {len(added_combos)} pieza(s) de combo y {len(added_upg)} mejora(s)."
+            + (f" Corté {len(cut)} carta(s) flojas para hacer lugar." if cut else "")
+            + (" (Instalá/sincronizá Scryfall para recomendaciones en color más finas.)"
+               if not cache else ""))
+
+    return {"ok": True, "text": "\n".join(lines) + "\n",
+            "commander": cmd, "identity": _ci_str(ident),
+            "added_combos": added_combos, "added_upgrades": added_upg,
+            "cut": cut, "deck_size": deck_size, "note": note}
+
 
 def suggest_decks(card_name, decks, cache):
     """¿En cuáles de `decks` sirve `card_name`, y CUÁNTO aporta? Puro y testeable:
