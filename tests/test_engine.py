@@ -7457,6 +7457,31 @@ def test_human_turn_not_skipped_by_stale_queued_choice():
     assert ig.phase == "main"
 
 
+def test_forced_sacrifice_prompt_names_the_forcing_opponent():
+    # Regresión: el edicto ("target player sacrifices a creature") mostraba el
+    # nombre del JUGADOR que sacrifica como prefijo. Si su mazo se llama como su
+    # comandante (p. ej. "Quintorius, History Chaser"), parecía que esa carta
+    # forzaba el sacrificio. Ahora el prompt nombra a QUIEN lo fuerza (el rival)
+    # y no al que sacrifica.
+    import cardsdb, cards, interactive, decks
+    defs = [("Quintorius, History Chaser",) + decks.build("lorehold"),
+            ("Rival-Ezuri",) + decks.build("tricky")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=5)
+    ig.keep([])
+    hu = ig.human(); op = ig.g.opponents(hu)[0]
+    pm = ig.g.move_to_battlefield(cards.creature("Anger", "1R", 2, 2), hu)
+    pm.summoning_sick = False
+
+    res = cardsdb._fragment_effect("target player sacrifices a creature")
+    f = res[0] if isinstance(res, tuple) else res
+    f(ig.g, op)                       # el rival fuerza el edicto sobre el humano
+    pc = ig.g.pending_choice
+    assert pc is not None and pc["kind"] == "etb_target"
+    assert "Quintorius" not in pc["prompt"]          # no es el nombre del que sacrifica
+    assert op.name in pc["prompt"]                   # sí nombra a quien lo fuerza
+    assert "forzado" in pc["prompt"].lower()
+
+
 # -- partida completa corre sin excepciones -------------------------------- #
 def test_full_game_runs():
     import run

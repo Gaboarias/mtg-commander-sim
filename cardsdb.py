@@ -3586,8 +3586,10 @@ def _generic_amount_effect(oracle: str):
                 pool = [pm for pm in pl.battlefield
                         if pm.is_creature() or (_pw and "planeswalker" in pm.card.types)]
                 if pool:
+                    why = "" if pl is ctrl else f" (lo fuerza {ctrl.name})"
                     _human_or_auto_sacrifice(
-                        game, pl, f"{pl.name}: elegí qué sacrificar", pool=pool)
+                        game, pl, f"Sacrificio forzado{why}: elegí qué sacrificar",
+                        pool=pool)
         return eff
 
     # cada jugador descarta N carta(s)
@@ -3766,7 +3768,9 @@ def _generic_amount_effect(oracle: str):
                 if o.creatures():
                     # el DUEÑO elige qué sacrificar (modal si es humano, si no la más débil)
                     _human_or_auto_sacrifice(
-                        game, o, f"{o.name}: elegí una criatura para sacrificar")
+                        game, o,
+                        f"Sacrificio forzado (lo fuerza {ctrl.name}): "
+                        f"elegí una criatura")
                     break                          # "target player": uno solo
         return eff
 
@@ -3999,7 +4003,9 @@ def _generic_amount_effect(oracle: str):
             for o in game.opponents(ctrl):
                 if o.creatures():
                     _human_or_auto_sacrifice(
-                        game, o, f"{o.name}: elegí una criatura para sacrificar")
+                        game, o,
+                        f"Sacrificio forzado (lo fuerza {ctrl.name}): "
+                        f"elegí una criatura")
         return eff
 
     # evasión: "target creature can't be blocked this turn" -> keyword temporal
