@@ -7533,6 +7533,25 @@ def test_ai_waits_for_ally_before_casting_omo():
     assert any(p.card is omo for p in me.battlefield)        # con aliado, la lanza
 
 
+def test_md_presets_no_land_flood_and_tricky_unified():
+    # Regresión: los presets .md inundaban de tierras (tricky-terrain 56,
+    # lorehold-spirit 64) porque el relleno a 99 era todo básicas. Ahora delega en
+    # _fill (ratio sano ~37). Y "tricky-terrain" quedó unificado con "tricky".
+    import decks
+    for slug in ("tricky-terrain", "lorehold-spirit"):
+        deck, _cmd = decks.build(slug)
+        lands = sum(1 for c in deck if c.is_land())
+        assert len(deck) == 99
+        assert 34 <= lands <= 40, f"{slug}: {lands} tierras (flood)"
+    # unificados: tricky-terrain usa el mismo mazo curado que tricky
+    tt, cmd_tt = decks.build("tricky-terrain")
+    _t, cmd_t = decks.build("tricky")
+    assert cmd_tt.name == cmd_t.name == "Omo, Queen of Vesuva"
+    assert getattr(cmd_tt, "needs_ally", False) is True        # conserva su comportamiento
+    assert any(c.name == "Heroic Intervention" for c in tt)    # y la protección
+    assert any(c.name == "Inexorable Tide" for c in tt)        # y los motores reales
+
+
 def test_tricky_deck_has_real_lands_and_protection():
     # Item: la lista de Tricky usa tierras REALES (no inventadas) y trae protección.
     import decks

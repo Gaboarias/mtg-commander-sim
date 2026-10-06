@@ -538,6 +538,11 @@ def tricky():
     d.append(_gu_ramp("Farseek", "1G",
                       "Search your library for a basic land and put it onto the "
                       "battlefield tapped.", 2))
+    # robo / motores de contadores (cartas reales del precon)
+    d.append(cardsdb.build_card_from_data({
+        "name": "Inexorable Tide", "mana_cost": "{3}{U}", "cmc": 4,
+        "type_line": "Enchantment", "power": None, "toughness": None,
+        "oracle_text": "Whenever you cast a spell, proliferate.", "keywords": []}))
     # robo / interacción / PROTECCIÓN
     d.append(cards.Counterspell())
     d.append(_tricky_draw())
@@ -703,6 +708,13 @@ def _register_presets():
 
 
 _register_presets()
+
+# UNIFICACIÓN: "tricky-terrain" (el preset .md) y "tricky" son el MISMO mazo. La
+# versión por código tiene a Omo con su habilidad real, tierras reales, rampeo,
+# protección (Heroic Intervention) y un ratio de tierras sano (~37). El .md queda
+# como documentación, pero el mazo jugable es el curado por código.
+DECKS["tricky-terrain"] = tricky
+DECK_SOURCE["tricky-terrain"] = "preset"
 
 
 def build(name):

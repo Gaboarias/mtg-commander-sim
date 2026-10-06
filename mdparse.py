@@ -182,18 +182,28 @@ def parse_md_deck(text, target=99):
     if commander is None:
         raise ValueError("No se encontro comandante (seccion '## Comandante').")
 
-    # rellenar hasta `target` con las basicas marcadas con n = ?
+    # completar hasta `target` con un RATIO de tierras realista (sin inundar).
+    # Antes se llenaban TODOS los huecos con básicas: si la tabla del preset lista
+    # pocas cartas, el relleno metía 40+ básicas y el mazo quedaba con 56-64 tierras.
+    # Ahora delegamos en decks._fill, que agrega básicas sólo hasta ~TARGET_LANDS y
+    # el resto con relleno de criaturas en color (igual que los decks de ejemplo).
     deck = deck[:target]
-    if not fill_colors:
-        ident = commander.identity()
-        fill_colors = [c for c in (W, U, B, R, G) if c in ident] or [G]
-    names = {W: "Plains", U: "Island", B: "Swamp", R: "Mountain", G: "Forest",
-             C: "Wastes"}
-    k = 0
-    while len(deck) < target:
-        color = fill_colors[k % len(fill_colors)]
-        deck.append(land(names[color], [color], basic=True))
-        k += 1
+    import decks as _decks
+    if target == 99:
+        deck = _decks._fill(deck, commander.identity())
+    else:
+        # objetivo no estándar: completar con básicas en identidad, pero sin pasar
+        # un ratio de tierras razonable.
+        if not fill_colors:
+            ident = commander.identity()
+            fill_colors = [c for c in (W, U, B, R, G) if c in ident] or [G]
+        names = {W: "Plains", U: "Island", B: "Swamp", R: "Mountain", G: "Forest",
+                 C: "Wastes"}
+        k = 0
+        while len(deck) < target:
+            color = fill_colors[k % len(fill_colors)]
+            deck.append(land(names[color], [color], basic=True))
+            k += 1
 
     implemented = sum(1 for c in deck if cardsdb.is_implemented(c.name))
     if cardsdb.is_implemented(commander.name):
