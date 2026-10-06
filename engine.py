@@ -8,12 +8,20 @@ Python puro, sin dependencias externas.
 from __future__ import annotations
 
 import random
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
 
 import carddesc as _carddesc     # descripción legible de habilidades (puro)
+
+# Margen de recursión: algunas partidas (deepcopy de tableros grandes en el juego
+# interactivo, parseo de cartas modales/clon anidadas, cadenas de disparos) superan
+# el tope por defecto de Python (1000) y reventaban con "maximum recursion depth
+# exceeded". 3000 frames (~3 MB de pila) es holgado y seguro en CPython.
+if sys.getrecursionlimit() < 3000:
+    sys.setrecursionlimit(3000)
 
 # --------------------------------------------------------------------------- #
 # Constantes
@@ -557,6 +565,11 @@ class Game:
         # hechizo en la pila): se usa para ATRIBUIR en el registro quién causó una
         # pérdida de vida / daño ("cada rival pierde 2 [Fuente]").
         self._fx_source = None
+        # profundidad de efectos INLINE re-entrantes (ETB/muerte que disparan ETB/
+        # muerte...). Corta bucles patológicos de una carta mal modelada antes de que
+        # revienten la pila de Python ("maximum recursion depth exceeded").
+        self._fx_depth = 0
+        self._fx_max_depth = 60
         # decisión pendiente del humano (juego interactivo): el motor pausa un
         # efecto que requiere elegir (revelar, etc.) hasta resolve_choice().
         self.interactive_human = None
@@ -641,6 +654,19 @@ class Game:
         registro quién causó una pérdida de vida o daño. Vacío si no se conoce."""
         s = getattr(self, "_fx_source", None)
         return f" [{s}]" if s else ""
+
+    def _run_fx(self, label, fn):
+        """Corre un efecto INLINE (ETB / muerte / al dejar el campo) con tope de
+        re-entrancia. Si una carta mal modelada se auto-dispara en cadena, corta el
+        bucle y sigue, en vez de reventar la pila de Python (RecursionError)."""
+        if self._fx_depth >= self._fx_max_depth:
+            self.log(f"aviso: se cortó una cadena de efectos ({label}) por posible bucle")
+            return None
+        self._fx_depth += 1
+        try:
+            return fn()
+        finally:
+            self._fx_depth -= 1
 
     # -- logging ---------------------------------------------------------- #
     def log(self, msg: str):
@@ -1004,7 +1030,8 @@ class Game:
             prev = self._fx_source
             self._fx_source = card.name
             try:
-                card.on_etb(self, player, perm)
+                self._run_fx(f"ETB {card.name}",
+                             lambda: card.on_etb(self, player, perm))
             finally:
                 self._fx_source = prev
         self.emit("etb", player=player, perm=perm)
@@ -1044,7 +1071,8 @@ class Game:
             return
         ctrl.battlefield.remove(perm)
         if perm.card.on_leave:                # "cuando deja el campo" (muerte/exilio)
-            perm.card.on_leave(self, ctrl, perm)
+            self._run_fx(f"on_leave {perm.name}",
+                         lambda: perm.card.on_leave(self, ctrl, perm))
         if getattr(perm, "_blitz", False):    # blitz: su muerte roba una carta
             ctrl.draw(1, self)
             self.log(f"{ctrl.name} roba una carta (blitz de {perm.name})")
@@ -1052,7 +1080,8 @@ class Game:
         if perm.card.on_death:
             # on_death puede devolver True (persist/undying) para indicar que la
             # carta ya volvió al campo y NO debe ir al cementerio.
-            relocated = bool(perm.card.on_death(self, ctrl, perm))
+            relocated = bool(self._run_fx(f"on_death {perm.name}",
+                                          lambda: perm.card.on_death(self, ctrl, perm)))
         self.emit("death", player=ctrl, perm=perm)
         # disparo de muerte PROPIA: emit() escanea el campo y la carta ya no está,
         # así que su propio triggers["death"] (aristócratas "this creature or ...",

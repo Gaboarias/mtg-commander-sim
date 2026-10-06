@@ -7559,6 +7559,31 @@ def test_precon_monthly_update_diff_and_fallback():
     assert {p["code"] for p in served} == {"A", "B"}
 
 
+def test_inline_etb_loop_is_bounded_not_recursion_error():
+    # Regresión: una carta mal modelada que al entrar mete otra con el mismo ETB
+    # generaba "maximum recursion depth exceeded" y tiraba la partida. Ahora el tope
+    # de re-entrancia corta la cadena y el juego sigue.
+    from engine import Game, Player, Card
+    import cards
+    me = Player("me", [], cards.creature("cmd", "1", 1, 1))
+    op = Player("op", [], cards.creature("oc", "1", 1, 1))
+    g = Game([me, op], seed=1)
+    g.interactive_human = None
+
+    def make():
+        c = Card(name="Recursor", types={"creature"}, power=1, toughness=1)
+
+        def etb(game, ctrl, perm):
+            game.move_to_battlefield(make(), ctrl)   # mete otra -> ETB -> otra...
+        c.on_etb = etb
+        return c
+
+    g.move_to_battlefield(make(), me)                # no debe lanzar RecursionError
+    assert g._fx_depth == 0                           # la profundidad se restaura
+    assert len(me.battlefield) <= g._fx_max_depth + 2   # la cadena quedó acotada
+    assert any("cortó una cadena" in l for l in g.log_lines)
+
+
 def test_life_loss_log_names_the_source_card():
     # Al perder vida por un efecto (ETB/disparo), el registro nombra la carta que lo
     # causó ("cada rival pierde 2 [Fuente]"), para poder identificar la culpable.
