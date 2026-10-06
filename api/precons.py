@@ -26,6 +26,10 @@ class handler(BaseHTTPRequestHandler):
             load = qs.get("load", [None])[0]
             if load:
                 self._send(200, precon_to_text(load), cache="s-maxage=604800")
+            elif qs.get("refresh"):
+                # sincronización manual: ignora cachés y vuelve a MTGJSON
+                self._send(200, {"precons": list_precons(force=True)},
+                           cache="no-store")
             else:
                 self._send(200, {"precons": list_precons()})
         except Exception as exc:  # noqa: BLE001

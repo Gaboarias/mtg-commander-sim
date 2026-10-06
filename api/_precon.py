@@ -54,8 +54,12 @@ def _snapshot_precons():
         return []
 
 
-def list_precons():
+def list_precons(force=False):
+    """Índice de precons de Commander. `force=True` ignora la caché en memoria y
+    vuelve a consultar MTGJSON (lo usa el botón de sincronización manual)."""
     global _cache_index
+    if force:
+        _cache_index = None
     if _cache_index is not None:
         return _cache_index
     try:

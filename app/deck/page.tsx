@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   getProfile,
@@ -318,6 +318,8 @@ export default function DeckPage() {
   const [error, setError] = useState<string | null>(null);
   const [precons, setPrecons] = useState<Precon[]>([]);
   const [preconMsg, setPreconMsg] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [samples, setSamples] = useState<{ slug: string; name: string }[]>([]);
   const [profile, setProfileState] = useState("");
@@ -429,21 +431,31 @@ export default function DeckPage() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    fetch("/api/precons")
-      .then(async (r) => {
-        const raw = await r.text();
-        let d;
-        try {
-          d = JSON.parse(raw);
-        } catch {
-          throw new Error(`HTTP ${r.status}: ${raw.slice(0, 200)}`);
-        }
-        if (d.error) throw new Error(d.error);
-        setPrecons(d.precons || []);
-      })
-      .catch((e) => setPreconMsg(e instanceof Error ? e.message : String(e)));
-  }, []);
+  const loadPrecons = useCallback(async (force = false) => {
+    if (force) { setSyncing(true); setSyncMsg(null); }
+    try {
+      const r = await fetch(`/api/precons${force ? "?refresh=1" : ""}`);
+      const raw = await r.text();
+      let d;
+      try { d = JSON.parse(raw); } catch { throw new Error(`HTTP ${r.status}: ${raw.slice(0, 200)}`); }
+      if (d.error) throw new Error(d.error);
+      const before = precons.length;
+      const list: Precon[] = d.precons || [];
+      setPrecons(list);
+      if (force) {
+        const added = list.length - before;
+        setSyncMsg(added > 0 ? `Sincronizado: ${added} mazo(s) nuevo(s) (${list.length} en total).`
+                             : `Sincronizado: ${list.length} mazos, nada nuevo.`);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (force) setSyncMsg(`Error al sincronizar: ${msg}`); else setPreconMsg(msg);
+    } finally {
+      if (force) setSyncing(false);
+    }
+  }, [precons.length]);
+
+  useEffect(() => { loadPrecons(false); /* carga inicial */ }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     fetch("/api/samples")
@@ -1224,6 +1236,13 @@ export default function DeckPage() {
                 }}
               />
               <span className="muted" style={{ fontSize: ".8rem" }}>{preconFiltered.length} en el grid</span>
+              <button type="button" className="ghost" onClick={() => loadPrecons(true)}
+                disabled={syncing} aria-label="Sincronizar mazos precon"
+                title="Buscar precons nuevos en MTGJSON"
+                style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <Icon name="refresh" size={14} /> {syncing ? "Sincronizando…" : "Sincronizar mazos"}
+              </button>
+              {syncMsg && <span className="muted" style={{ fontSize: ".78rem" }}>{syncMsg}</span>}
             </div>
             {preconPick && (
               <div className="precon-pick">
@@ -1256,7 +1275,15 @@ export default function DeckPage() {
             </div>
           </div>
         ) : (
-          <p className="muted" style={{ marginBottom: 10 }}>{preconMsg || "cargando precons…"}</p>
+          <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <p className="muted" style={{ margin: 0 }}>{preconMsg || "cargando precons…"}</p>
+            <button type="button" className="ghost" onClick={() => loadPrecons(true)}
+              disabled={syncing} aria-label="Sincronizar mazos precon"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <Icon name="refresh" size={14} /> {syncing ? "Sincronizando…" : "Reintentar / sincronizar"}
+            </button>
+            {syncMsg && <span className="muted" style={{ fontSize: ".78rem" }}>{syncMsg}</span>}
+          </div>
         )}
         <textarea
           value={text}
