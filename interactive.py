@@ -53,7 +53,13 @@ def from_specs(specs, datamap=None, human_index=0, seed=0, level="intermedio"):
             deck, cmd = decks.build(s["key"])
             label = s.get("name") or cmd.name
         defs.append((label, deck, cmd))
-    return InteractiveGame(defs, human_index=human_index, seed=seed, level=level)
+    # mismo tope de turnos que la simulación (api/_sim.py): una partida de
+    # Commander puede ser larga, así que escalamos con la cantidad de mazos en
+    # vez de cortar a los 60 turnos (antes la partida jugable terminaba mucho
+    # antes que la simulación del mismo cruce).
+    max_turns = min(320, 40 + 40 * len(defs))
+    return InteractiveGame(defs, human_index=human_index, seed=seed, level=level,
+                           max_turns=max_turns)
 
 
 def _cost_str(card):
