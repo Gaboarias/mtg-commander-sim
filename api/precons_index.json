@@ -1,4 +1,1199 @@
 {
-  "updated": null,
-  "precons": []
+  "updated": "2026-10-06",
+  "precons": [
+    {
+      "code": "FDC",
+      "fileName": "WretchedRanks_FDC",
+      "name": "Wretched Ranks",
+      "releaseDate": "2026-10-02"
+    },
+    {
+      "code": "FDC",
+      "fileName": "TramplesaurusRex_FDC",
+      "name": "Tramplesaurus Rex",
+      "releaseDate": "2026-10-02"
+    },
+    {
+      "code": "FDC",
+      "fileName": "ReignOfDragons_FDC",
+      "name": "Reign of Dragons",
+      "releaseDate": "2026-10-02"
+    },
+    {
+      "code": "FRC",
+      "fileName": "MultiverseReforged_FRC",
+      "name": "Multiverse Reforged",
+      "releaseDate": "2026-10-02"
+    },
+    {
+      "code": "FDC",
+      "fileName": "KeenEngineering_FDC",
+      "name": "Keen Engineering",
+      "releaseDate": "2026-10-02"
+    },
+    {
+      "code": "FDC",
+      "fileName": "CallingAllAngels_FDC",
+      "name": "Calling All Angels",
+      "releaseDate": "2026-10-02"
+    },
+    {
+      "code": "SLD",
+      "fileName": "HatsuneMiku_SLD",
+      "name": "Hatsune Miku",
+      "releaseDate": "2026-08-10"
+    },
+    {
+      "code": "MSC",
+      "fileName": "WakandaForeverCollectorSEdition_MSC",
+      "name": "Wakanda Forever Collector's Edition",
+      "releaseDate": "2026-06-26"
+    },
+    {
+      "code": "MSC",
+      "fileName": "WakandaForever_MSC",
+      "name": "Wakanda Forever",
+      "releaseDate": "2026-06-26"
+    },
+    {
+      "code": "MSC",
+      "fileName": "TheFantasticFourCollectorSEdition_MSC",
+      "name": "The Fantastic Four Collector's Edition",
+      "releaseDate": "2026-06-26"
+    },
+    {
+      "code": "MSC",
+      "fileName": "TheFantasticFour_MSC",
+      "name": "The Fantastic Four",
+      "releaseDate": "2026-06-26"
+    },
+    {
+      "code": "MSC",
+      "fileName": "DoomPrevailsCollectorSEdition_MSC",
+      "name": "Doom Prevails Collector's Edition",
+      "releaseDate": "2026-06-26"
+    },
+    {
+      "code": "MSC",
+      "fileName": "DoomPrevails_MSC",
+      "name": "Doom Prevails",
+      "releaseDate": "2026-06-26"
+    },
+    {
+      "code": "MSC",
+      "fileName": "AvengersAssembleCollectorSEdition_MSC",
+      "name": "Avengers Assemble Collector's Edition",
+      "releaseDate": "2026-06-26"
+    },
+    {
+      "code": "MSC",
+      "fileName": "AvengersAssemble_MSC",
+      "name": "Avengers Assemble",
+      "releaseDate": "2026-06-26"
+    },
+    {
+      "code": "SLD",
+      "fileName": "GoblinStorm_SLD",
+      "name": "Goblin Storm",
+      "releaseDate": "2026-05-18"
+    },
+    {
+      "code": "SOC",
+      "fileName": "WitherbloomPestilence_SOC",
+      "name": "Witherbloom Pestilence",
+      "releaseDate": "2026-04-24"
+    },
+    {
+      "code": "SOC",
+      "fileName": "SilverquillInfluence_SOC",
+      "name": "Silverquill Influence",
+      "releaseDate": "2026-04-24"
+    },
+    {
+      "code": "SOC",
+      "fileName": "QuandrixUnlimited_SOC",
+      "name": "Quandrix Unlimited",
+      "releaseDate": "2026-04-24"
+    },
+    {
+      "code": "SOC",
+      "fileName": "PrismariArtistry_SOC",
+      "name": "Prismari Artistry",
+      "releaseDate": "2026-04-24"
+    },
+    {
+      "code": "SOC",
+      "fileName": "LoreholdSpirit_SOC",
+      "name": "Lorehold Spirit",
+      "releaseDate": "2026-04-24"
+    },
+    {
+      "code": "TMC",
+      "fileName": "TurtlePower_TMC",
+      "name": "Turtle Power!",
+      "releaseDate": "2026-03-06"
+    },
+    {
+      "code": "ECC",
+      "fileName": "DanceOfTheElements_ECC",
+      "name": "Dance of the Elements",
+      "releaseDate": "2026-01-23"
+    },
+    {
+      "code": "ECC",
+      "fileName": "BlightCurse_ECC",
+      "name": "Blight Curse",
+      "releaseDate": "2026-01-23"
+    },
+    {
+      "code": "EOC",
+      "fileName": "WorldShaper_EOC",
+      "name": "World Shaper",
+      "releaseDate": "2025-08-01"
+    },
+    {
+      "code": "EOC",
+      "fileName": "CounterIntelligence_EOC",
+      "name": "Counter Intelligence",
+      "releaseDate": "2025-08-01"
+    },
+    {
+      "code": "FIC",
+      "fileName": "ScionsSpellcraftCollectorSEditionFinalFantasyXiv_FIC",
+      "name": "Scions & Spellcraft Collector's Edition (FINAL FANTASY XIV)",
+      "releaseDate": "2025-06-13"
+    },
+    {
+      "code": "FIC",
+      "fileName": "ScionsSpellcraftFinalFantasyXiv_FIC",
+      "name": "Scions & Spellcraft (FINAL FANTASY XIV)",
+      "releaseDate": "2025-06-13"
+    },
+    {
+      "code": "FIC",
+      "fileName": "RevivalTranceCollectorSEditionFinalFantasyVi_FIC",
+      "name": "Revival Trance Collector's Edition (FINAL FANTASY VI)",
+      "releaseDate": "2025-06-13"
+    },
+    {
+      "code": "FIC",
+      "fileName": "RevivalTranceFinalFantasyVi_FIC",
+      "name": "Revival Trance (FINAL FANTASY VI)",
+      "releaseDate": "2025-06-13"
+    },
+    {
+      "code": "FIC",
+      "fileName": "LimitBreakCollectorSEditionFinalFantasyVii_FIC",
+      "name": "Limit Break Collector's Edition (FINAL FANTASY VII)",
+      "releaseDate": "2025-06-13"
+    },
+    {
+      "code": "FIC",
+      "fileName": "LimitBreakFinalFantasyVii_FIC",
+      "name": "Limit Break (FINAL FANTASY VII)",
+      "releaseDate": "2025-06-13"
+    },
+    {
+      "code": "FIC",
+      "fileName": "CounterBlitzCollectorSEditionFinalFantasyX_FIC",
+      "name": "Counter Blitz Collector's Edition (FINAL FANTASY X)",
+      "releaseDate": "2025-06-13"
+    },
+    {
+      "code": "FIC",
+      "fileName": "CounterBlitzFinalFantasyX_FIC",
+      "name": "Counter Blitz (FINAL FANTASY X)",
+      "releaseDate": "2025-06-13"
+    },
+    {
+      "code": "SLD",
+      "fileName": "EveryoneSInvited_SLD",
+      "name": "Everyone's Invited!",
+      "releaseDate": "2025-05-12"
+    },
+    {
+      "code": "TDC",
+      "fileName": "TemurRoar_TDC",
+      "name": "Temur Roar",
+      "releaseDate": "2025-04-11"
+    },
+    {
+      "code": "TDC",
+      "fileName": "SultaiArisen_TDC",
+      "name": "Sultai Arisen",
+      "releaseDate": "2025-04-11"
+    },
+    {
+      "code": "TDC",
+      "fileName": "MarduSurge_TDC",
+      "name": "Mardu Surge",
+      "releaseDate": "2025-04-11"
+    },
+    {
+      "code": "TDC",
+      "fileName": "JeskaiStriker_TDC",
+      "name": "Jeskai Striker",
+      "releaseDate": "2025-04-11"
+    },
+    {
+      "code": "TDC",
+      "fileName": "AbzanArmor_TDC",
+      "name": "Abzan Armor",
+      "releaseDate": "2025-04-11"
+    },
+    {
+      "code": "DRC",
+      "fileName": "LivingEnergy_DRC",
+      "name": "Living Energy",
+      "releaseDate": "2025-02-14"
+    },
+    {
+      "code": "DRC",
+      "fileName": "EternalMight_DRC",
+      "name": "Eternal Might",
+      "releaseDate": "2025-02-14"
+    },
+    {
+      "code": "SLD",
+      "fileName": "20WaysToWin_SLD",
+      "name": "20 Ways to Win",
+      "releaseDate": "2024-12-04"
+    },
+    {
+      "code": "DSC",
+      "fileName": "MiracleWorker_DSC",
+      "name": "Miracle Worker",
+      "releaseDate": "2024-09-27"
+    },
+    {
+      "code": "DSC",
+      "fileName": "JumpScare_DSC",
+      "name": "Jump Scare!",
+      "releaseDate": "2024-09-27"
+    },
+    {
+      "code": "DSC",
+      "fileName": "EndlessPunishment_DSC",
+      "name": "Endless Punishment",
+      "releaseDate": "2024-09-27"
+    },
+    {
+      "code": "DSC",
+      "fileName": "DeathToll_DSC",
+      "name": "Death Toll",
+      "releaseDate": "2024-09-27"
+    },
+    {
+      "code": "BLC",
+      "fileName": "SquirreledAway_BLC",
+      "name": "Squirreled Away",
+      "releaseDate": "2024-08-02"
+    },
+    {
+      "code": "BLC",
+      "fileName": "PeaceOffering_BLC",
+      "name": "Peace Offering",
+      "releaseDate": "2024-08-02"
+    },
+    {
+      "code": "BLC",
+      "fileName": "FamilyMatters_BLC",
+      "name": "Family Matters",
+      "releaseDate": "2024-08-02"
+    },
+    {
+      "code": "BLC",
+      "fileName": "AnimatedArmy_BLC",
+      "name": "Animated Army",
+      "releaseDate": "2024-08-02"
+    },
+    {
+      "code": "M3C",
+      "fileName": "TrickyTerrainCollectorSEdition_M3C",
+      "name": "Tricky Terrain Collector's Edition",
+      "releaseDate": "2024-06-14"
+    },
+    {
+      "code": "M3C",
+      "fileName": "TrickyTerrain_M3C",
+      "name": "Tricky Terrain",
+      "releaseDate": "2024-06-14"
+    },
+    {
+      "code": "M3C",
+      "fileName": "GraveyardOverdriveCollectorSEdition_M3C",
+      "name": "Graveyard Overdrive Collector's Edition",
+      "releaseDate": "2024-06-14"
+    },
+    {
+      "code": "M3C",
+      "fileName": "GraveyardOverdrive_M3C",
+      "name": "Graveyard Overdrive",
+      "releaseDate": "2024-06-14"
+    },
+    {
+      "code": "M3C",
+      "fileName": "EldraziIncursionCollectorSEdition_M3C",
+      "name": "Eldrazi Incursion Collector's Edition",
+      "releaseDate": "2024-06-14"
+    },
+    {
+      "code": "M3C",
+      "fileName": "EldraziIncursion_M3C",
+      "name": "Eldrazi Incursion",
+      "releaseDate": "2024-06-14"
+    },
+    {
+      "code": "M3C",
+      "fileName": "CreativeEnergyCollectorSEdition_M3C",
+      "name": "Creative Energy Collector's Edition",
+      "releaseDate": "2024-06-14"
+    },
+    {
+      "code": "M3C",
+      "fileName": "CreativeEnergy_M3C",
+      "name": "Creative Energy",
+      "releaseDate": "2024-06-14"
+    },
+    {
+      "code": "OTC",
+      "fileName": "QuickDraw_OTC",
+      "name": "Quick Draw",
+      "releaseDate": "2024-04-19"
+    },
+    {
+      "code": "OTC",
+      "fileName": "MostWanted_OTC",
+      "name": "Most Wanted",
+      "releaseDate": "2024-04-19"
+    },
+    {
+      "code": "OTC",
+      "fileName": "GrandLarceny_OTC",
+      "name": "Grand Larceny",
+      "releaseDate": "2024-04-19"
+    },
+    {
+      "code": "OTC",
+      "fileName": "DesertBloom_OTC",
+      "name": "Desert Bloom",
+      "releaseDate": "2024-04-19"
+    },
+    {
+      "code": "PIP",
+      "fileName": "ScrappySurvivors_PIP",
+      "name": "Scrappy Survivors",
+      "releaseDate": "2024-03-08"
+    },
+    {
+      "code": "PIP",
+      "fileName": "Science_PIP",
+      "name": "Science!",
+      "releaseDate": "2024-03-08"
+    },
+    {
+      "code": "PIP",
+      "fileName": "MutantMenace_PIP",
+      "name": "Mutant Menace",
+      "releaseDate": "2024-03-08"
+    },
+    {
+      "code": "PIP",
+      "fileName": "HailCaesar_PIP",
+      "name": "Hail, Caesar",
+      "releaseDate": "2024-03-08"
+    },
+    {
+      "code": "MKC",
+      "fileName": "RevenantRecon_MKC",
+      "name": "Revenant Recon",
+      "releaseDate": "2024-02-09"
+    },
+    {
+      "code": "MKC",
+      "fileName": "DeepClueSea_MKC",
+      "name": "Deep Clue Sea",
+      "releaseDate": "2024-02-09"
+    },
+    {
+      "code": "MKC",
+      "fileName": "DeadlyDisguise_MKC",
+      "name": "Deadly Disguise",
+      "releaseDate": "2024-02-09"
+    },
+    {
+      "code": "MKC",
+      "fileName": "BlameGame_MKC",
+      "name": "Blame Game",
+      "releaseDate": "2024-02-09"
+    },
+    {
+      "code": "SLD",
+      "fileName": "RainingCatsAndDogs_SLD",
+      "name": "Raining Cats and Dogs",
+      "releaseDate": "2024-01-22"
+    },
+    {
+      "code": "LCC",
+      "fileName": "VelociRampTor_LCC",
+      "name": "Veloci-Ramp-Tor",
+      "releaseDate": "2023-11-17"
+    },
+    {
+      "code": "LCC",
+      "fileName": "ExplorersOfTheDeep_LCC",
+      "name": "Explorers of the Deep",
+      "releaseDate": "2023-11-17"
+    },
+    {
+      "code": "LCC",
+      "fileName": "BloodRites_LCC",
+      "name": "Blood Rites",
+      "releaseDate": "2023-11-17"
+    },
+    {
+      "code": "LCC",
+      "fileName": "AhoyMateys_LCC",
+      "name": "Ahoy Mateys",
+      "releaseDate": "2023-11-17"
+    },
+    {
+      "code": "WHO",
+      "fileName": "TimeyWimey_WHO",
+      "name": "Timey-Wimey",
+      "releaseDate": "2023-10-13"
+    },
+    {
+      "code": "WHO",
+      "fileName": "ParadoxPower_WHO",
+      "name": "Paradox Power",
+      "releaseDate": "2023-10-13"
+    },
+    {
+      "code": "WHO",
+      "fileName": "MastersOfEvil_WHO",
+      "name": "Masters of Evil",
+      "releaseDate": "2023-10-13"
+    },
+    {
+      "code": "WHO",
+      "fileName": "BlastFromThePast_WHO",
+      "name": "Blast from the Past",
+      "releaseDate": "2023-10-13"
+    },
+    {
+      "code": "WOC",
+      "fileName": "VirtueAndValor_WOC",
+      "name": "Virtue and Valor",
+      "releaseDate": "2023-09-08"
+    },
+    {
+      "code": "WOC",
+      "fileName": "FaeDominion_WOC",
+      "name": "Fae Dominion",
+      "releaseDate": "2023-09-08"
+    },
+    {
+      "code": "SLD",
+      "fileName": "AngelsTheyReJustLikeUsButCoolerAndWithWings_SLD",
+      "name": "Angels: They're Just Like Us but Cooler and with Wings",
+      "releaseDate": "2023-08-14"
+    },
+    {
+      "code": "CMM",
+      "fileName": "SliverSwarm_CMM",
+      "name": "Sliver Swarm",
+      "releaseDate": "2023-08-04"
+    },
+    {
+      "code": "CMM",
+      "fileName": "PlaneswalkerParty_CMM",
+      "name": "Planeswalker Party",
+      "releaseDate": "2023-08-04"
+    },
+    {
+      "code": "CMM",
+      "fileName": "EnduringEnchantments_CMM",
+      "name": "Enduring Enchantments",
+      "releaseDate": "2023-08-04"
+    },
+    {
+      "code": "CMM",
+      "fileName": "EldraziUnbound_CMM",
+      "name": "Eldrazi Unbound",
+      "releaseDate": "2023-08-04"
+    },
+    {
+      "code": "LTC",
+      "fileName": "TheHostsOfMordor_LTC",
+      "name": "The Hosts of Mordor",
+      "releaseDate": "2023-06-23"
+    },
+    {
+      "code": "LTC",
+      "fileName": "RidersOfRohan_LTC",
+      "name": "Riders of Rohan",
+      "releaseDate": "2023-06-23"
+    },
+    {
+      "code": "LTC",
+      "fileName": "FoodAndFellowship_LTC",
+      "name": "Food and Fellowship",
+      "releaseDate": "2023-06-23"
+    },
+    {
+      "code": "LTC",
+      "fileName": "ElvenCouncil_LTC",
+      "name": "Elven Council",
+      "releaseDate": "2023-06-23"
+    },
+    {
+      "code": "SLD",
+      "fileName": "FromCuteToBrute_SLD",
+      "name": "From Cute to Brute",
+      "releaseDate": "2023-05-08"
+    },
+    {
+      "code": "MOC",
+      "fileName": "TinkerTime_MOC",
+      "name": "Tinker Time",
+      "releaseDate": "2023-04-21"
+    },
+    {
+      "code": "MOC",
+      "fileName": "GrowingThreat_MOC",
+      "name": "Growing Threat",
+      "releaseDate": "2023-04-21"
+    },
+    {
+      "code": "MOC",
+      "fileName": "DivineConvocation_MOC",
+      "name": "Divine Convocation",
+      "releaseDate": "2023-04-21"
+    },
+    {
+      "code": "MOC",
+      "fileName": "CavalryCharge_MOC",
+      "name": "Cavalry Charge",
+      "releaseDate": "2023-04-21"
+    },
+    {
+      "code": "MOC",
+      "fileName": "CallForBackup_MOC",
+      "name": "Call for Backup",
+      "releaseDate": "2023-04-21"
+    },
+    {
+      "code": "ONC",
+      "fileName": "RebellionRising_ONC",
+      "name": "Rebellion Rising",
+      "releaseDate": "2023-02-10"
+    },
+    {
+      "code": "ONC",
+      "fileName": "CorruptingInfluence_ONC",
+      "name": "Corrupting Influence",
+      "releaseDate": "2023-02-10"
+    },
+    {
+      "code": "SCD",
+      "fileName": "TokenTriumph_SCD",
+      "name": "Token Triumph",
+      "releaseDate": "2022-12-02"
+    },
+    {
+      "code": "SCD",
+      "fileName": "GraveDanger_SCD",
+      "name": "Grave Danger",
+      "releaseDate": "2022-12-02"
+    },
+    {
+      "code": "SCD",
+      "fileName": "FirstFlight_SCD",
+      "name": "First Flight",
+      "releaseDate": "2022-12-02"
+    },
+    {
+      "code": "SCD",
+      "fileName": "DraconicDestruction_SCD",
+      "name": "Draconic Destruction",
+      "releaseDate": "2022-12-02"
+    },
+    {
+      "code": "SCD",
+      "fileName": "ChaosIncarnate_SCD",
+      "name": "Chaos Incarnate",
+      "releaseDate": "2022-12-02"
+    },
+    {
+      "code": "BRC",
+      "fileName": "UrzaSIronAlliance_BRC",
+      "name": "Urza's Iron Alliance",
+      "releaseDate": "2022-11-18"
+    },
+    {
+      "code": "BRC",
+      "fileName": "MishraSBurnishedBanner_BRC",
+      "name": "Mishra's Burnished Banner",
+      "releaseDate": "2022-11-18"
+    },
+    {
+      "code": "40K",
+      "fileName": "TyranidSwarmCollectorSEdition_40K",
+      "name": "Tyranid Swarm Collector's Edition",
+      "releaseDate": "2022-10-07"
+    },
+    {
+      "code": "40K",
+      "fileName": "TyranidSwarm_40K",
+      "name": "Tyranid Swarm",
+      "releaseDate": "2022-10-07"
+    },
+    {
+      "code": "40K",
+      "fileName": "TheRuinousPowersCollectorSEdition_40K",
+      "name": "The Ruinous Powers Collector's Edition",
+      "releaseDate": "2022-10-07"
+    },
+    {
+      "code": "40K",
+      "fileName": "TheRuinousPowers_40K",
+      "name": "The Ruinous Powers",
+      "releaseDate": "2022-10-07"
+    },
+    {
+      "code": "40K",
+      "fileName": "NecronDynastiesCollectorSEdition_40K",
+      "name": "Necron Dynasties Collector's Edition",
+      "releaseDate": "2022-10-07"
+    },
+    {
+      "code": "40K",
+      "fileName": "NecronDynasties_40K",
+      "name": "Necron Dynasties",
+      "releaseDate": "2022-10-07"
+    },
+    {
+      "code": "40K",
+      "fileName": "ForcesOfTheImperiumCollectorSEdition_40K",
+      "name": "Forces of the Imperium Collector's Edition",
+      "releaseDate": "2022-10-07"
+    },
+    {
+      "code": "40K",
+      "fileName": "ForcesOfTheImperium_40K",
+      "name": "Forces of the Imperium",
+      "releaseDate": "2022-10-07"
+    },
+    {
+      "code": "DMC",
+      "fileName": "Painbow_DMC",
+      "name": "Painbow",
+      "releaseDate": "2022-09-09"
+    },
+    {
+      "code": "DMC",
+      "fileName": "LegendsLegacy_DMC",
+      "name": "Legends' Legacy",
+      "releaseDate": "2022-09-09"
+    },
+    {
+      "code": "CLB",
+      "fileName": "PartyTime_CLB",
+      "name": "Party Time",
+      "releaseDate": "2022-06-10"
+    },
+    {
+      "code": "CLB",
+      "fileName": "MindFlayarrrs_CLB",
+      "name": "Mind Flayarrrs",
+      "releaseDate": "2022-06-10"
+    },
+    {
+      "code": "CLB",
+      "fileName": "ExitFromExile_CLB",
+      "name": "Exit from Exile",
+      "releaseDate": "2022-06-10"
+    },
+    {
+      "code": "CLB",
+      "fileName": "DraconicDissent_CLB",
+      "name": "Draconic Dissent",
+      "releaseDate": "2022-06-10"
+    },
+    {
+      "code": "NCC",
+      "fileName": "RiveteersRampage_NCC",
+      "name": "Riveteers Rampage",
+      "releaseDate": "2022-04-29"
+    },
+    {
+      "code": "NCC",
+      "fileName": "ObscuraOperation_NCC",
+      "name": "Obscura Operation",
+      "releaseDate": "2022-04-29"
+    },
+    {
+      "code": "NCC",
+      "fileName": "MaestrosMassacre_NCC",
+      "name": "Maestros Massacre",
+      "releaseDate": "2022-04-29"
+    },
+    {
+      "code": "NCC",
+      "fileName": "CabarettiCacophony_NCC",
+      "name": "Cabaretti Cacophony",
+      "releaseDate": "2022-04-29"
+    },
+    {
+      "code": "NCC",
+      "fileName": "BedeckedBrokers_NCC",
+      "name": "Bedecked Brokers",
+      "releaseDate": "2022-04-29"
+    },
+    {
+      "code": "SLD",
+      "fileName": "HeadsIWinTailsYouLose_SLD",
+      "name": "Heads I Win, Tails You Lose",
+      "releaseDate": "2022-04-22"
+    },
+    {
+      "code": "NEC",
+      "fileName": "UpgradesUnleashed_NEC",
+      "name": "Upgrades Unleashed",
+      "releaseDate": "2022-02-18"
+    },
+    {
+      "code": "NEC",
+      "fileName": "BuckleUp_NEC",
+      "name": "Buckle Up",
+      "releaseDate": "2022-02-18"
+    },
+    {
+      "code": "VOC",
+      "fileName": "VampiricBloodline_VOC",
+      "name": "Vampiric Bloodline",
+      "releaseDate": "2021-11-19"
+    },
+    {
+      "code": "VOC",
+      "fileName": "SpiritSquadron_VOC",
+      "name": "Spirit Squadron",
+      "releaseDate": "2021-11-19"
+    },
+    {
+      "code": "MIC",
+      "fileName": "UndeadUnleashed_MIC",
+      "name": "Undead Unleashed",
+      "releaseDate": "2021-09-24"
+    },
+    {
+      "code": "MIC",
+      "fileName": "CovenCounters_MIC",
+      "name": "Coven Counters",
+      "releaseDate": "2021-09-24"
+    },
+    {
+      "code": "AFC",
+      "fileName": "PlanarPortal_AFC",
+      "name": "Planar Portal",
+      "releaseDate": "2021-07-23"
+    },
+    {
+      "code": "AFC",
+      "fileName": "DungeonsOfDeath_AFC",
+      "name": "Dungeons of Death",
+      "releaseDate": "2021-07-23"
+    },
+    {
+      "code": "AFC",
+      "fileName": "DraconicRage_AFC",
+      "name": "Draconic Rage",
+      "releaseDate": "2021-07-23"
+    },
+    {
+      "code": "AFC",
+      "fileName": "AuraOfCourage_AFC",
+      "name": "Aura of Courage",
+      "releaseDate": "2021-07-23"
+    },
+    {
+      "code": "C21",
+      "fileName": "WitherbloomWitchcraft_C21",
+      "name": "Witherbloom Witchcraft",
+      "releaseDate": "2021-04-23"
+    },
+    {
+      "code": "C21",
+      "fileName": "SilverquillStatement_C21",
+      "name": "Silverquill Statement",
+      "releaseDate": "2021-04-23"
+    },
+    {
+      "code": "C21",
+      "fileName": "QuantumQuandrix_C21",
+      "name": "Quantum Quandrix",
+      "releaseDate": "2021-04-23"
+    },
+    {
+      "code": "C21",
+      "fileName": "PrismariPerformance_C21",
+      "name": "Prismari Performance",
+      "releaseDate": "2021-04-23"
+    },
+    {
+      "code": "C21",
+      "fileName": "LoreholdLegacies_C21",
+      "name": "Lorehold Legacies",
+      "releaseDate": "2021-04-23"
+    },
+    {
+      "code": "KHC",
+      "fileName": "PhantomPremonition_KHC",
+      "name": "Phantom Premonition",
+      "releaseDate": "2021-02-05"
+    },
+    {
+      "code": "KHC",
+      "fileName": "ElvenEmpire_KHC",
+      "name": "Elven Empire",
+      "releaseDate": "2021-02-05"
+    },
+    {
+      "code": "CMR",
+      "fileName": "ReapTheTides_CMR",
+      "name": "Reap the Tides",
+      "releaseDate": "2020-11-20"
+    },
+    {
+      "code": "CMR",
+      "fileName": "ArmForBattle_CMR",
+      "name": "Arm for Battle",
+      "releaseDate": "2020-11-20"
+    },
+    {
+      "code": "ZNC",
+      "fileName": "SneakAttack_ZNC",
+      "name": "Sneak Attack",
+      "releaseDate": "2020-09-25"
+    },
+    {
+      "code": "ZNC",
+      "fileName": "LandSWrath_ZNC",
+      "name": "Land's Wrath",
+      "releaseDate": "2020-09-25"
+    },
+    {
+      "code": "C20",
+      "fileName": "TimelessWisdom_C20",
+      "name": "Timeless Wisdom",
+      "releaseDate": "2020-04-17"
+    },
+    {
+      "code": "C20",
+      "fileName": "SymbioticSwarm_C20",
+      "name": "Symbiotic Swarm",
+      "releaseDate": "2020-04-17"
+    },
+    {
+      "code": "C20",
+      "fileName": "RuthlessRegiment_C20",
+      "name": "Ruthless Regiment",
+      "releaseDate": "2020-04-17"
+    },
+    {
+      "code": "C20",
+      "fileName": "EnhancedEvolution_C20",
+      "name": "Enhanced Evolution",
+      "releaseDate": "2020-04-17"
+    },
+    {
+      "code": "C20",
+      "fileName": "ArcaneMaelstrom_C20",
+      "name": "Arcane Maelstrom",
+      "releaseDate": "2020-04-17"
+    },
+    {
+      "code": "C19",
+      "fileName": "PrimalGenesis_C19",
+      "name": "Primal Genesis",
+      "releaseDate": "2019-08-23"
+    },
+    {
+      "code": "C19",
+      "fileName": "MysticIntellect_C19",
+      "name": "Mystic Intellect",
+      "releaseDate": "2019-08-23"
+    },
+    {
+      "code": "C19",
+      "fileName": "MercilessRage_C19",
+      "name": "Merciless Rage",
+      "releaseDate": "2019-08-23"
+    },
+    {
+      "code": "C19",
+      "fileName": "FacelessMenace_C19",
+      "name": "Faceless Menace",
+      "releaseDate": "2019-08-23"
+    },
+    {
+      "code": "C18",
+      "fileName": "SubjectiveReality_C18",
+      "name": "Subjective Reality",
+      "releaseDate": "2018-08-10"
+    },
+    {
+      "code": "C18",
+      "fileName": "NatureSVengeance_C18",
+      "name": "Nature's Vengeance",
+      "releaseDate": "2018-08-10"
+    },
+    {
+      "code": "C18",
+      "fileName": "ExquisiteInvention_C18",
+      "name": "Exquisite Invention",
+      "releaseDate": "2018-08-10"
+    },
+    {
+      "code": "C18",
+      "fileName": "AdaptiveEnchantment_C18",
+      "name": "Adaptive Enchantment",
+      "releaseDate": "2018-08-10"
+    },
+    {
+      "code": "CM2",
+      "fileName": "WadeIntoBattle_CM2",
+      "name": "Wade into Battle",
+      "releaseDate": "2018-06-08"
+    },
+    {
+      "code": "CM2",
+      "fileName": "DevourForPower_CM2",
+      "name": "Devour for Power",
+      "releaseDate": "2018-06-08"
+    },
+    {
+      "code": "CM2",
+      "fileName": "BuiltFromScratch_CM2",
+      "name": "Built From Scratch",
+      "releaseDate": "2018-06-08"
+    },
+    {
+      "code": "CM2",
+      "fileName": "BreedLethality_CM2",
+      "name": "Breed Lethality",
+      "releaseDate": "2018-06-08"
+    },
+    {
+      "code": "C17",
+      "fileName": "VampiricBloodlust_C17",
+      "name": "Vampiric Bloodlust",
+      "releaseDate": "2017-08-25"
+    },
+    {
+      "code": "C17",
+      "fileName": "FelineFerocity_C17",
+      "name": "Feline Ferocity",
+      "releaseDate": "2017-08-25"
+    },
+    {
+      "code": "C17",
+      "fileName": "DraconicDomination_C17",
+      "name": "Draconic Domination",
+      "releaseDate": "2017-08-25"
+    },
+    {
+      "code": "C17",
+      "fileName": "ArcaneWizardry_C17",
+      "name": "Arcane Wizardry",
+      "releaseDate": "2017-08-25"
+    },
+    {
+      "code": "CMA",
+      "fileName": "PlunderTheGraves_CMA",
+      "name": "Plunder the Graves",
+      "releaseDate": "2017-06-09"
+    },
+    {
+      "code": "CMA",
+      "fileName": "HeavenlyInferno_CMA",
+      "name": "Heavenly Inferno",
+      "releaseDate": "2017-06-09"
+    },
+    {
+      "code": "CMA",
+      "fileName": "GuidedByNature_CMA",
+      "name": "Guided by Nature",
+      "releaseDate": "2017-06-09"
+    },
+    {
+      "code": "CMA",
+      "fileName": "EvasiveManeuvers_CMA",
+      "name": "Evasive Maneuvers",
+      "releaseDate": "2017-06-09"
+    },
+    {
+      "code": "C16",
+      "fileName": "StalwartUnity_C16",
+      "name": "Stalwart Unity",
+      "releaseDate": "2016-11-11"
+    },
+    {
+      "code": "C16",
+      "fileName": "OpenHostility_C16",
+      "name": "Open Hostility",
+      "releaseDate": "2016-11-11"
+    },
+    {
+      "code": "C16",
+      "fileName": "InventSuperiority_C16",
+      "name": "Invent Superiority",
+      "releaseDate": "2016-11-11"
+    },
+    {
+      "code": "C16",
+      "fileName": "EntropicUprising_C16",
+      "name": "Entropic Uprising",
+      "releaseDate": "2016-11-11"
+    },
+    {
+      "code": "C16",
+      "fileName": "BreedLethality_C16",
+      "name": "Breed Lethality",
+      "releaseDate": "2016-11-11"
+    },
+    {
+      "code": "C15",
+      "fileName": "WadeIntoBattle_C15",
+      "name": "Wade into Battle",
+      "releaseDate": "2015-11-13"
+    },
+    {
+      "code": "C15",
+      "fileName": "SwellTheHost_C15",
+      "name": "Swell the Host",
+      "releaseDate": "2015-11-13"
+    },
+    {
+      "code": "C15",
+      "fileName": "SeizeControl_C15",
+      "name": "Seize Control",
+      "releaseDate": "2015-11-13"
+    },
+    {
+      "code": "C15",
+      "fileName": "PlunderTheGraves_C15",
+      "name": "Plunder the Graves",
+      "releaseDate": "2015-11-13"
+    },
+    {
+      "code": "C15",
+      "fileName": "CallTheSpirits_C15",
+      "name": "Call the Spirits",
+      "releaseDate": "2015-11-13"
+    },
+    {
+      "code": "C14",
+      "fileName": "SwornToDarkness_C14",
+      "name": "Sworn To Darkness",
+      "releaseDate": "2014-11-07"
+    },
+    {
+      "code": "C14",
+      "fileName": "PeerThroughTime_C14",
+      "name": "Peer Through Time",
+      "releaseDate": "2014-11-07"
+    },
+    {
+      "code": "C14",
+      "fileName": "GuidedByNature_C14",
+      "name": "Guided By Nature",
+      "releaseDate": "2014-11-07"
+    },
+    {
+      "code": "C14",
+      "fileName": "ForgedInStone_C14",
+      "name": "Forged In Stone",
+      "releaseDate": "2014-11-07"
+    },
+    {
+      "code": "C14",
+      "fileName": "BuiltFromScratch_C14",
+      "name": "Built From Scratch",
+      "releaseDate": "2014-11-07"
+    },
+    {
+      "code": "C13",
+      "fileName": "PowerHungry_C13",
+      "name": "Power Hungry",
+      "releaseDate": "2013-11-01"
+    },
+    {
+      "code": "C13",
+      "fileName": "NatureOfTheBeast_C13",
+      "name": "Nature of the Beast",
+      "releaseDate": "2013-11-01"
+    },
+    {
+      "code": "C13",
+      "fileName": "MindSeize_C13",
+      "name": "Mind Seize",
+      "releaseDate": "2013-11-01"
+    },
+    {
+      "code": "C13",
+      "fileName": "EvasiveManeuvers_C13",
+      "name": "Evasive Maneuvers",
+      "releaseDate": "2013-11-01"
+    },
+    {
+      "code": "C13",
+      "fileName": "EternalBargain_C13",
+      "name": "Eternal Bargain",
+      "releaseDate": "2013-11-01"
+    },
+    {
+      "code": "CMD",
+      "fileName": "PoliticalPuppets_CMD",
+      "name": "Political Puppets",
+      "releaseDate": "2011-06-17"
+    },
+    {
+      "code": "CMD",
+      "fileName": "MirrorMastery_CMD",
+      "name": "Mirror Mastery",
+      "releaseDate": "2011-06-17"
+    },
+    {
+      "code": "CMD",
+      "fileName": "HeavenlyInferno_CMD",
+      "name": "Heavenly Inferno",
+      "releaseDate": "2011-06-17"
+    },
+    {
+      "code": "CMD",
+      "fileName": "DevourForPower_CMD",
+      "name": "Devour for Power",
+      "releaseDate": "2011-06-17"
+    },
+    {
+      "code": "CMD",
+      "fileName": "Counterpunch_CMD",
+      "name": "Counterpunch",
+      "releaseDate": "2011-06-17"
+    },
+    {
+      "code": "TD0",
+      "fileName": "EnchantressRubinia_TD0",
+      "name": "Enchantress Rubinia",
+      "releaseDate": "2009-08-26"
+    },
+    {
+      "code": "TD0",
+      "fileName": "DeathdancerXira_TD0",
+      "name": "Deathdancer Xira",
+      "releaseDate": "2009-08-26"
+    }
+  ]
 }
