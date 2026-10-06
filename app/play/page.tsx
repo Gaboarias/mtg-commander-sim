@@ -105,6 +105,7 @@ type GameState = {
   choice: Choice | null; mulligan: Mulligan | null; log: string[];
   ability_feed?: AbilityEvent[];
   opp_turns?: OppTurn[];
+  card_briefs?: Record<string, CardDetail>;
 };
 type AbilityEvent = { turn: number; controller: string | null; card: string; kind: string };
 type OppTurn = { turn: number; player: string; lines: string[] };
@@ -1372,16 +1373,26 @@ export default function Play() {
               <p className="muted">Vacío.</p>
             ) : (
               <div className="zone-grid">
-                {zoneView.names.map((n, k) => (
+                {zoneView.names.map((n, k) => {
+                  const br = state?.card_briefs?.[n];
+                  return (
                   <button key={k} type="button" className="zone-card"
-                    onClick={() => setInspect({ name: n } as Inspect)}
+                    onClick={() => setInspect({
+                      name: n,
+                      cost: br?.cost,
+                      types: br?.type ? br.type.split(" — ")[0].split(" ").map((t) => t.toLowerCase()) : undefined,
+                      power: br?.pt ? Number(br.pt.split("/")[0]) : null,
+                      toughness: br?.pt ? Number(br.pt.split("/")[1]) : null,
+                      keywords: br?.keywords,
+                    } as Inspect)}
                     title={n}>
                     {art[n]
                       ? <span className="zone-thumb" style={{ backgroundImage: `url(${art[n]})` }} />
                       : <span className="zone-thumb ph"><span>{n}</span></span>}
                     <span className="zone-name">{n}</span>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1403,6 +1414,10 @@ export default function Play() {
           : (info[inspect.name]?.type || (inspect.types || []).join(" "));
         const showArt = !tok && art[inspect.name];
         const oracle = tok ? "" : info[inspect.name]?.oracle;
+        // coste de maná: lo que trae la inspección, o el resumen del motor (p. ej.
+        // al revisar una carta del cementerio/exilio, que llega solo como nombre).
+        const briefCost = state?.card_briefs?.[inspect.name]?.cost;
+        const costText = inspect.cost || (tok ? "" : briefCost);
         return (
         <div className="inspect-back" onClick={() => setInspect(null)}>
           <div className="inspect" onClick={(e) => e.stopPropagation()}>
@@ -1412,7 +1427,7 @@ export default function Play() {
             ) : (
               <div className="inspect-art ph"><span>{inspect.name}</span></div>
             )}
-            <h3>{inspect.name} {inspect.cost ? <span className="muted">{inspect.cost}</span> : null}</h3>
+            <h3>{inspect.name} {costText ? <span className="muted">{costText}</span> : null}</h3>
             <p className="muted" style={{ margin: "2px 0" }}>
               {typeText}
               {inspect.power != null ? ` · ${inspect.power}/${inspect.toughness}` : ""}

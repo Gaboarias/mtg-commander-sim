@@ -1609,7 +1609,28 @@ class InteractiveGame:
             "opp_turns": self.opp_turns,
             # feed de habilidades activadas/disparadas (para avisar en pantalla)
             "ability_feed": self.g.ability_events[-10:],
+            # datos (coste/tipo/P-T/keywords) de las cartas en cementerio/exilio/
+            # comando, por nombre: así al revisar una carta del cementerio también se
+            # ve cuánto maná cuesta (el motor manda solo el nombre de esas zonas).
+            "card_briefs": self._zone_briefs(),
         }
+
+    def _zone_briefs(self):
+        """Mapa nombre -> resumen (coste, tipo, P/T, keywords) de las cartas en las
+        zonas que al serializarse van solo como nombre (cementerio, exilio, comando,
+        impulso). Permite que el modal de inspección muestre el coste de maná."""
+        out = {}
+        for pl in self.players:
+            zones = (pl.graveyard, pl.exile,
+                     getattr(pl, "exile_play", ()) or (),
+                     getattr(pl, "impulse", ()) or (),
+                     getattr(pl, "command", ()) or ())
+            for zone in zones:
+                for c in zone:
+                    nm = getattr(c, "name", None)
+                    if nm and nm not in out:
+                        out[nm] = self._card_brief(c)
+        return out
 
     def _card_brief(self, c):
         """Resumen de una carta para los modales de decisión (scry/revelar):

@@ -7533,6 +7533,25 @@ def test_ai_waits_for_ally_before_casting_omo():
     assert any(p.card is omo for p in me.battlefield)        # con aliado, la lanza
 
 
+def test_state_exposes_graveyard_card_costs():
+    # Al revisar una carta del cementerio/exilio el modal debe poder mostrar el
+    # coste de maná: el estado expone card_briefs (nombre -> coste/tipo/P-T/kw).
+    import interactive, cards, decks
+    defs = [("Tu",) + decks.build("lorehold"), ("R",) + decks.build("tricky")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    hu.graveyard.append(cards.creature("Serra Angel", "3WW", 4, 4, kw=("flying",)))
+    st = ig.state()
+    briefs = st["card_briefs"]
+    assert "Serra Angel" in briefs
+    assert briefs["Serra Angel"]["cost"] == "3WW"       # muestra el maná que cuesta
+    assert briefs["Serra Angel"]["pt"] == "4/4"
+    # el comandante (zona de comando) también trae su coste
+    cmd = hu.commander_card
+    assert cmd.name in briefs and briefs[cmd.name]["cost"]
+
+
 def test_md_presets_no_land_flood_and_tricky_unified():
     # Regresión: los presets .md inundaban de tierras (tricky-terrain 56,
     # lorehold-spirit 64) porque el relleno a 99 era todo básicas. Ahora delega en
