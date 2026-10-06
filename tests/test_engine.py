@@ -2184,26 +2184,28 @@ def test_planeswalker_loyalty_and_minus_four():
     b = _mk_player("b")
     g = _game([a, b])
     pw = g.move_to_battlefield(cards.QuintoriusPlaneswalker(), a)
-    assert pw.counters["loyalty"] == 4          # lealtad inicial
+    assert pw.counters["loyalty"] == 3          # lealtad inicial real (vulnerable)
     # +1 crea Espiritu y sube lealtad
     assert g.activate_loyalty(pw, 0) is True
-    assert pw.counters["loyalty"] == 5
+    assert pw.counters["loyalty"] == 4
     assert any(p.name == "Spirit" for p in a.battlefield)
     # una sola activacion por turno
     assert g.activate_loyalty(pw, 1) is False
-    # nuevo turno: se puede activar el -4
+    # nuevo turno: se puede activar el -4 (lealtad 4 → 0, el PW muere)
     pw.activated_this_turn = False
     b_life = b.life
     assert g.activate_loyalty(pw, 1) is True     # el -4 existe y se activa
     assert b.life == b_life - 4                   # 4 a cada oponente
-    assert pw.counters["loyalty"] == 1
+    g.sba()
+    assert pw.counters.get("loyalty", 0) == 0
+    assert pw not in a.battlefield                # a lealtad 0 el planeswalker muere
 
 
 def test_combat_can_attack_planeswalker():
     a = _mk_player("a")
     b = _mk_player("b")
     g = _game([a, b])
-    pw = g.move_to_battlefield(cards.QuintoriusPlaneswalker(), b)  # lealtad 4
+    pw = g.move_to_battlefield(cards.QuintoriusPlaneswalker(), b)  # lealtad 3
     atk1 = g.move_to_battlefield(creature("Uno", "1R", 3, 3), a)
     atk2 = g.move_to_battlefield(creature("Dos", "1R", 2, 2), a)
     for p in (atk1, atk2):
@@ -2211,7 +2213,7 @@ def test_combat_can_attack_planeswalker():
     b_life = b.life
     g.combat(a)  # la politica manda ~mitad al jugador, ~mitad al planeswalker
     # el planeswalker recibio dano (perdio lealtad) y el jugador tambien
-    assert pw.counters["loyalty"] < 4
+    assert pw.counters["loyalty"] < 3
     assert b.life < b_life
 
 
@@ -7480,6 +7482,68 @@ def test_forced_sacrifice_prompt_names_the_forcing_opponent():
     assert "Quintorius" not in pc["prompt"]          # no es el nombre del que sacrifica
     assert op.name in pc["prompt"]                   # sí nombra a quien lo fuerza
     assert "forzado" in pc["prompt"].lower()
+
+
+def test_removal_targets_engine_and_commander_over_bigger_body():
+    # El removal elige por AMENAZA (motor de valor / comandante), no solo por poder:
+    # un motor 2/2 pesa más que un vanilla 4/4, y el comandante más que todo.
+    import policy
+    from engine import Game, Player
+    from cards import creature
+    pol = policy.Policy("avanzado")
+    me = Player("me", [], creature("cmd", "1", 1, 1), policy=pol)
+    opp = Player("opp", [], creature("ocmd", "1", 1, 1), policy=policy.Policy("avanzado"))
+    g = Game([me, opp], seed=1)
+    vanilla = g.move_to_battlefield(creature("Vanilla", "4", 4, 4), opp)
+    engine = g.move_to_battlefield(creature("Motor", "2G", 2, 2, tags=("engine",)), opp)
+    assert pol._threat_value(engine) > pol._threat_value(vanilla)
+
+    class _Removal:
+        target_spec = "opp_creature"
+        target_count = 1
+    assert pol.choose_targets(g, me, _Removal())[0] is engine
+
+    # el comandante rival es el objetivo de mayor valor, por encima de un 4/4
+    cmdr = g.move_to_battlefield(opp.commander_card, opp)
+    assert pol._threat_value(cmdr) > pol._threat_value(vanilla)
+
+
+def test_ai_waits_for_ally_before_casting_omo():
+    # La IA no lanza a Omo (needs_ally) sin otra criatura en mesa antes del turno 7:
+    # no desperdicia su disparo de entrada (contador en una criatura objetivo).
+    import decks, policy
+    from engine import Game, Player
+    from cards import creature
+    _deck, omo = decks.build("tricky")
+    assert getattr(omo, "needs_ally", False) is True
+    pol = policy.Policy("avanzado")
+    me = Player("me", [], omo, policy=pol)
+    opp = Player("opp", [], creature("x", "1", 1, 1), policy=policy.Policy("avanzado"))
+    g = Game([me, opp], seed=1)
+    me.command = [omo]
+    for _ in range(5):
+        g.move_to_battlefield(land("Forest", ["G"], basic=True), me)
+    for _ in range(3):
+        g.move_to_battlefield(land("Island", ["U"], basic=True), me)
+    g.turn = 2
+    pol._maybe_cast_commander(g, me)
+    assert not any(p.card is omo for p in me.battlefield)   # esperó: sin aliado
+    g.move_to_battlefield(creature("Aliado", "1", 1, 1), me)
+    pol._maybe_cast_commander(g, me)
+    assert any(p.card is omo for p in me.battlefield)        # con aliado, la lanza
+
+
+def test_tricky_deck_has_real_lands_and_protection():
+    # Item: la lista de Tricky usa tierras REALES (no inventadas) y trae protección.
+    import decks
+    deck, cmd = decks.build("tricky")
+    assert cmd.name == "Omo, Queen of Vesuva"
+    names = {c.name for c in deck}
+    for real_land in ("Command Tower", "Breeding Pool", "Hinterland Harbor",
+                      "Yavimaya Coast", "Simic Growth Chamber"):
+        assert real_land in names, real_land
+    assert "Heroic Intervention" in names                    # protección pedida
+    assert sum(1 for c in deck if c.is_land()) <= 40          # sin inundación
 
 
 # -- partida completa corre sin excepciones -------------------------------- #

@@ -363,17 +363,43 @@ class Policy:
         scored.sort(reverse=True)
         return sorted(i for _s, i in scored[:pick])
 
+    def _engine_value(self, perm):
+        """Bonus de 'motor': una criatura que genera ventaja repetida (robo, fichas,
+        contadores, habilidades activadas, disparos recurrentes) es una amenaza aunque
+        su cuerpo sea chico. Así la remoción apunta al MOTOR, no solo al cuerpo grande."""
+        card = getattr(perm, "card", None)
+        if card is None:
+            return 0
+        tags = getattr(card, "tags", set()) or set()
+        v = 0
+        if tags & {"engine", "draw", "ramp", "anthem"}:
+            v += 8                                  # motor/valor explícito
+        if getattr(card, "token_double", False) or getattr(card, "damage_double", None):
+            v += 6                                  # dobladores: motores muy fuertes
+        if getattr(card, "counter_modifier", None) is not None:
+            v += 4                                  # dobladores de contadores
+        # habilidades activadas o disparos recurrentes = ventaja repetible
+        if getattr(card, "activated_abilities", ()) :
+            v += 4
+        trig = getattr(card, "triggers", None) or {}
+        if any(k in trig for k in ("upkeep", "attack", "creature_enters",
+                                   "end_step", "cast", "death")):
+            v += 4
+        return v
+
     def _threat_value(self, perm):
         """Cuán peligrosa es una criatura rival como objetivo de remoción: cuerpo,
-        evasión/keywords, y si es el comandante (matarlo es muy valioso)."""
+        evasión/keywords, si es un MOTOR de valor, y si es el comandante (matarlo es
+        lo más valioso) — no solo fuerza bruta."""
         v = perm.power * 2 + perm.toughness
         for k in ("flying", "trample", "deathtouch", "double_strike", "menace",
                   "lifelink", "unblockable"):
             if perm.has(k):
                 v += 3
+        v += self._engine_value(perm)       # el motor pesa aunque el cuerpo sea chico
         try:
             if perm.card is perm.controller.commander_card:
-                v += 9              # el comandante es el objetivo de mayor valor
+                v += 12             # el comandante es el objetivo de mayor valor
         except AttributeError:
             pass
         return v
@@ -504,8 +530,18 @@ class Policy:
         if cmd not in me.command or cmd.cost is None:
             return
         pay_cost = Cost(generic=cmd.cost.generic + me.cmdr_tax, pips=cmd.cost.pips)
-        if me.can_pay(pay_cost):
-            game.cast(me, cmd, from_command=True)
+        if not me.can_pay(pay_cost):
+            return
+        # comandantes que QUIEREN otra criatura en mesa para rendir (p. ej. Omo, que
+        # al entrar pone un contador 'everything' en una criatura objetivo, u otros
+        # que buffan/targetean aliados): no malgastar su disparo de entrada sin blanco.
+        # Se espera a tener otra criatura; pero no para siempre: pasado el turno 6
+        # (o si ya tenemos buen maná) se lanza igual para no quedarse sin comandante.
+        if self.level != "novato" and getattr(cmd, "needs_ally", False):
+            others = [p for p in me.creatures()]
+            if not others and game.turn < 7:
+                return
+        game.cast(me, cmd, from_command=True)
 
     def _castable_spells(self, game, me):
         return [c for c in list(me.hand)
@@ -758,9 +794,18 @@ class Policy:
             o_pws = [perm for perm in o.battlefield if "planeswalker" in perm.card.types]
             k = local.get(id(o), 0)
             local[id(o)] = k + 1
-            # alternar dentro de cada rival: parte del daño a su planeswalker (presión
-            # mixta jugador/planeswalker) sin dejar al jugador sin recibir nada
-            if o_pws and self.level != "novato" and k % 2 == 1:
+            # planeswalker rival PELIGROSO (lealtad alta, cerca de su definitiva):
+            # lo hacemos VULNERABLE concentrándole ataques para bajarlo/matarlo antes
+            # de que ultee, en vez de solo alternar la mitad.
+            danger_pw = None
+            if o_pws and self.level != "novato":
+                hot = [pw for pw in o_pws if pw.counters.get("loyalty", 0) >= 5]
+                if hot:
+                    danger_pw = max(hot, key=lambda pw: pw.counters.get("loyalty", 0))
+            if danger_pw is not None:
+                result.append((atk, danger_pw))
+            elif o_pws and self.level != "novato" and k % 2 == 1:
+                # presión mixta jugador/planeswalker cuando el PW no es urgente
                 result.append((atk, o_pws[(k // 2) % len(o_pws)]))
             else:
                 result.append((atk, o))

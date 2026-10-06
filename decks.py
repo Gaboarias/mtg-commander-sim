@@ -460,27 +460,105 @@ def _omo_commander():
                         "creature with an everything counter on it is every creature type."),
         "keywords": []})
     c.tags = set(c.tags) | {"engine"}
+    # al entrar pone un contador 'everything' en una criatura objetivo: la IA no la
+    # lanza sin otra criatura en mesa (no desperdicia el disparo de entrada).
+    c.needs_ally = True
     return c
 
 
+def _heroic_intervention():
+    """Heroic Intervention — {1}{G} instantáneo: tus permanentes ganan indestructible
+    y resistencia a objetivos hasta el fin del turno (protección ante wipes/removal)."""
+    from engine import Card, parse_cost
+
+    def protect(game, ctrl, *_a):
+        for pm in list(ctrl.battlefield):
+            pm.temp_keywords |= {"indestructible", "hexproof"}
+        game.log(f"{ctrl.name}: sus permanentes ganan indestructible y hexproof")
+    return Card("Heroic Intervention", {"instant"}, parse_cost("1G"),
+                on_cast_resolve=protect, tags={"protection"}, color_id={G})
+
+
+def _gu_ramp(name, cost, oracle, cmc):
+    """Hechizo de rampeo real (busca tierra(s) al campo) vía cardsdb."""
+    return cardsdb.build_card_from_data({
+        "name": name, "mana_cost": cost, "cmc": cmc, "type_line": "Sorcery",
+        "power": None, "toughness": None, "oracle_text": oracle, "keywords": []})
+
+
+def _gu_removal(name, cost):
+    """Removal verde/azul tipo Pongify/Beast Within: destruye el objetivo."""
+    from engine import Card, parse_cost
+    return Card(name, {"instant"}, parse_cost(cost),
+                on_cast_resolve=cards.destroy_target, tags={"removal"},
+                color_id={G, U}, target_spec="opp_creature")
+
+
 def tricky():
+    """Tricky Terrain (Omo, Queen of Vesuva) — lista alineada al precon real:
+    tierras REALES (nada inventado), motores de contadores, rampeo y protección
+    (Heroic Intervention). Ver presets/tricky-terrain.md."""
     commander = _omo_commander()
     d = []
+    # motores de contadores / valor (cartas reales ya implementadas)
     d.append(cards.Managorger())
     d.append(cards.Kalonian())
     d.append(cards.SimicAscendancy())
     d.append(cards.BranchingEvolution())
     d.append(cards.HardenedScales())
-    d.append(creature("Sylvan Advocate", "1G", 2, 1, color_id=(G,)))
-    d.append(creature("Sea Gate Oracle", "1U", 1, 3, color_id=(U,)))
-    d.append(creature("Kavu Titan", "3G", 3, 3, kw=("trample",), color_id=(G,)))
-    d.append(creature("Frost Titan", "4U", 5, 5, color_id=(U,)))
-    d.append(rock("Simic Signet", "2", [G, U]))
+    # criaturas reales del precon (cuerpos + motores + ramp)
+    d.append(creature("Managorger Hydra", "2G", 1, 1, kw=("trample",), color_id=(G,)))
+    d.append(creature("Forgotten Ancient", "3G", 0, 3, color_id=(G,), tags=("engine",)))
+    d.append(creature("Evolution Sage", "3G", 2, 3, color_id=(G,), tags=("engine",)))
+    d.append(creature("Vorel of the Hull Clade", "1GU", 1, 4, legendary=True,
+                      color_id=(G, U), tags=("engine",)))
+    d.append(creature("Biogenic Ooze", "3GG", 2, 2, color_id=(G,), tags=("engine",)))
+    d.append(creature("Zegana, Utopian Speaker", "4GU", 4, 4, legendary=True,
+                      color_id=(G, U), tags=("draw",)))
+    d.append(creature("Hydroid Krasis", "1GU", 2, 2, kw=("flying",), color_id=(G, U),
+                      tags=("draw",)))
+    d.append(creature("Trygon Predator", "1GU", 2, 3, kw=("flying",), color_id=(G, U),
+                      tags=("removal",)))
+    d.append(creature("Fathom Mage", "2GU", 1, 1, color_id=(G, U), tags=("draw",)))
+    d.append(creature("Sakura-Tribe Elder", "1G", 1, 1, color_id=(G,), tags=("ramp",)))
+    d.append(creature("Eternal Witness", "1GG", 2, 1, color_id=(G,)))
+    d.append(creature("Solemn Simulacrum", "4", 2, 2, color_id=(C,), tags=("ramp",)))
+    d.append(creature("Herd Baloth", "3G", 4, 4, color_id=(G,)))
+    d.append(creature("Bloated Contaminator", "3G", 4, 4, kw=("trample",), color_id=(G,)))
+    # rampeo real
     d.append(rock("Sol Ring", "1", [C, C]))
-    d.append(cards.Counterspell())        # P2.1 instantaneo de respuesta
+    d.append(rock("Arcane Signet", "2", [G, U]))
+    d.append(rock("Simic Signet", "2", [G, U]))
+    d.append(_gu_ramp("Cultivate", "2G",
+                      "Search your library for a basic land card, put it onto the "
+                      "battlefield tapped, and the rest into your hand.", 3))
+    d.append(_gu_ramp("Kodama's Reach", "2G",
+                      "Search your library for a basic land card and put it onto the "
+                      "battlefield tapped.", 3))
+    d.append(_gu_ramp("Farseek", "1G",
+                      "Search your library for a basic land and put it onto the "
+                      "battlefield tapped.", 2))
+    # robo / interacción / PROTECCIÓN
+    d.append(cards.Counterspell())
     d.append(_tricky_draw())
+    d.append(_heroic_intervention())      # protección pedida (indestructible+hexproof)
+    d.append(_gu_removal("Beast Within", "2G"))
+    d.append(_gu_removal("Pongify", "U"))
+    d.append(_gu_removal("Rapid Hybridization", "U"))
+    # TIERRAS REALES del precon (ya no inventadas): el resto lo completa _fill con
+    # básicas hasta un ratio jugable (~37 tierras totales).
+    d.append(land("Command Tower", [G, U]))
     d.append(land("Breeding Pool", [G, U]))
+    d.append(land("Hinterland Harbor", [G, U]))
+    d.append(land("Botanical Sanctum", [G, U]))
+    d.append(land("Yavimaya Coast", [G, U]))
+    d.append(land("Barkchannel Pathway", [G, U]))
     d.append(land("Temple of Mystery", [G, U], tapped=True))
+    d.append(land("Woodland Stream", [G, U], tapped=True))
+    d.append(land("Simic Growth Chamber", [G, U], tapped=True))
+    d.append(land("Rejuvenating Springs", [G, U], tapped=True))
+    d.append(land("Lumbering Falls", [G, U], tapped=True))
+    d.append(land("Terramorphic Expanse", [C], tapped=True))
     return _fill(d, commander.identity()), commander
 
 

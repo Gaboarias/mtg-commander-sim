@@ -405,7 +405,9 @@ def QuintoriusPlaneswalker():
             game.deal_damage(perm, o, 4)
         game.log(f"{ctrl.name}: PW -4 hace 4 a cada oponente")
 
-    return planeswalker("Quintorius Kand", "3RW", 4,
+    # lealtad inicial real (3): un planeswalker VULNERABLE — un par de ataques o un
+    # golpe de daño lo bajan antes de que llegue a su definitiva.
+    return planeswalker("Quintorius Kand", "3RW", 3,
                         ((+1, plus), (-4, ultimate)), (R, W))
 
 
