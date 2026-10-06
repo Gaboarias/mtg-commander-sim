@@ -7533,6 +7533,32 @@ def test_ai_waits_for_ally_before_casting_omo():
     assert any(p.card is omo for p in me.battlefield)        # con aliado, la lanza
 
 
+def test_precon_monthly_update_diff_and_fallback():
+    # La revisión mensual detecta precons nuevos y el /api/precons usa la
+    # instantánea guardada como respaldo cuando MTGJSON no responde.
+    import os, sys, json, tempfile
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
+    import update_precons as up
+    import _precon
+
+    old = [{"code": "A", "fileName": "fa", "name": "Alpha", "releaseDate": "2024-01-01"}]
+    new = [{"code": "B", "fileName": "fb", "name": "Beta", "releaseDate": "2025-07-01"},
+           {"code": "A", "fileName": "fa", "name": "Alpha", "releaseDate": "2024-01-01"}]
+    assert [p["code"] for p in up.diff_new(old, new)] == ["B"]   # solo el nuevo
+
+    snap = os.path.join(tempfile.mkdtemp(), "precons_index.json")
+    up.write_snapshot(new, snap)
+    assert len(up.load_snapshot(snap)["precons"]) == 2
+
+    # respaldo: con la red caída, list_precons sirve la instantánea
+    _precon._SNAPSHOT = snap
+    _precon._cache_index = None
+    _precon._get = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("net down"))
+    served = _precon.list_precons()
+    assert {p["code"] for p in served} == {"A", "B"}
+
+
 def test_life_loss_log_names_the_source_card():
     # Al perder vida por un efecto (ETB/disparo), el registro nombra la carta que lo
     # causó ("cada rival pierde 2 [Fuente]"), para poder identificar la culpable.

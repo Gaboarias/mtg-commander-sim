@@ -1,0 +1,45 @@
+name: Revisión mensual de precons
+
+# Revisa MTGJSON una vez al mes, actualiza la instantánea del índice de precons
+# (api/precons_index.json) + baja las decklists nuevas, y abre un PR si hay cambios.
+# También se puede disparar a mano desde la pestaña Actions.
+on:
+  schedule:
+    - cron: "17 6 1 * *"      # día 1 de cada mes, 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-precons:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Actualizar índice de precons + bajar decklists nuevas
+        run: python3 scripts/update_precons.py --download
+
+      - name: Abrir PR con los cambios
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "Precons: revisión mensual (nuevos mazos de Commander)"
+          branch: precons/monthly-update
+          delete-branch: true
+          title: "Precons: revisión mensual"
+          body: |
+            Revisión mensual automática de precons de Commander (MTGJSON).
+
+            - Índice actualizado: `api/precons_index.json` (respaldo offline de `/api/precons`).
+            - Decklists nuevas en `data/precons/decks/`.
+            - Resumen de novedades en `data/precons/NEW.md`.
+
+            Generado por `.github/workflows/precons-monthly.yml`.
+          add-paths: |
+            api/precons_index.json
+            data/precons/**

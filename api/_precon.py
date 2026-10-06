@@ -39,11 +39,34 @@ def _get(url, retries=2):
     raise RuntimeError(f"fallo de red en {url}: {last}")
 
 
+_SNAPSHOT = __file__.rsplit("/", 1)[0] + "/precons_index.json"
+
+
+def _snapshot_precons():
+    """Respaldo offline del índice (lo mantiene scripts/update_precons.py). Se sirve
+    cuando MTGJSON no responde, para que /api/precons no quede caído."""
+    try:
+        with open(_SNAPSHOT, encoding="utf-8") as fh:
+            data = json.load(fh)
+        precons = data.get("precons") if isinstance(data, dict) else None
+        return precons if isinstance(precons, list) else []
+    except (OSError, ValueError):
+        return []
+
+
 def list_precons():
     global _cache_index
     if _cache_index is not None:
         return _cache_index
-    data = _get(_INDEX).get("data", [])
+    try:
+        data = _get(_INDEX).get("data", [])
+    except RuntimeError:
+        # MTGJSON caído: servir la última instantánea guardada (revisión mensual).
+        snap = _snapshot_precons()
+        if snap:
+            _cache_index = snap
+            return snap
+        raise
     out = []
     for d in data:
         if "commander" in (d.get("type", "").lower()):
