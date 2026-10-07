@@ -7559,6 +7559,34 @@ def test_precon_monthly_update_diff_and_fallback():
     assert {p["code"] for p in served} == {"A", "B"}
 
 
+def test_card_build_recursion_falls_back_to_vanilla_not_crash():
+    # Regresión: cargar un mazo (p. ej. un precon nuevo) con una carta cuyo parseo
+    # recursa daba "maximum recursion depth exceeded" y tiraba toda la carga. Ahora
+    # esa carta cae a vainilla (datos reales, sin efecto) y el mazo se arma igual.
+    import cardsdb, decklist
+    real = {
+        "Cmdr": {"name": "Cmdr", "type_line": "Legendary Creature", "mana_cost": "{1}{G}",
+                 "power": "2", "toughness": "2", "color_identity": ["G"]},
+        "Bomba": {"name": "Bomba", "type_line": "Creature", "mana_cost": "{3}{G}",
+                  "power": "5", "toughness": "5", "color_identity": ["G"]},
+    }
+    orig = cardsdb._build_card_from_data_impl
+    try:
+        def boom(data):
+            if data.get("name") == "Bomba":
+                return cardsdb.build_card_from_data(data)   # recursa a propósito
+            return orig(data)
+        cardsdb._build_card_from_data_impl = boom
+        parsed = {"commander": "Cmdr", "cards": [(1, "Bomba"), (1, "Forest")]}
+        deck, cmd, _rep = decklist.build_deck(parsed, fetch=lambda n: real.get(n))
+    finally:
+        cardsdb._build_card_from_data_impl = orig
+    assert len(deck) == 99 and cmd.name == "Cmdr"
+    bomba = next(c for c in deck if c.name == "Bomba")
+    assert bomba.power == 5 and bomba.toughness == 5    # vainilla con stats reales
+    assert cardsdb._build_depth == 0                     # la profundidad se restaura
+
+
 def test_build_test_deck_adds_in_color_combos_and_upgrades():
     # El "deck de prueba" suma la pieza de combo que falta y staples de mejora, SOLO
     # en la identidad del comandante (descarta lo off-color), y arma una decklist.

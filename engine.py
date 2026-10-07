@@ -20,8 +20,18 @@ import carddesc as _carddesc     # descripción legible de habilidades (puro)
 # interactivo, parseo de cartas modales/clon anidadas, cadenas de disparos) superan
 # el tope por defecto de Python (1000) y reventaban con "maximum recursion depth
 # exceeded". 3000 frames (~3 MB de pila) es holgado y seguro en CPython.
-if sys.getrecursionlimit() < 3000:
-    sys.setrecursionlimit(3000)
+# OJO: bajo Pyodide (WASM, navegador) la pila es MUCHO más chica; subir el límite ahí
+# puede provocar un desborde FATAL (no capturable) en vez de un RecursionError. Por
+# eso solo lo subimos fuera de Pyodide; en el navegador confiamos en los topes de
+# re-entrancia (_fx_depth, _BUILD_DEPTH) y en los fallbacks a carta vainilla.
+_IS_PYODIDE = (sys.platform == "emscripten") or ("pyodide" in sys.modules)
+if not _IS_PYODIDE:
+    if sys.getrecursionlimit() < 3000:
+        sys.setrecursionlimit(3000)
+elif sys.getrecursionlimit() > 1200:
+    # en el navegador, un tope más bajo garantiza un RecursionError CAPTURABLE
+    # (los builders de carta lo atrapan y caen a vainilla) antes de desbordar WASM.
+    sys.setrecursionlimit(1200)
 
 # --------------------------------------------------------------------------- #
 # Constantes

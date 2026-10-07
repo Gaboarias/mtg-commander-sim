@@ -4308,9 +4308,56 @@ def _generic_amount_effect(oracle: str):
     return abilities.effect_from_text(t, oracle)
 
 
+def _vanilla_from_data(data: dict) -> Card:
+    """Carta 'vainilla' con los datos base (nombre, tipos, coste, P/T, keywords) y
+    SIN parsear efectos. Se usa como RED DE SEGURIDAD si el parseo completo de una
+    carta falla o recursa demasiado, para que cargar el mazo no reviente por una sola
+    carta rara."""
+    data = _prefer_front_face(data)
+    types, supertypes, subtypes = parse_type_line(data.get("type_line", ""))
+    color_id = {_COLOR_MAP[c] for c in data.get("color_identity", []) if c in _COLOR_MAP}
+    kws = {k.lower().replace(" ", "_") for k in data.get("keywords", [])} & KEYWORDS
+    cost = None
+    if "land" not in types:
+        cost = parse_cost(mana_cost_to_str(data.get("mana_cost", "")))
+    if "land" in types:                       # una tierra vainilla debe producir maná
+        prod = [_COLOR_MAP[c] for c in (data.get("produced_mana") or [])
+                if c in _COLOR_MAP] or (list(color_id) or [C])
+        return Card(name=data.get("name", "?"), types=types or {"land"},
+                    supertypes=supertypes, subtypes=subtypes, color_id=color_id,
+                    produces=(lambda perm, pl, _o={c: 1 for c in prod}: dict(_o)))
+    return Card(name=data.get("name", "?"), types=types or {"creature"}, cost=cost,
+                power=_int_or_zero(data.get("power")),
+                toughness=_int_or_zero(data.get("toughness")),
+                keywords=kws, supertypes=supertypes, subtypes=subtypes,
+                color_id=color_id,
+                x_spell=("{X}" in (data.get("mana_cost", "") or "").upper()))
+
+
+_build_depth = 0
+_BUILD_MAX = 8          # anidación legítima máxima (p. ej. cara trasera de un DFC = 1)
+
+
 def build_card_from_data(data: dict) -> Card:
     """Construye una Card desde un dict tipo Scryfall (name, mana_cost,
-    type_line, power, toughness, keywords, color_identity)."""
+    type_line, power, toughness, keywords, color_identity).
+
+    Protegido contra recursión: si el parseo de efectos se anida demasiado o falla,
+    cae a una carta vainilla (datos reales, sin efecto) en vez de reventar la carga
+    del mazo con "maximum recursion depth exceeded"."""
+    global _build_depth
+    if _build_depth > _BUILD_MAX:
+        return _vanilla_from_data(data)
+    _build_depth += 1
+    try:
+        return _build_card_from_data_impl(data)
+    except RecursionError:
+        return _vanilla_from_data(data)
+    finally:
+        _build_depth -= 1
+
+
+def _build_card_from_data_impl(data: dict) -> Card:
     data = _prefer_front_face(data)
     name = data.get("name", "?")
     types, supertypes, subtypes = parse_type_line(data.get("type_line", ""))
@@ -5512,7 +5559,15 @@ def resolve(name: str, fetch=None) -> Card:
     if fetch is not None:
         data = fetch(name)
         if data:
-            return build_card_from_data(data)
+            try:
+                return build_card_from_data(data)
+            except Exception:            # noqa: BLE001  (red de seguridad total)
+                # el parseo completo falló: no tirar la carga del mazo por una carta;
+                # devolvemos sus datos reales como vainilla.
+                try:
+                    return _vanilla_from_data(data)
+                except Exception:        # noqa: BLE001
+                    return None
     return None
 
 
