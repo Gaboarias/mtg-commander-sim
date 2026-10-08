@@ -4927,6 +4927,7 @@ def test_look_at_top_ability_shows_a_view():
     g = Game([me, op], seed=1)
     g.interactive_human = me
     pm = g.move_to_battlefield(seer, me)
+    pm.summoning_sick = False                 # {T} de criatura: ya lleva un turno
     assert g.activate_ability(pm, 0) is True
     pc = g.pending_choice
     assert pc is not None and pc["kind"] == "scry"       # hay una vista pendiente
@@ -6905,6 +6906,7 @@ def test_vorel_doubles_counters():
         "oracle_text": "{T}: For each kind of counter on target artifact, creature, or "
                        "land you control, double the number of those counters on it."})
     pm = g.move_to_battlefield(v, me)
+    pm.summoning_sick = False                 # {T} de criatura: ya lleva un turno
     dude = g.move_to_battlefield(cards.creature("Bicho", "1G", 2, 2), me)
     g.add_counters(dude, "+1/+1", 3)
     with contextlib.redirect_stdout(io.StringIO()):
@@ -8322,3 +8324,239 @@ def test_bot_does_not_cast_ability_counter_on_a_spell():
     g.stack.append(top)
     assert not op.policy.respond(g, op, top)
     assert stifle in op.hand
+
+
+def _duel2(n=2, names=("me", "op", "p3", "p4")):
+    import cards
+    from engine import Game, Player
+    ps = [Player(names[i], [cards.creature(f"L{i}{k}", "1", 1, 1) for k in range(30)],
+                 cards.creature(f"Cmd{i}", "2", 2, 2, legendary=True)) for i in range(n)]
+    g = Game(ps, seed=1); g.interactive_human = None
+    for p in ps:
+        p.hand = []
+    return (g, *ps)
+
+
+def test_preset_sol_ring_makes_two_mana():
+    # Regresión: rock("Sol Ring", "1", [C, C]) colapsaba a {C:1} en los presets.
+    import decks, cards
+    sr = next(c for c in decks.build("lorehold")[0] if c.name == "Sol Ring")
+    assert sr.produces(None, None) == {"C": 2}
+    signet = cards.rock("Boros Signet", "2", ["R", "W"])
+    assert signet.produces(None, None) == {"R": 1, "W": 1}      # sigue siendo UNO
+
+
+def test_cleanup_removes_damage_from_every_permanent():
+    # Regresión: end_turn limpiaba el daño solo del jugador activo.
+    import cards
+    g, me, op = _duel2()
+    blk = g.move_to_battlefield(cards.creature("Blk", "2", 3, 3), op)
+    blk.damage = 2
+    pumped = g.move_to_battlefield(cards.creature("Pump", "1", 1, 1), op)
+    pumped.temp_pt = [3, 3]
+    pumped.damage = 3                       # sobrevivió al combate gracias al +3/+3
+    g.active_index = 0
+    g.end_turn(me)
+    g.sba()
+    assert blk.damage == 0 and pumped in op.battlefield and pumped.damage == 0
+
+
+def test_tap_ability_cannot_pay_with_itself_and_summoning_sickness():
+    import cards, cardsdb
+    g, me, op = _duel2()
+    ms = cardsdb.build_card_from_data({
+        "name": "Mind Stone", "mana_cost": "{2}", "type_line": "Artifact",
+        "oracle_text": "{T}: Add {C}.\n{1}, {T}, Sacrifice Mind Stone: Draw a card.",
+        "color_identity": []})
+    pm = g.move_to_battlefield(ms, me); g.resolve_stack()
+    idx = next(i for i, a in enumerate(ms.activated_abilities) if a.get("tap"))
+    assert g.activate_ability(pm, idx) is False         # sola no puede pagarse a sí misma
+    g.move_to_battlefield(cards.land("Wastes", ["C"], basic=True), me)
+    assert g.activate_ability(pm, idx) is True
+    # criatura de maná / habilidad {T} recién invocada: no hasta el próximo turno
+    elf = cards.creature("Elf", "G", 1, 1)
+    elf.produces = lambda perm, pl: {"G": 1}
+    pe = g.move_to_battlefield(elf, me)
+    assert pe not in me.mana_sources()
+    pe.summoning_sick = False
+    assert pe in me.mana_sources()
+
+
+def test_mana_assignment_backtracks_on_dual_lands():
+    # Regresión: el voraz daba la Plateau a W y R quedaba sin fuente.
+    import cards
+    from engine import Cost
+    g, me, op = _duel2()
+    g.move_to_battlefield(cards.land("Plateau", ["W", "R"]), me)
+    g.move_to_battlefield(cards.land("Tundra", ["W", "U"]), me)
+    assert me.can_pay(Cost(0, ("W", "R")))
+    assert me.pay(Cost(0, ("W", "R"))) and all(p.tapped for p in me.lands())
+    assert not me.can_pay(Cost(0, ("R",)))
+
+
+def test_additional_costs_validated_and_paid_after_mana():
+    import cards
+    from engine import Cost
+    g, me, op = _duel2()
+    fling = cards.creature("Fling", "1R", 0, 0)
+    fling.types = {"instant"}
+    hits = []
+    fling.on_cast_resolve = lambda game, ctrl, t: hits.append(1)
+    fling.additional_cost = {"sacrifice": True}
+    me.hand = [fling]
+    g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), me)
+    g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), me)
+    assert g.cast(me, fling) is False and fling in me.hand     # sin víctima: no se lanza
+    victim = g.move_to_battlefield(cards.creature("Goblin", "R", 1, 1), me)
+    assert g.cast(me, fling) is not False
+    g.resolve_stack()
+    assert hits == [1] and victim not in me.battlefield
+    assert all(p.tapped for p in me.lands())                  # el maná SÍ se pagó
+    # descarte como coste: nunca la propia carta
+    disc = cards.creature("Discarder", "R", 0, 0)
+    disc.types = {"sorcery"}
+    disc.additional_cost = {"discard": 1}
+    for p in me.lands():
+        p.tapped = False
+    me.hand = [disc]
+    assert g.cast(me, disc) is False and disc in me.hand      # no hay otra carta
+
+
+def test_convoke_does_not_double_count_mana_dorks():
+    import cards
+    g, me, op = _duel2()
+    elf = cards.creature("Elf", "G", 1, 1)
+    elf.produces = lambda perm, pl: {"G": 1}
+    pe = g.move_to_battlefield(elf, me); pe.summoning_sick = False
+    spell = cards.creature("Convoker", "1G", 0, 0)
+    spell.types = {"sorcery"}
+    spell.tags = {"convoke"}
+    spell.on_cast_resolve = lambda *a: None
+    me.hand = [spell]
+    assert g.cast(me, spell) is False          # 1 elfo no paga {1}{G} (antes contaba doble)
+
+
+def test_x_is_kept_per_cast_not_global():
+    # Regresión: spell_x era global: un hechizo en respuesta lo pisaba (Hydra 0/0)
+    # y una criatura reanimada después recibía la X del último hechizo.
+    import cards
+    g, me, op = _duel2()
+    hydra = cards.creature("Hydra", "G", 0, 0)
+    hydra.x_spell = True
+    hydra.etb_counters = {"+1/+1": "X"}
+    me.hand = [hydra]
+    for _ in range(4):
+        g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me)
+    zap = cards.creature("Zap", "R", 0, 0)
+    zap.types = {"instant"}
+    zap.on_cast_resolve = lambda *a: None
+    op.hand = [zap]
+    g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), op)
+    g._in_priority = True                       # ambos quedan en la pila
+    g.cast(me, hydra, x_value=3)
+    g.cast(op, zap)
+    g._in_priority = False
+    g.resolve_stack(); g.sba()
+    pm = next(p for p in me.battlefield if p.card is hydra)
+    assert pm.counters.get("+1/+1") == 3
+    hydra2 = cards.creature("Hydra2", "G", 0, 0)
+    hydra2.etb_counters = {"+1/+1": "X"}
+    g.move_to_battlefield(hydra2, me); g.sba()   # reanimada: X = 0 -> muere 0/0
+    assert not any(p.card is hydra2 for p in me.battlefield)
+
+
+def test_cast_triggers_resolve_before_the_spell():
+    import cards
+    g, me, op = _duel2()
+    order = []
+    obs = cards.creature("Watcher", "1", 1, 1)
+    obs.triggers = {"cast": lambda game, perm, **kw: order.append("trigger")}
+    g.move_to_battlefield(obs, me)
+    spell = cards.creature("Sorc", "", 0, 0)
+    spell.types = {"sorcery"}
+    spell.cost = None
+    spell.on_cast_resolve = lambda *a: order.append("spell")
+    me.hand = [spell]
+    g.cast(me, spell)
+    assert order == ["trigger", "spell"]
+
+
+def test_death_has_subject_and_only_for_creatures():
+    import cards
+    g, me, op = _duel2()
+    hofri = g.move_to_battlefield(cards.Hofri(), me)
+    seen = []
+    obs = cards.creature("Counter", "1", 1, 1)
+    obs.triggers = {"death": lambda game, perm, **kw: seen.append(kw.get("subject"))}
+    g.move_to_battlefield(obs, me)
+    bear = g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), me)
+    treasure = g.move_to_battlefield(cards.rock("Treasure", "0", ["C"]), me)
+    g.to_graveyard(treasure, "sac"); g.resolve_stack()
+    assert seen == []                                    # un artefacto no "muere"
+    g.to_graveyard(bear, "test"); g.resolve_stack()
+    assert seen and seen[0] is bear
+    assert any("Spirit" in p.name for p in me.battlefield)   # Hofri sabe quién murió
+
+
+def test_commander_identity_damage_and_zone():
+    import cards, cardsdb
+    from engine import Game, Player
+    k1 = cards.creature("Kang", "2", 5, 5, legendary=True)
+    k2 = cards.creature("Kang", "2", 5, 5, legendary=True)
+    a = Player("A", [], k1); b = Player("B", [], k2)
+    c = Player("C", [], cards.creature("Other", "2", 1, 1, legendary=True))
+    g = Game([a, b, c], seed=1); g.interactive_human = None
+    a.command.clear(); b.command.clear()           # como al lanzarlos desde el mando
+    pa = g.move_to_battlefield(k1, a); pb = g.move_to_battlefield(k2, b)
+    g.deal_damage(pa, c, 11, combat=True)
+    g.deal_damage(pb, c, 11, combat=True)
+    g.sba()
+    assert not c.lost and len(c.cmdr_damage) == 2       # antes: 22 bajo "Kang" -> perdía
+    # comandante robado que muere: a la zona de mando de su DUEÑO
+    a.battlefield.remove(pa); pa.controller = b; b.battlefield.append(pa)
+    g.to_graveyard(pa, "test"); g.sba()
+    assert k1 in a.command and k1 not in b.graveyard
+    # exiliado por un barrido que no lo ubica (Sunfall): vuelve igual
+    sun = cardsdb.build_card_from_data({
+        "name": "Sunfall", "type_line": "Sorcery", "mana_cost": "{3}{W}{W}",
+        "oracle_text": "Exile all creatures. Incubate X, where X is the number of "
+                       "creatures exiled this way."})
+    sun.on_cast_resolve(g, c, []); g.sba()
+    assert any(x is k2 for x in b.command) and not any(x is k2 for x in b.exile)
+
+
+def test_turn_cap_counts_played_turns_not_dead_seats():
+    # Regresión: con 2 de 4 eliminados, los vivos jugaban la mitad de turnos.
+    g, a, b, c, d = _duel2(4)
+    g.max_turns = 10
+    c.lost = d.lost = True
+    g.play()
+    assert g.turns_played == 10 or len(g.alive()) == 1
+
+
+def test_spell_damage_counts_for_you_doublers():
+    import cards
+    from engine import StackObject
+    g, me, op = _duel2()
+    torb = cards.creature("Torbran", "1RRR", 2, 4)
+    torb.damage_double = "you"
+    g.move_to_battlefield(torb, me)
+    life0 = op.life
+    g.stack.append(StackObject(me, lambda gg: gg.deal_damage(None, op, 3),
+                               source=cards.creature("Bolt", "R", 0, 0), label="spell:Bolt"))
+    g.resolve_stack()
+    assert life0 - op.life == 6
+
+
+def test_each_players_upkeep_trigger_fires_on_every_upkeep():
+    import cardsdb
+    g, me, op = _duel2()
+    c = cardsdb.build_card_from_data({
+        "name": "Ticker", "type_line": "Enchantment", "mana_cost": "{1}",
+        "oracle_text": "At the beginning of each player's upkeep, you gain 1 life."})
+    assert "each_upkeep" in c.triggers
+    g.move_to_battlefield(c, me)
+    life0 = me.life
+    g.active_index = 1
+    g.begin_turn(op)                          # mantenimiento del RIVAL
+    assert me.life == life0 + 1

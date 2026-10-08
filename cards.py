@@ -44,8 +44,12 @@ def land(name, colors, tapped=False, basic=False):
 
 
 def rock(name, cost, colors, tags=("ramp",)):
-    """Roca de mana: `colors` son OPCIONES (una entrada = un mana)."""
-    opts = {c: 1 for c in colors}
+    """Roca de mana: `colors` son OPCIONES de UN maná ([U, B] = U o B). Repetir un
+    color suma cantidad: [C, C] = {C:2} (Sol Ring). Antes el dict colapsaba las
+    repeticiones y el Sol Ring de los presets daba 1 solo maná."""
+    opts = {}
+    for c in colors:
+        opts[c] = opts.get(c, 0) + 1
     return Card(
         name=name,
         types={"artifact"},
@@ -366,7 +370,7 @@ def Quintorius():
 
 
 def _hofri_watch(game, hofri_perm, **kw):
-    dead = kw.get("perm")
+    dead = kw.get("subject")         # la criatura que murió (sujeto del evento)
     if dead is None or dead.controller is not hofri_perm.controller:
         return
     if dead is hofri_perm or not dead.is_creature() or dead.is_token:

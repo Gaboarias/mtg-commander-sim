@@ -16,6 +16,11 @@ import carddesc
 from engine import Game, Cost, ReactionPause
 
 
+def _sick(pm):
+    """¿Criatura con mareo de invocación (no puede usar habilidades de {T})?"""
+    return pm.is_creature() and pm.summoning_sick and not pm.has("haste")
+
+
 def _never_respond(*_a, **_k):
     """Reemplaza respond/respond_copy/respond_ability en la política del HUMANO:
     las respuestas las decide la persona en su ventana de reacción, no su IA."""
@@ -185,7 +190,7 @@ class InteractiveGame:
         while True:
             if self._run_extra_turns():   # frenó: turno extra humano o me atacan
                 return
-            if len(self.g.alive()) <= 1 or self.g.turn >= self.g.max_turns:
+            if len(self.g.alive()) <= 1 or self.g.turn_cap_reached():
                 self._finish()
                 return
             self.g.turn += 1
@@ -245,7 +250,7 @@ class InteractiveGame:
         que toma su turno extra me ataca (pausa de defensa)."""
         taken = 0
         while (self.g.extra_turns and taken < 4
-               and len(self.g.alive()) > 1 and self.g.turn < self.g.max_turns):
+               and len(self.g.alive()) > 1 and not self.g.turn_cap_reached()):
             who = self.g.extra_turns.pop(0)
             if who.lost:
                 continue
@@ -338,9 +343,9 @@ class InteractiveGame:
             for j, ab in enumerate(getattr(pm.card, "activated_abilities", ()) or ()):
                 if not ab.get("is_copy_ability"):
                     continue
-                if ab.get("tap") and pm.tapped:
+                if ab.get("tap") and (pm.tapped or _sick(pm)):
                     continue
-                if hu.can_pay(ab.get("cost")):
+                if hu.can_pay(ab.get("cost"), exclude={pm} if ab.get("tap") else None):
                     return (pm, j)
         return None
 
@@ -370,7 +375,9 @@ class InteractiveGame:
         hu = self.human()
         if caster is hu or hu.lost or hu not in self.g.opponents(caster):
             return False
-        top = self.g.stack[-1] if self.g.stack else None
+        # `arg` puede ser el StackObject del hechizo (que ya puede tener disparos
+        # de "cast" encima): evaluarlo a ÉL, no al tope de la pila
+        top = arg if hasattr(arg, "resolve") else (self.g.stack[-1] if self.g.stack else None)
         affects = self._affects_human(hu, top)
         kind = getattr(arg, "kind", None) or (top.kind if top else None)
         # HABILIDAD / disparo del rival: responder si el humano puede copiarla, o
@@ -1324,7 +1331,9 @@ class InteractiveGame:
                     reason = f"requiere nivel {lr - 1}"
                 elif ab.get("tap") and pm.tapped:
                     reason = "girada"
-                elif not p.can_pay(ab.get("cost")):
+                elif ab.get("tap") and _sick(pm):
+                    reason = "recién invocada"
+                elif not p.can_pay(ab.get("cost"), exclude={pm} if ab.get("tap") else None):
                     reason = "sin maná"
                 else:
                     reason = self._extra_cost_reason(p, pm, ab)
@@ -1459,9 +1468,9 @@ class InteractiveGame:
             for j, ab in enumerate(getattr(pm.card, "activated_abilities", ()) or ()):
                 if ab.get("sorcery_speed"):        # a velocidad de conjuro: no en combate
                     continue
-                if ab.get("tap") and pm.tapped:
+                if ab.get("tap") and (pm.tapped or _sick(pm)):
                     continue
-                if not me.can_pay(ab.get("cost")):
+                if not me.can_pay(ab.get("cost"), exclude={pm} if ab.get("tap") else None):
                     continue
                 spec = ab.get("target_spec")
                 out.append({"uid": pm.uid, "name": pm.name, "index": j,
@@ -1566,9 +1575,9 @@ class InteractiveGame:
         abilities = []
         for pm in me.battlefield:
             for j, ab in enumerate(getattr(pm.card, "activated_abilities", ()) or ()):
-                if ab.get("tap") and pm.tapped:
+                if ab.get("tap") and (pm.tapped or _sick(pm)):
                     continue
-                if not me.can_pay(ab.get("cost")):
+                if not me.can_pay(ab.get("cost"), exclude={pm} if ab.get("tap") else None):
                     continue
                 abilities.append({"uid": pm.uid, "name": pm.name, "index": j,
                                   "label": ab.get("label", "Habilidad"),

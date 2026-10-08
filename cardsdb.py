@@ -1679,6 +1679,8 @@ def _recurring_trigger_effects(oracle: str):
     for m in re.finditer(r"at the beginning of (your|each(?: player'?s?)?) "
                          r"(upkeep|end step|draw step)[,.]?\s*(.{0,160})", t, re.I):
         ev = "end_step" if "end" in m.group(2).lower() else "upkeep"
+        if m.group(1).lower().startswith("each"):
+            ev = "each_" + ev          # cada jugador: no solo en tu propio turno
         if ev in out:
             continue
         body = m.group(3)
