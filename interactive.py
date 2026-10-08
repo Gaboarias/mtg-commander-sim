@@ -928,7 +928,8 @@ class InteractiveGame:
         extra = p.cmdr_tax if from_command else 0
         red = getattr(card, "cost_reduction", 0) or 0
         base_cmc = max(0, (base.cmc if base else 0) + extra - red)
-        maxx = min(20, max(0, p.available_mana() - base_cmc))
+        xc = max(1, getattr(card, "x_count", 1))        # maná por cada punto de X
+        maxx = min(20, max(0, (p.available_mana() - base_cmc) // xc))
 
         def _apply(idx):
             x = idx if idx is not None else 0

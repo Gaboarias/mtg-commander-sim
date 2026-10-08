@@ -7559,6 +7559,42 @@ def test_precon_monthly_update_diff_and_fallback():
     assert {p["code"] for p in served} == {"A", "B"}
 
 
+def test_x_spells_scale_with_chosen_x_and_charge_mana():
+    # El usuario elige X = maná a gastar; el efecto escala con esa X. Y el coste
+    # multi-X ({X}{X}{W}) cobra 2 por punto, acotando el máximo elegible.
+    import interactive, cardsdb, decks
+    ig = interactive.InteractiveGame(
+        [("Tu",) + decks.build("lorehold"), ("R",) + decks.build("kang")],
+        human_index=0, seed=3)
+    ig.keep([])
+    hu = ig.human()
+    secure = cardsdb.build_card_from_data({
+        "name": "Secure the Wastes", "mana_cost": "{X}{W}", "type_line": "Instant",
+        "oracle_text": "Create X 1/1 white Warrior creature tokens.",
+        "color_identity": ["W"]})
+    hu.hand = [secure]
+    for _ in range(7):
+        ig.g.move_to_battlefield(decks.land("Plains", ["W"], basic=True), hu)
+    ig.cast(0)
+    pc = ig.g.pending_choice
+    assert pc and pc["kind"] == "x"
+    assert [o["name"] for o in pc["options"]][-1] == "X = 6"   # 7 maná - {W} = 6
+    ig.resolve_choice(5)                                        # X = 5
+    assert sum(1 for p in hu.battlefield if p.is_token and p.name == "Warrior") == 5
+    assert sum(1 for p in hu.battlefield if p.card.is_land() and not p.tapped) == 1
+
+    # doble X: {X}{X}{W} con 7 maná -> (7-1)//2 = 3 máximo
+    wst = cardsdb.build_card_from_data({
+        "name": "WST", "mana_cost": "{X}{X}{W}", "type_line": "Sorcery",
+        "oracle_text": "Create X 2/2 white Cat creature tokens.", "color_identity": ["W"]})
+    assert wst.x_count == 2
+    for p in hu.battlefield:
+        p.tapped = False
+    hu.hand = [wst]
+    ig.cast(0)
+    assert [o["name"] for o in ig.g.pending_choice["options"]][-1] == "X = 3"
+
+
 def test_gain_life_trigger_does_not_loop_with_drain_ability():
     # Regresión (Niv-Mizzet, Ghost Counsel): la {T} "cada rival pierde 1 y ganás 1"
     # re-disparaba "whenever you gain life..." porque el cuerpo del disparo se comía

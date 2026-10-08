@@ -818,8 +818,10 @@ def _fragment_effect(seg: str):
     geff = _generic_amount_effect(seg)
     if geff is None:
         dm = re.search(r"draw (\w+) cards?", seg, re.I)
-        n = _count_word(dm.group(1)) if dm else None
-        if n:
+        if dm and dm.group(1).lower() == "x":        # "draw X cards" -> X elegido
+            def geff(game, ctrl, *_a):               # noqa: F811
+                ctrl.draw(min(40, int(getattr(game, "spell_x", 0) or 0)), game)
+        elif dm and (n := _count_word(dm.group(1))):
             geff = cards.draw_n(n)
     return geff, None, 1
 
@@ -3503,6 +3505,25 @@ def _generic_amount_effect(oracle: str):
             game.log(f"{ctrl.name} crea {_n} ficha(s) {_k.capitalize()}")
         return eff
 
+    # ficha ÚNICA X/X (Shark Typhoon, etc.): "create an X/X <color> <sub> creature
+    # token [with <kw>]" — P/T = el X elegido al lanzar (spell_x).
+    mxx = re.search(r"create an? x/x ([\w' ]*?)(?:creature )?token", t)
+    if mxx:
+        _words = [w for w in (mxx.group(1) or "").split()
+                  if w not in ("green", "white", "blue", "black", "red", "colorless",
+                               "and", "or", "artifact", "enchantment", "legendary")]
+        _sub = _words[-1].capitalize() if _words else "Token"
+        _tail = re.split(r"[.;]", t[mxx.end():])[0]
+        _kw = tuple(v for pat, v in _TOKEN_KEYWORDS if re.search(pat, _tail))
+
+        def eff(game, ctrl, *_a, _s=_sub, _kw=_kw):
+            x = min(40, int(getattr(game, "spell_x", 0) or 0))
+            if x <= 0:
+                return
+            cards.make_token(game, ctrl, _s, x, x, kw=_kw, subtypes=(_s,))
+            game.log(f"{ctrl.name} crea una ficha {_s} {x}/{x}")
+        return eff
+
     m = re.search(r"create (\w+) .{0,40}?(\d+)/(\d+)\s*([\w' ]*?)(?:creature )?tokens?", t)
     if m:
         n = _count_word(m.group(1)) or 1
@@ -3525,6 +3546,9 @@ def _generic_amount_effect(oracle: str):
                          r"([\w' ]+)", t)
         if mvar and (m.group(1).lower() == "x" or "for each" in t):
             cnt_fn = _count_fn("number of " + mvar.group(1)) or _count_fn(mvar.group(1))
+        # X del hechizo ("Create X ... tokens"): usa el X elegido al lanzar (spell_x).
+        if cnt_fn is None and m.group(1).lower() == "x":
+            cnt_fn = lambda game, ctrl: int(getattr(game, "spell_x", 0) or 0)  # noqa: E731
 
         def eff(game, ctrl, *_a, _n=min(n, 8), _p=pw, _t=tf, _s=sub, _c=cn or 0,
                 _kw=kw, _cf=cnt_fn):
@@ -3705,16 +3729,22 @@ def _generic_amount_effect(oracle: str):
         return eff
 
     m = re.search(r"(?:you )?gain (\w+) life", t)
-    if m and (n := _count_word(m.group(1))):
+    if m and (m.group(1).lower() == "x" or _count_word(m.group(1))):
         # compuesto frecuente: "gain N life and draw M card(s)"
+        _gx = m.group(1).lower() == "x"
+        n = _count_word(m.group(1)) or 0
         md = re.search(r"draw (\w+) cards?", t)
+        _dx = bool(md) and md.group(1).lower() == "x"
         dn = _count_word(md.group(1)) if md else 0
 
-        def eff(game, ctrl, *_a, _n=n, _d=dn):
-            game.gain_life(ctrl, _n)
-            if _d:
-                ctrl.draw(_d, game)
-                game.log(f"{ctrl.name} roba {_d} carta(s)")
+        def eff(game, ctrl, *_a, _n=n, _d=dn, _gx=_gx, _dx=_dx):
+            g_amt = min(99, int(getattr(game, "spell_x", 0) or 0)) if _gx else _n
+            if g_amt:
+                game.gain_life(ctrl, g_amt)
+            d_amt = min(40, int(getattr(game, "spell_x", 0) or 0)) if _dx else _d
+            if d_amt:
+                ctrl.draw(d_amt, game)
+                game.log(f"{ctrl.name} roba {d_amt} carta(s)")
         return eff
 
     # duplicar contadores +1/+1 (en cada criatura tuya, o en una objetivo)
@@ -4352,12 +4382,14 @@ def _vanilla_from_data(data: dict) -> Card:
         return Card(name=data.get("name", "?"), types=types or {"land"},
                     supertypes=supertypes, subtypes=subtypes, color_id=color_id,
                     produces=(lambda perm, pl, _o={c: 1 for c in prod}: dict(_o)))
-    return Card(name=data.get("name", "?"), types=types or {"creature"}, cost=cost,
-                power=_int_or_zero(data.get("power")),
-                toughness=_int_or_zero(data.get("toughness")),
-                keywords=kws, supertypes=supertypes, subtypes=subtypes,
-                color_id=color_id,
-                x_spell=("{X}" in (data.get("mana_cost", "") or "").upper()))
+    _v = Card(name=data.get("name", "?"), types=types or {"creature"}, cost=cost,
+              power=_int_or_zero(data.get("power")),
+              toughness=_int_or_zero(data.get("toughness")),
+              keywords=kws, supertypes=supertypes, subtypes=subtypes,
+              color_id=color_id,
+              x_spell=("{X}" in (data.get("mana_cost", "") or "").upper()))
+    _v.x_count = max(1, (data.get("mana_cost", "") or "").upper().count("{X}"))
+    return _v
 
 
 _build_depth = 0
@@ -4408,6 +4440,9 @@ def _build_card_from_data_impl(data: dict) -> Card:
         color_id=color_id,
         x_spell=("{X}" in (data.get("mana_cost", "") or "").upper()),
     )
+    # cuántos {X} tiene el coste (White Sun's Twilight = {X}{X}{W} -> 2): cada X
+    # cuesta esa cantidad de maná. Lo usa el motor para cobrar X*x_count.
+    card.x_count = max(1, (data.get("mana_cost", "") or "").upper().count("{X}"))
 
     # tags: de creatura + derivados (aprox) del texto de la carta, para que la
     # capa de efectos genericos funcione tambien con cartas de Scryfall

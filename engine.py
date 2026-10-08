@@ -1443,12 +1443,14 @@ class Game:
         self.spell_x = 0
         if getattr(card, "x_spell", False) and cost is not None:
             base = pay_cost if pay_cost is not None else cost
+            xc = max(1, getattr(card, "x_count", 1))   # {X}{X}... -> xc maná por X
             # X elegido (humano) o, si no, el máximo pagable (auto para bots)
-            x = x_value if x_value is not None else max(0, player.available_mana() - base.cmc)
+            x = (x_value if x_value is not None
+                 else max(0, (player.available_mana() - base.cmc) // xc))
             x = max(0, x)
             if x:
                 self.spell_x = x
-                pay_cost = Cost(generic=base.generic + x, pips=base.pips)
+                pay_cost = Cost(generic=base.generic + x * xc, pips=base.pips)
                 self.log(f"{player.name} elige X = {x} para {card.name}")
         # reducciones dinámicas: affinity (artefactos), convoke (girar criaturas),
         # delve (exiliar del cementerio). Bajan el genérico y consumen recursos.
