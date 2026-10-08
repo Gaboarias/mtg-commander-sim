@@ -1,18 +1,23 @@
 Acidic Slime
 Ambush Viper
+Angel of Indemnity
 Angel of Vitality
+Anger
 Arcane Signet
 Archfiend of Depravity
 Ash Barrens Marauder
 Ash Zealot
 Attended Knight
+Augusta, Order Returned
 Auriok Champion
 Aven Fisher
 Bag of Holding
 Bala Ged Scorpion
+Balefire Liege
 Banisher Priest
 Barkchannel Pathway
 Barren Moor
+Battlefield Forge
 Beast Whisperer
 Beast Within
 Big Game Hunter
@@ -39,16 +44,21 @@ Chasm Skulker
 Child of Night
 Chittering Rats
 Cinder Pyromancer
+Claim Jumper
+Clifftop Retreat
 Cloud Elemental
 Cloudgoat Ranger
 Cloudkin Seer
 Command Tower
+Conspiracy Theorist
+Containment Construct
 Corpse Augur
 Counterspell
 Courser of Kruphix
 Crypt Ghast
 Crypt Rats
 Cultivate
+Currency Converter
 Cursecatcher
 Damnation
 Dawnbringer Charioteers
@@ -60,11 +70,16 @@ Disciple of Bolas
 Doomed Dissenter
 Doomed Traveler
 Dread Wanderer
+Drumbellower
 Dusk Legion Zealot
+Duty Beyond Death
+Eiganjo, Seat of the Empire
 Elvish Visionary
 Ember Hauler
 Eternal Witness
 Evolution Sage
+Evolving Wilds
+Excava, the Risen Past
 Faithless Looting
 Fanatic of Mogis
 Farseek
@@ -89,6 +104,8 @@ Goblin Rabblemaster
 Gravedigger
 Gray Merchant of Asphodel
 Grim Haruspex
+Guardian Scalelord
+Guardian of Faith
 Hardened Scales
 Hellrider
 Hellspark Elemental
@@ -98,15 +115,19 @@ Highborn Ghoul
 Hinterland Harbor
 Hofri Ghostforge
 Hydroid Krasis
+Impractical Joke
 Inexorable Tide
 Jet Medallion
 Kalonian Hydra
+Kami of Ancient Law
 Kang, the Trickster
 Karmic Guide
 Kinnan, Bonder Prodigy
 Kird Ape
+Kirol, History Buff // Pack a Punch
 Kodama's Reach
 Kor Skyfisher
+Laelia, the Blade Reforged
 Leonin Warleader
 Liliana's Reaver
 Looter il-Kor
@@ -116,15 +137,23 @@ Magmatic Channeler
 Man-o'-War
 Managorger Hydra
 Mentor of the Meek
+Millikin
+Mind Stone
+Mistveil Plains
 Moaning Wall
+Moonshaker Cavalry
 Mulldrifter
+Myriad Landscape
+Naktamun Lorespinner // Wheel of Fortune
 Nantuko Husk
+Needleverge Pathway
 Nekrataal
 Nessian Courser
 Nested Shambler
 Night's Whisper
 Omo, Queen of Vesuva
 Palace Jailer
+Patchwork Banner
 Pelakka Wurm
 Pestermite
 Phantasmal Bear
@@ -135,6 +164,8 @@ Pongify
 Precinct Captain
 Quintorius Kand
 Quintorius, Field Historian
+Quintorius, History Chaser
+Quintorius, Loremaster
 Ranger of Eos
 Rapid Hybridization
 Ravenous Chupacabra
@@ -144,16 +175,19 @@ Reclamation Sage
 Rejuvenating Springs
 Riftwing Cloudskate
 River Boa
+Rustvale Bridge
 Sacred Foundry
 Sakura-Tribe Elder
 Scavenging Ooze
 Sea Gate Oracle
 Sea Scryer
 Seasoned Hallowblade
+Seize the Spoils
 Sengir Autocrat
 Sengir Vampire
 Serra Angel
 Sevinne's Reclamation
+Shattered Acolyte
 Sheoldred, the Apocalypse
 Shriekmaw
 Silverback Elder
@@ -163,14 +197,18 @@ Simic Growth Chamber
 Simic Signet
 Skinrender
 Skyhunter Skirmisher
+Sokenzan, Crucible of Defiance
 Sol Ring
 Solemn Simulacrum
 Sower of Temptation
 Spire Owl
+Spirit Mascot
 Sun Titan
+Sundown Pass
 Sunlance Cleric
 Swords to Plowshares
 Sylvan Advocate
+Tablet of Discovery
 Tandem Lookout
 Temple of Mystery
 Temple of Triumph
@@ -194,6 +232,7 @@ Wall of Blossoms
 Wall of Frost
 Wall of Omens
 Wall of Reverence
+Wave of Reckoning
 Wavesifter
 White Orchid Phantom
 Whitemane Lion
