@@ -40,14 +40,19 @@ def pull(code):
     if not _CODE_RE.match(code or ""):
         raise ValueError("código inválido")
     _db.ensure_schema()
-    decks = _db.query(
+    rows = _db.query(
         "SELECT deck_id, name, text, colors, updated_at FROM mtg_decks "
         "WHERE owner_code = ? ORDER BY updated_at DESC", [code])
-    for d in decks:
+    decks = []
+    for r in rows:
         try:
-            d["colors"] = json.loads(d.get("colors") or "[]")
+            colors = json.loads(r.get("colors") or "[]")
         except (TypeError, ValueError):
-            d["colors"] = []
+            colors = []
+        # misma forma que SavedDeck del cliente (id/updatedAt), no la de la tabla
+        decks.append({"id": r.get("deck_id"), "name": r.get("name"),
+                      "text": r.get("text") or "", "colors": colors,
+                      "updatedAt": int(r.get("updated_at") or 0)})
     brows = _db.query("SELECT cards FROM mtg_binder WHERE owner_code = ?", [code])
     binder = []
     if brows:
@@ -58,28 +63,51 @@ def pull(code):
     return {"decks": decks, "binder": binder}
 
 
-def push(code, decks, binder, supporter=False):
+_UPSERT_DECK = (
+    "INSERT INTO mtg_decks (owner_code, deck_id, name, text, colors, updated_at) "
+    "VALUES (?, ?, ?, ?, ?, ?) "
+    "ON CONFLICT(owner_code, deck_id) DO UPDATE SET name = excluded.name, "
+    "text = excluded.text, colors = excluded.colors, updated_at = excluded.updated_at "
+    "WHERE excluded.updated_at >= mtg_decks.updated_at")
+
+
+def push(code, decks, binder, supporter=False, deleted=None):
+    """Fusiona, no reemplaza: upsert por deck_id (gana la versión más reciente) y
+    solo borra los ids que el cliente manda en `deleted`. Antes hacía DELETE de
+    todo + reinsertar lo local: un dispositivo sin decks (o un autosave del
+    binder) vaciaba la nube. `binder=None` deja el binder de la nube intacto."""
     if not _CODE_RE.match(code or ""):
         raise ValueError("código inválido")
     _db.ensure_schema()
-    decks = decks or []
+    decks = [d for d in (decks or []) if isinstance(d, dict)][:200]
+    deleted = {str(i) for i in (deleted or []) if isinstance(i, (str, int))}
+    existing = {r.get("deck_id") for r in _db.query(
+        "SELECT deck_id FROM mtg_decks WHERE owner_code = ?", [code])}
+    kept = existing - deleted
+    stmts = [("DELETE FROM mtg_decks WHERE owner_code = ? AND deck_id = ?", [code, i])
+             for i in sorted(deleted & existing)]
+    now_ms = int(time.time() * 1000)   # el cliente usa Date.now() (ms)
     capped = False
-    if not supporter and len(decks) > FREE_DECKS:
-        decks = decks[:FREE_DECKS]
-        capped = True
-    stmts = [("DELETE FROM mtg_decks WHERE owner_code = ?", [code])]
+    for d in decks:
+        did = str(d.get("id") or _short_id())
+        if did in deleted:
+            continue
+        if did not in kept:
+            # tope gratis: los decks ya guardados siempre se pueden actualizar
+            if not supporter and len(kept) >= FREE_DECKS:
+                capped = True
+                continue
+            kept.add(did)
+        stmts.append((_UPSERT_DECK, [
+            code, did, d.get("name") or "deck", d.get("text") or "",
+            json.dumps(d.get("colors") or []), int(d.get("updatedAt") or now_ms)]))
     now = _now()
-    for d in decks[:200]:
+    if binder is not None:
         stmts.append((
-            "INSERT INTO mtg_decks (owner_code, deck_id, name, text, colors, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            [code, str(d.get("id") or _short_id()), d.get("name") or "deck",
-             d.get("text") or "", json.dumps(d.get("colors") or []),
-             int(d.get("updatedAt") or now)]))
-    stmts.append((
-        "INSERT OR REPLACE INTO mtg_binder (owner_code, cards, updated_at) VALUES (?, ?, ?)",
-        [code, json.dumps(binder or []), now]))
-    _db.run(stmts)
+            "INSERT OR REPLACE INTO mtg_binder (owner_code, cards, updated_at) VALUES (?, ?, ?)",
+            [code, json.dumps(binder), now]))
+    if stmts:
+        _db.run(stmts)
     return {"ok": True, "updated_at": now, "capped": capped, "limit": FREE_DECKS}
 
 
@@ -109,7 +137,8 @@ def _dispatch(req):
     if action == "pull":
         return pull(owner)
     if action == "push":
-        return push(owner, req.get("decks", []), req.get("binder", []), ident["supporter"])
+        return push(owner, req.get("decks", []), req.get("binder"), ident["supporter"],
+                    req.get("deleted"))
     if action == "share":
         return share_put(req.get("name"), req.get("text"), req.get("commander"))
     raise ValueError(f"acción desconocida: {action}")

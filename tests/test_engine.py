@@ -7656,6 +7656,59 @@ def test_sunfall_exiles_all_creatures_and_incubates():
     assert not any(p.name == "Incubator" for p in op.battlefield)
 
 
+def test_cloud_push_merges_never_wipes_and_pull_matches_client_shape():
+    # Regresión: push hacía DELETE de TODOS los decks + reinsertaba lo local, así
+    # que un dispositivo sin decks (o un autosave del binder) vaciaba la nube; y
+    # pull devolvía deck_id/updated_at, que el cliente (id/updatedAt) colapsaba.
+    import importlib, sqlite3
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api"))
+    _db = importlib.import_module("_db")
+    cloud = importlib.import_module("cloud")
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+
+    def fake_run(statements, timeout=20):
+        out = []
+        for sql, args in statements:
+            cur = con.execute(sql, args or [])
+            rows = [dict(r) for r in cur.fetchall()] if cur.description else []
+            out.append({"rows": rows, "affected": cur.rowcount, "last_insert_rowid": None})
+        con.commit()
+        return out
+
+    def deck(i, t):
+        return {"id": i, "name": "D" + i, "text": "1 X", "colors": ["R"], "updatedAt": t}
+
+    orig = _db.run
+    _db.run = fake_run
+    try:
+        code = "owner-code-123"
+        cloud.push(code, [deck("a", 100), deck("b", 100), deck("c", 100)],
+                   [{"name": "Sol Ring", "qty": 1}])
+        # dispositivo nuevo: push sin decks y binder distinto -> NO borra decks
+        cloud.push(code, [], [{"name": "Sol Ring", "qty": 1}])
+        got = cloud.pull(code)
+        assert sorted(d["id"] for d in got["decks"]) == ["a", "b", "c"]
+        assert set(got["decks"][0]) >= {"id", "name", "text", "colors", "updatedAt"}
+        # binder=None (cliente viejo / sin cambios) deja el binder de la nube intacto
+        cloud.push(code, [], None)
+        assert cloud.pull(code)["binder"] == [{"name": "Sol Ring", "qty": 1}]
+        # solo se borra lo pedido explícitamente
+        cloud.push(code, [], None, deleted=["b"])
+        assert sorted(d["id"] for d in cloud.pull(code)["decks"]) == ["a", "c"]
+        # gana la versión más reciente: una copia vieja no pisa la nueva
+        cloud.push(code, [dict(deck("a", 300), name="nuevo")], None)
+        cloud.push(code, [dict(deck("a", 200), name="viejo")], None)
+        assert next(d for d in cloud.pull(code)["decks"] if d["id"] == "a")["name"] == "nuevo"
+        # tope gratis: los existentes se actualizan, los nuevos de más se recortan
+        res = cloud.push(code, [deck(x, 400) for x in "cdefgh"], None)
+        assert res["capped"]
+        assert len(cloud.pull(code)["decks"]) == cloud.FREE_DECKS
+    finally:
+        _db.run = orig
+
+
 def test_card_build_recursion_falls_back_to_vanilla_not_crash():
     # Regresión: cargar un mazo (p. ej. un precon nuevo) con una carta cuyo parseo
     # recursa daba "maximum recursion depth exceeded" y tiraba toda la carga. Ahora

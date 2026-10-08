@@ -66,7 +66,23 @@ export function saveDeck(name: string, text: string, colors?: string[], id?: str
 
 export function removeDeck(id: string): SavedDeck[] {
   write(DECKS_KEY, listDecks().filter((d) => d.id !== id));
+  // tombstone: el próximo push lo borra en la nube y un pull no lo resucita
+  const t = listDeletedDecks();
+  if (!t.includes(id)) write(DELETED_KEY, [...t, id]);
   return listDecks();
+}
+
+// ids de decks borrados localmente que la nube todavía no confirmó
+const DELETED_KEY = "mtgsim:deleteddecks";
+
+export function listDeletedDecks(): string[] {
+  const t = read<string[]>(DELETED_KEY, []);
+  return Array.isArray(t) ? t : [];
+}
+
+export function clearDeletedDecks(ids: string[]): void {
+  const done = new Set(ids);
+  write(DELETED_KEY, listDeletedDecks().filter((i) => !done.has(i)));
 }
 
 // ---- Mi binder (colección personal de cartas) ---------------------------- //
@@ -154,13 +170,23 @@ export function getSyncCode(): string {
   return code;
 }
 
-// fusiona decks de la nube con los locales (gana el más reciente por id)
-export function mergeDecks(incoming: SavedDeck[]): SavedDeck[] {
+// fusiona decks de la nube con los locales (gana el más reciente por id).
+// Acepta también la forma vieja de la API (deck_id/updated_at); descarta filas
+// sin id y las que se borraron acá y la nube todavía no confirmó.
+type IncomingDeck = Partial<SavedDeck> & { deck_id?: string; updated_at?: number };
+export function mergeDecks(incoming: IncomingDeck[]): SavedDeck[] {
   const local = listDecks();
   const byId = new Map(local.map((d) => [d.id, d]));
-  for (const d of incoming || []) {
-    const cur = byId.get(d.id);
-    if (!cur || (d.updatedAt || 0) >= (cur.updatedAt || 0)) byId.set(d.id, d);
+  const deleted = new Set(listDeletedDecks());
+  for (const raw of incoming || []) {
+    const id = raw?.id || raw?.deck_id;
+    if (!id || deleted.has(id)) continue;
+    const d: SavedDeck = {
+      id, name: raw.name || "deck", text: raw.text || "", colors: raw.colors,
+      updatedAt: Number(raw.updatedAt ?? raw.updated_at ?? 0),
+    };
+    const cur = byId.get(id);
+    if (!cur || d.updatedAt >= (cur.updatedAt || 0)) byId.set(id, d);
   }
   write(DECKS_KEY, [...byId.values()]);
   return listDecks();
@@ -169,6 +195,37 @@ export function mergeDecks(incoming: SavedDeck[]): SavedDeck[] {
 export function setBinder(cards: BinderCard[]): BinderCard[] {
   write(BINDER_KEY, Array.isArray(cards) ? cards : []);
   return listBinder();
+}
+
+// une el binder de la nube con el local por nombre (queda la cantidad mayor);
+// nunca pierde cartas de ninguno de los dos lados.
+export function mergeBinder(incoming: BinderCard[]): BinderCard[] {
+  const b = listBinder();
+  for (const c of Array.isArray(incoming) ? incoming : []) {
+    const name = (c?.name || "").trim();
+    if (!name) continue;
+    const qty = Math.max(1, Number(c.qty) || 1);
+    const i = b.findIndex((x) => x.name.toLowerCase() === name.toLowerCase());
+    if (i >= 0) b[i] = { ...b[i], qty: Math.max(b[i].qty, qty) };
+    else b.push({ name, qty });
+  }
+  write(BINDER_KEY, b);
+  return listBinder();
+}
+
+// owners (cuenta o código) cuya nube ya se fusionó en este navegador. Hasta
+// entonces no se sube nada sin bajar antes: un dispositivo nuevo pisaría la nube.
+const SYNCED_KEY = "mtgsim:cloudsynced";
+
+export function isCloudSynced(owner: string): boolean {
+  const s = read<string[]>(SYNCED_KEY, []);
+  return Array.isArray(s) && s.includes(owner);
+}
+
+export function markCloudSynced(owner: string): void {
+  const s = read<string[]>(SYNCED_KEY, []);
+  const arr = Array.isArray(s) ? s : [];
+  if (!arr.includes(owner)) write(SYNCED_KEY, [...arr, owner]);
 }
 
 // -- contador de partidas + estado del feedback ------------------------- //

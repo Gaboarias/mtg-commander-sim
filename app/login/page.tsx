@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getUser, setSession, clearSession, effectiveCode, getToken, type User } from "../auth";
-import { listDecks, listBinder } from "../localDecks";
+import { getUser, setSession, clearSession, getToken, type User } from "../auth";
+import { cloudPush } from "../cloudSync";
 import { Icon } from "../icons";
 
 type Mode = "login" | "register" | "reset";
@@ -52,14 +52,9 @@ export default function LoginPage() {
   async function importLocal() {
     setImportMsg("Subiendo…");
     try {
-      const r = await fetch("/api/cloud", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "push", code: effectiveCode(), token: getToken(),
-          decks: listDecks(), binder: listBinder() }),
-      });
-      const d = await r.json();
-      if (d.error) throw new Error(d.error);
-      setImportMsg(`Listo: ${listDecks().length} decks + binder en tu cuenta${d.capped ? " (recortado al tope)" : ""}.`);
+      // fusiona con lo que ya tenga la cuenta (no la pisa)
+      const res = await cloudPush();
+      setImportMsg(`Listo: ${res.decks.length} decks + binder en tu cuenta${res.capped ? " (recortado al tope)" : ""}.`);
     } catch (e) { setImportMsg("Error: " + (e instanceof Error ? e.message : String(e))); }
   }
 

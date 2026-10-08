@@ -17,11 +17,10 @@ import {
   getCardCache,
   mergeCardCache,
   getSyncCode,
-  mergeDecks,
-  setBinder as saveBinder,
   type SavedDeck,
   type BinderCard,
 } from "../localDecks";
+import { cloudPull, cloudPush } from "../cloudSync";
 import { download, fileStamp } from "../download";
 import { KOFI_URL, PAYPAL_URL, FREE_SIM, FREE_DECKS } from "../support";
 import { effectiveCode, getToken, getUser } from "../auth";
@@ -816,16 +815,13 @@ export default function DeckPage() {
   }
 
   // autosave silencioso del binder (+ decks) a la nube/cuenta, con debounce.
+  // cloudPush fusiona (no reemplaza) y baja la nube antes si este navegador nunca lo hizo.
   async function autosaveCloud() {
     setAutoSave("saving");
     try {
-      const r = await fetch("/api/cloud", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "push", code: effectiveCode(), token: getToken(),
-                               decks: listDecks(), binder: listBinder() }),
-      });
-      const d = await r.json();
-      if (d.error) throw new Error(d.error);
+      const res = await cloudPush();
+      setSavedDecks(res.decks);
+      setBinder(res.binder);
       setAutoSave("saved");
     } catch {
       setAutoSave("error");   // queda guardado local igual; reintenta al próximo cambio
@@ -836,13 +832,11 @@ export default function DeckPage() {
   async function pushCloud() {
     setCloudBusy(true); setCloudMsg(null);
     try {
-      const r = await fetch("/api/cloud", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "push", code: effectiveCode(), token: getToken(), decks: listDecks(), binder: listBinder() }),
-      });
-      const d = await r.json();
-      if (d.error) throw new Error(d.error);
-      setCloudMsg(`Subido: ${listDecks().length} decks + binder.`);
+      const res = await cloudPush();
+      setSavedDecks(res.decks);
+      setBinder(res.binder);
+      setCloudMsg(`Subido: ${res.decks.length} decks + binder` +
+        (res.capped ? ` (tope gratis de ${res.limit} decks en la nube).` : "."));
     } catch (e) { setCloudMsg("Error al subir: " + (e instanceof Error ? e.message : String(e))); }
     finally { setCloudBusy(false); }
   }
@@ -851,15 +845,10 @@ export default function DeckPage() {
     if (!code) return;
     setCloudBusy(true); setCloudMsg(null);
     try {
-      const r = await fetch("/api/cloud", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "pull", code, token: getToken() }),
-      });
-      const d = await r.json();
-      if (d.error) throw new Error(d.error);
-      setSavedDecks(mergeDecks(d.decks || []));
-      if (Array.isArray(d.binder)) setBinder(saveBinder(d.binder));
-      setCloudMsg(`Bajado: ${(d.decks || []).length} decks + binder (fusionado con lo local).`);
+      const res = await cloudPull(code);
+      setSavedDecks(res.decks);
+      setBinder(res.binder);
+      setCloudMsg(`Bajado: ${res.pulled} decks + binder (fusionado con lo local).`);
     } catch (e) { setCloudMsg("Error al bajar: " + (e instanceof Error ? e.message : String(e))); }
     finally { setCloudBusy(false); }
   }
@@ -982,7 +971,10 @@ export default function DeckPage() {
     setColorOverride(null);
   }
   function onDeleteSaved(id: string) {
+    const d = savedDecks.find((x) => x.id === id);
+    if (!window.confirm(`¿Borrar el deck «${d?.name || "deck"}»? También se borra de la nube.`)) return;
     setSavedDecks(removeDeck(id));
+    scheduleAutosave();
   }
   function onProfileChange(v: string) {
     setProfileState(v);
