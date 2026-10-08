@@ -978,6 +978,9 @@ class Game:
         disparan permanentes de ese jugador.
         """
         who = kw.get("player")
+        # registro genérico para condiciones "if a card left your graveyard this turn"
+        if event == "leaves_graveyard" and who is not None:
+            who.gy_left_turn = self.turn
         for pl in self.players:
             if pl.lost:
                 continue
@@ -2132,7 +2135,7 @@ class Game:
             if not disc:
                 continue
             amt, filt = disc
-            ok = (filt == "any"
+            ok = filt(card) if callable(filt) else (filt == "any"
                   or (filt == "creature" and "creature" in types)
                   or (filt == "noncreature" and "creature" not in types)
                   or (filt == "instant_sorcery" and ({"instant", "sorcery"} & types))
@@ -2154,7 +2157,7 @@ class Game:
             amt, filt, whose = tx
             if whose == "opponents" and pm.controller is player:
                 continue
-            ok = (filt == "any"
+            ok = filt(card) if callable(filt) else (filt == "any"
                   or (filt == "creature" and "creature" in types)
                   or (filt == "noncreature" and "creature" not in types)
                   or (filt == "instant_sorcery" and ({"instant", "sorcery"} & types))
