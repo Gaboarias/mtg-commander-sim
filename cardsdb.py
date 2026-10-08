@@ -1352,6 +1352,17 @@ def _everything_counter_effect():
     return eff
 
 
+def _ability_clause(body: str) -> str:
+    """Recorta el cuerpo de un disparo en el límite de la SIGUIENTE habilidad.
+    Como el oráculo colapsa los saltos de línea a espacios, una captura ávida
+    (p. ej. `.{0,140}`) puede 'comerse' el texto de otra habilidad posterior
+    ({T}: ... u otro disparo) y producir efectos cruzados o BUCLES (Niv-Mizzet,
+    Ghost Counsel: 'gano 1 vida' re-disparaba 'cada rival pierde 1 y gano 1')."""
+    cut = re.search(r"\{[^}]*\}\s*:|(?:^|\s)(?:whenever|at the beginning of)\b",
+                    body, re.I)
+    return body[:cut.start()].strip() if cut else body
+
+
 def _event_trigger_effect(oracle: str):
     """Detecta disparos comunes y devuelve {evento: callback(g, perm, **kw)}.
     Cubre 'cuando una criatura muere', 'daño de combate a un jugador' y
@@ -1548,10 +1559,25 @@ def _event_trigger_effect(oracle: str):
     if "gain_life" not in out:
         mg = re.search(r"whenever you gain life,?\s*(.{0,140})", t, re.I)
         if mg:
-            body = mg.group(1)
+            # recortar en el límite de la siguiente habilidad: evita que el cuerpo
+            # se 'coma' una {T}: ... posterior y haga bucles (Niv-Mizzet, Ghost Counsel).
+            body = _ability_clause(mg.group(1))
             # caso muy común: "put a/one +1/+1 counter on ~" sobre el propio permanente
             mcnt = re.search(r"put (a|an|one|\w+) \+1/\+1 counters? on", body, re.I)
-            if mcnt:
+            # Niv-Mizzet, Ghost Counsel: "you may pay that much life. if you do, draw
+            # that many cards." -> paga la vida GANADA y roba esa cantidad (usa amount).
+            if re.search(r"pay that much life", body, re.I) and \
+                    re.search(r"draw that many cards", body, re.I):
+                def cbg(game, perm, amount=0, **_kw):
+                    n = max(0, int(amount or 0))
+                    ctrl = perm.controller
+                    if n <= 0 or ctrl.life - n < 10:   # no suicidarse por cartas
+                        return
+                    ctrl.life -= n
+                    ctrl.draw(n, game)
+                    game.log(f"{ctrl.name} paga {n} vida y roba {n} ({perm.name})")
+                out["gain_life"] = cbg
+            elif mcnt:
                 cn = _count_word(mcnt.group(1)) or 1
 
                 def cbg(game, perm, _n=cn, **_kw):

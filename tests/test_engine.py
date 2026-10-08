@@ -7559,6 +7559,34 @@ def test_precon_monthly_update_diff_and_fallback():
     assert {p["code"] for p in served} == {"A", "B"}
 
 
+def test_gain_life_trigger_does_not_loop_with_drain_ability():
+    # Regresión (Niv-Mizzet, Ghost Counsel): la {T} "cada rival pierde 1 y ganás 1"
+    # re-disparaba "whenever you gain life..." porque el cuerpo del disparo se comía
+    # el texto de la {T} (oráculo con saltos de línea colapsados) -> bucle: una
+    # activación drenaba al rival a 0 y daba miles de vida. Ahora NO loopea.
+    import cardsdb, cards
+    from engine import Game, Player
+    data = {"name": "Niv-Mizzet, Ghost Counsel",
+            "type_line": "Legendary Creature — Spirit Dragon",
+            "mana_cost": "{4}{U}{R}", "power": "4", "toughness": "4",
+            "color_identity": ["U", "R"], "keywords": ["Flying"],
+            "oracle_text": ("Flying\nWhenever you gain life, you may pay that much "
+                            "life. If you do, draw that many cards.\n{T}: Each "
+                            "opponent loses 1 life and you gain 1 life.")}
+    niv = cardsdb.build_card_from_data(data)
+    me = Player("me", [], cards.creature("c", "1", 1, 1))
+    op = Player("op", [], cards.creature("o", "1", 1, 1))
+    g = Game([me, op], seed=1); g.interactive_human = None
+    me.library = [cards.creature("L%d" % i, "1", 1, 1) for i in range(20)]
+    me.hand = []; me.life = 40; op.life = 40
+    pm = g.move_to_battlefield(niv, me); pm.summoning_sick = False
+    g.activate_ability(pm, 0); g.resolve_stack(); g.sba()
+    assert op.life == 39              # el rival pierde EXACTAMENTE 1 (no se vacía)
+    assert me.life == 40             # gana 1 y paga 1 por el disparo: neto 0
+    assert len(me.hand) == 1         # roba 1 (pagó 1 de vida)
+    assert not op.lost and not me.lost
+
+
 def test_card_build_recursion_falls_back_to_vanilla_not_crash():
     # Regresión: cargar un mazo (p. ej. un precon nuevo) con una carta cuyo parseo
     # recursa daba "maximum recursion depth exceeded" y tiraba toda la carga. Ahora
