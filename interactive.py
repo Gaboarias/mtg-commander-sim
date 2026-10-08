@@ -16,6 +16,12 @@ import carddesc
 from engine import Game, Cost, ReactionPause
 
 
+def _never_respond(*_a, **_k):
+    """Reemplaza respond/respond_copy/respond_ability en la política del HUMANO:
+    las respuestas las decide la persona en su ventana de reacción, no su IA."""
+    return False
+
+
 def from_registered(specs, human_index=0, seed=0, level="intermedio"):
     """Construye una partida interactiva desde decks REGISTRADOS (de ejemplo).
     `specs`: lista de {"key": <clave>, "name": <opcional>}."""
@@ -94,6 +100,12 @@ class InteractiveGame:
         self._react_ctx = None      # {p, step, spell} para reanudar tras responder
         self.opp_turns = []         # resumen de los turnos rivales desde tu último turno
         self._draining = False      # mostrando decisiones encoladas durante el avance
+        # la IA del humano no contrarresta/copia por él (antes, tras pasar en la
+        # ventana de reacción, su política lanzaba igual su Counterspell)
+        hp = self.human().policy
+        if hp is not None:
+            for name in ("respond", "respond_copy", "respond_ability"):
+                setattr(hp, name, _never_respond)
         # el motor pausa una resolución cuando el HUMANO debe elegir (revelar, etc.)
         self.g.interactive_human = self.human()
         self.g.pending_choice = None
@@ -207,18 +219,22 @@ class InteractiveGame:
         (arma pending_choice) y marca que hay que reanudar el avance al resolverla.
         Devuelve True si frenó el avance para que el humano decida."""
         while self.g.choice_queue and self.g.pending_choice is None:
-            thunk = self.g.choice_queue.pop(0)
+            item = self.g.choice_queue.pop(0)
+            if isinstance(item, dict):      # decisión ya armada que esperaba su turno
+                self.g.pending_choice = item
+                continue
             try:
-                thunk()
+                item()
             except Exception:
                 continue
         if self.g.pending_choice is not None:
             # OJO: solo marcamos "draining" (reanudar el avance de turnos al
-            # resolver) cuando estamos avanzando por turnos RIVALES. Si es el
-            # turno propio del humano, una decisión encolada debe mostrarse sin
-            # terminar su turno: marcar _draining acá haría que resolverla llame
-            # a _advance_to_human y se salte el resto de SU turno.
-            if self.g.active_index != self.human_index:
+            # resolver) cuando estamos avanzando por turnos RIVALES y NO hay una
+            # ventana abierta (defensa / daño / reacción). Si es el turno propio
+            # del humano, o una ventana espera su respuesta, resolver la decisión
+            # debe volver a esa ventana: marcar _draining haría avanzar turnos y
+            # saltar el resto del turno (o el ataque en curso y el turno siguiente).
+            if self.g.active_index != self.human_index and self.mode is None:
                 self._draining = True
             return True
         return False
@@ -1032,6 +1048,8 @@ class InteractiveGame:
                 if pm is not None and pm.can_attack():
                     chosen.append((pm, target))
         self.attacked = True
+        # atacar revela información (bloqueos del rival, daño): ya no se deshace
+        self._undo = []
         declared = self.g._declare_attackers(p, chosen)
         self.g.sba()
         if not declared or len(self.g.alive()) <= 1:
@@ -1122,7 +1140,12 @@ class InteractiveGame:
         Solo en la fase principal del humano y sin una decisión pendiente."""
         if (self.phase == "main" and self._my_turn()
                 and self.g.pending_choice is None):
-            self._undo.append((copy.deepcopy(self.g), self.attacked))
+            # memo {self: self}: los hooks del motor (reaction_check,
+            # cascade_target_hook) son métodos de ESTA capa; sin el memo, el
+            # deepcopy copiaba el InteractiveGame entero con todos los snapshots
+            # anteriores adentro (crecía exponencial) y, tras deshacer, los hooks
+            # quedaban apuntando a una copia vieja (sin ventanas de reacción).
+            self._undo.append((copy.deepcopy(self.g, {id(self): self}), self.attacked))
             if len(self._undo) > 25:
                 self._undo.pop(0)
 
@@ -1684,7 +1707,7 @@ class InteractiveGame:
             return self.state()
         # si estábamos drenando decisiones durante el avance de turnos rivales,
         # reanudar el avance hasta el turno del humano
-        if self._draining:
+        if self._draining and self.mode is None:
             self._draining = False
             self._advance_to_human()
         return self.state()

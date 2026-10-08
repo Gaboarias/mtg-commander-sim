@@ -607,8 +607,11 @@ class Policy:
             bool(card.tags & {"engine", "wipe", "removal"})
         if not worth:
             return False
+        # solo contrahechizos que apuntan a un HECHIZO (Stifle y similares apuntan a
+        # habilidades: lanzados contra un hechizo, la carta se perdía de la pila)
         counter = next((c for c in me.hand
-                        if "counter" in c.tags and me.can_pay(c.cost)), None)
+                        if "counter" in c.tags and me.can_pay(c.cost)
+                        and getattr(c, "target_spec", None) == "stack_spell"), None)
         if counter is None:
             return False
         game.cast(me, counter, targets=[top])

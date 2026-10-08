@@ -698,13 +698,8 @@ def Counterspell():
         if not targets:
             return
         obj = targets[0]
-        if obj in game.stack:
-            game.stack.remove(obj)
-            card = obj.source
-            name = getattr(card, "name", "?")
-            if card is not None and not card.is_land():
-                obj.controller.graveyard.append(card)
-                game.emit("to_graveyard", player=obj.controller, card=card)
+        name = getattr(getattr(obj, "source", None), "name", "?")
+        if game.counter_spell(obj):
             game.log(f"{ctrl.name}: Counterspell contrarresta {name}")
     return Card("Counterspell", {"instant"}, parse_cost("UU"),
                 on_cast_resolve=eff, tags={"counter"}, color_id={U},

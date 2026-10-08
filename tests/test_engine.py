@@ -7073,8 +7073,14 @@ def test_modal_trigger_opens_mode_ui_for_human():
     g.resolve_stack()
     pc = g.pending_choice
     assert pc is not None and pc["kind"] == "mode" and len(pc["options"]) == 2
+    def choose(idx):
+        # como resolve_choice: se cierra la decisión ANTES de aplicarla (si no, la
+        # siguiente decisión queda en espera en vez de pisar a la abierta)
+        cur = g.pending_choice
+        g.pending_choice = None
+        cur["_apply"](idx)
     life0 = me.life
-    pc["_apply"](1)                                  # "You gain 4 life"
+    choose(1)                                        # "You gain 4 life"
     g.resolve_stack()
     assert me.life - life0 == 4
     # el modo con objetivo abre un segundo modal (mode_target)
@@ -7083,10 +7089,10 @@ def test_modal_trigger_opens_mode_ui_for_human():
     art = g.move_to_battlefield(cardsdb.build_card_from_data(
         {"name": "Rock", "type_line": "Artifact", "mana_cost": "{2}"}), op)
     g.resolve_stack()
-    g.pending_choice["_apply"](0)                    # modo destruir
+    choose(0)                                        # modo destruir
     pc2 = g.pending_choice
     assert pc2 is not None and pc2["kind"] == "mode_target"
-    pc2["_apply"](0); g.resolve_stack()
+    choose(0); g.resolve_stack()
     assert art not in op.battlefield
 
 
@@ -8088,3 +8094,231 @@ def test_update_precons_fails_loudly_when_mtgjson_is_down():
     finally:
         _precon._get = orig
         _precon._cache_index = None
+
+
+def _ig_tricky_vs_kang(seed=3):
+    import interactive, decks
+    ig = interactive.InteractiveGame(
+        [("Tu",) + decks.build("tricky"), ("R",) + decks.build("kang")],
+        human_index=0, seed=seed)
+    ig.keep([])
+    return ig, ig.human(), ig.g.opponents(ig.human())[0]
+
+
+def _counterspell():
+    import cardsdb
+    return cardsdb.build_card_from_data({
+        "name": "Counterspell", "type_line": "Instant", "mana_cost": "{U}{U}",
+        "color_identity": ["U"], "oracle_text": "Counter target spell."})
+
+
+def test_undo_snapshot_does_not_copy_interactive_layer():
+    # Regresión: el deepcopy del snapshot arrastraba el InteractiveGame (por los
+    # hooks ligados) con todos los snapshots anteriores -> costo exponencial que
+    # congelaba el navegador; y tras deshacer los hooks quedaban en una copia vieja.
+    import cards, time
+    ig, hu, _op = _ig_tricky_vs_kang()
+    hu.hand[:] = [cards.land("Island", ["U"], basic=True) for _ in range(7)]
+    times = []
+    for _ in range(8):
+        t = time.time()
+        ig._snapshot()
+        times.append(time.time() - t)
+    assert max(times) < 1.0                                   # antes: 50+ s al snapshot 11
+    snap = ig._undo[-1][0]
+    assert snap.reaction_check.__self__ is ig                  # no copió la capa interactiva
+    ig.play_land(0)
+    ig.undo()
+    assert ig.g.reaction_check.__self__ is ig and ig.g.cascade_target_hook.__self__ is ig
+
+
+def test_undo_not_allowed_after_attacking():
+    # Atacar revela bloqueos y daño: deshacer después permitía re-atacar sabiéndolo.
+    import cards
+    ig, hu, _op = _ig_tricky_vs_kang()
+    bear = ig.g.move_to_battlefield(cards.creature("Bear", "1G", 2, 2), hu)
+    bear.summoning_sick = False
+    hu.hand[:] = [cards.land("Forest", ["G"], basic=True)]
+    ig.play_land(0)
+    assert ig.can_undo()
+    ig.attack([bear.uid])
+    if ig.mode == "combat":
+        ig.finish_combat()
+    assert not ig.can_undo()
+
+
+def test_human_ai_does_not_counter_after_passing():
+    # Regresión: tras pasar en la ventana de reacción, la política del humano
+    # lanzaba igual su Counterspell ("Tu lanza Counterspell").
+    import cards
+    ig, hu, op = _ig_tricky_vs_kang()
+    cs = _counterspell()
+    hu.hand.append(cs)
+    while len(hu.hand) > 7:
+        hu.library.insert(0, hu.hand.pop(0))
+    for _ in range(2):
+        ig.g.move_to_battlefield(cards.land("Island", ["U"], basic=True), hu)
+    for c in list(op.hand):
+        op.library.insert(0, c)
+    op.hand[:] = [cards.creature("Big Beast", "3R", 5, 5)]
+    for _ in range(4):
+        ig.g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), op)
+    ig.end_turn()
+    assert ig.mode == "react"
+    ig.react(None)                     # el humano PASA
+    assert cs in hu.hand
+    assert not any("Tu lanza Counterspell" in l for l in ig.g.log_lines)
+
+
+def test_queued_choice_during_defense_does_not_skip_human_turn():
+    # Regresión: una decisión encolada que aparecía durante la defensa marcaba
+    # _draining; al resolverla se avanzaban turnos con el ataque colgado y se
+    # saltaba el turno siguiente del humano.
+    import interactive, decks, cards, cardsdb
+    ig = interactive.InteractiveGame(
+        [("Tu",) + decks.build("lorehold"), ("R",) + decks.build("kang")],
+        human_index=0, seed=3)
+    ig.keep([])
+    hu, op = ig.human(), ig.g.opponents(ig.human())[0]
+    orig = op.policy.main_phase
+
+    def mp(game, me, second=False):
+        if not second:
+            cardsdb._human_or_auto_discard(game, hu, 1)   # encolada: turno del bot
+        return orig(game, me, second)
+    op.policy.main_phase = mp
+    ogre = ig.g.move_to_battlefield(cards.creature("Ogro", "2R", 3, 3), op)
+    ogre.summoning_sick = False
+    while len(hu.hand) < 8:
+        hu.hand.append(hu.library.pop())
+    ig.end_turn()
+    ig.resolve_choice(0)                 # descarte propio -> turno del bot, me ataca
+    assert ig.mode == "defense" and ig.g.pending_choice is not None
+    ig.resolve_choice(0)                 # la decisión forzada por el bot
+    assert ig.mode == "defense" and ig.g.turn == 2   # sigue el ataque, no avanzó
+    ig.resolve_defense([])
+    if ig.mode == "combat":
+        ig.finish_combat()
+    assert ig.g.turn == 3 and ig.g.active_index == 0 and ig.phase == "main"
+
+
+def test_flashback_and_foretell_survive_reaction_pause():
+    # Regresión: la ReactionPause cortaba play_from_graveyard/play_from_exile justo
+    # tras cast(): el flashback no se exiliaba (el bot lo relanzó 4 veces) y la
+    # carta predicha quedaba duplicada (exilio + pila).
+    import cards, cardsdb
+    ig, hu, op = _ig_tricky_vs_kang()
+    hu.hand.append(_counterspell())
+    while len(hu.hand) > 7:
+        hu.library.insert(0, hu.hand.pop(0))
+    for _ in range(2):
+        ig.g.move_to_battlefield(cards.land("Island", ["U"], basic=True), hu)
+    beast = cards.creature("Foretold Beast", "3G", 4, 4)
+    beast._play_cost = None
+    op.exile_play.append(beast)
+    fb = cardsdb.build_card_from_data({
+        "name": "Flame Again", "type_line": "Sorcery", "mana_cost": "{2}{R}",
+        "color_identity": ["R"],
+        "oracle_text": "Flame Again deals 3 damage to target player.\nFlashback {1}{R}"})
+    op.graveyard.append(fb)
+    for _ in range(8):
+        ig.g.move_to_battlefield(cards.land("Mountain", ["R"], basic=True), op)
+    for c in list(op.hand):
+        op.library.insert(0, c)
+    op.hand.clear()
+
+    def zones(c):
+        out = []
+        for p in ig.players:
+            for z in ("hand", "library", "graveyard", "exile", "exile_play", "command"):
+                out += [f"{p.name}.{z}" for x in getattr(p, z) if x is c]
+            out += [f"{p.name}.battlefield" for pm in p.battlefield if pm.card is c]
+        return out
+    life0 = hu.life
+    ig.end_turn()
+    for _ in range(30):
+        if ig.g.turn != 2:
+            break
+        if ig.mode == "react":
+            ig.react(None)
+        elif ig.g.pending_choice:
+            ig.resolve_choice(0)
+        elif ig.mode == "defense":
+            ig.resolve_defense([])
+        elif ig.mode == "combat":
+            ig.finish_combat()
+        else:
+            break
+    casts = [l for l in ig.g.log_lines if "lanza Flame Again" in l]
+    assert len(casts) <= 1                       # antes: 4 lanzamientos en un turno
+    assert len(zones(fb)) == 1 and len(zones(beast)) == 1   # nada duplicado ni perdido
+    if casts:
+        assert zones(fb) == ["R.exile"] and hu.life >= life0 - 3
+
+
+def test_engine_counter_and_failed_alt_casts_keep_cards():
+    import cards
+    from engine import Game, Player
+    me = Player("me", [], cards.creature("cm", "1", 1, 1))
+    op = Player("op", [], cards.creature("oc", "1", 1, 1))
+    g = Game([me, op], seed=1); g.interactive_human = None
+    # contrarrestar: copia -> no mueve nada; flashback -> exilio; comandante -> mando
+    spell = cards.creature("Dummy", "1", 1, 1)
+    from engine import StackObject
+    obj = StackObject(op, lambda gg: None, source=spell, label="copy:Dummy")
+    g.stack.append(obj)
+    assert g.counter_spell(obj) and spell not in op.graveyard
+    spell._exile_after_cast = True
+    obj = StackObject(op, lambda gg: None, source=spell, label="spell:Dummy")
+    g.stack.append(obj)
+    g.counter_spell(obj)
+    assert spell in op.exile and spell not in op.graveyard
+    cmd = op.commander_card
+    op.command.remove(cmd) if cmd in op.command else None
+    obj = StackObject(op, lambda gg: None, source=cmd, label="spell:oc")
+    g.stack.append(obj)
+    g.counter_spell(obj)
+    assert cmd in op.command and cmd not in op.graveyard
+    # lanzamiento alternativo que no se puede pagar: la carta NO se pierde
+    burn = cards.creature("Foretold", "9", 1, 1)
+    burn._play_cost = None
+    me.exile_play.append(burn)
+    assert g.play_from_exile(me, burn) is False and burn in me.exile_play
+
+
+def test_second_pending_choice_waits_instead_of_overwriting():
+    # Regresión: dos decisiones seguidas (p. ej. dos scry en la pila) pisaban la
+    # primera, que se perdía junto con las cartas que ya había sacado.
+    from engine import Game, Player
+    import cards
+    me = Player("me", [], cards.creature("cm", "1", 1, 1))
+    op = Player("op", [], cards.creature("oc", "1", 1, 1))
+    g = Game([me, op], seed=1)
+    first = {"kind": "may", "prompt": "uno", "options": []}
+    second = {"kind": "may", "prompt": "dos", "options": []}
+    g.pending_choice = first
+    g.pending_choice = second
+    assert g.pending_choice is first and g.choice_queue == [second]
+    g.pending_choice = None
+    assert g.pending_choice is None
+
+
+def test_bot_does_not_cast_ability_counter_on_a_spell():
+    # Regresión: el bot lanzaba Stifle (apunta a habilidades) contra un hechizo de
+    # criatura y la carta del hechizo se perdía de la pila.
+    import cards, cardsdb
+    from engine import Game, Player, StackObject
+    from policy import Policy
+    me = Player("me", [], cards.creature("cm", "1", 1, 1), policy=Policy())
+    op = Player("op", [], cards.creature("oc", "1", 1, 1), policy=Policy())
+    g = Game([me, op], seed=1); g.interactive_human = None
+    stifle = cardsdb.build_card_from_data({
+        "name": "Stifle", "type_line": "Instant", "mana_cost": "{U}",
+        "color_identity": ["U"], "oracle_text": "Counter target activated or triggered ability."})
+    op.hand[:] = [stifle]
+    g.move_to_battlefield(cards.land("Island", ["U"], basic=True), op)
+    ogre = cards.creature("Ogro", "2R", 3, 3)
+    top = StackObject(me, lambda gg: None, source=ogre, label="spell:Ogro")
+    g.stack.append(top)
+    assert not op.policy.respond(g, op, top)
+    assert stifle in op.hand

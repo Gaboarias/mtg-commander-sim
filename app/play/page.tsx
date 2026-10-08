@@ -106,6 +106,7 @@ type GameState = {
   ability_feed?: AbilityEvent[];
   opp_turns?: OppTurn[];
   card_briefs?: Record<string, CardDetail>;
+  engine_error?: string;
 };
 type AbilityEvent = { turn: number; controller: string | null; card: string; kind: string };
 type OppTurn = { turn: number; player: string; lines: string[] };
@@ -125,6 +126,8 @@ export default function Play() {
   const pendingRef = useRef<Map<number, { resolve: (v: string | null) => void; reject: (e: Error) => void }>>(new Map());
   const msgIdRef = useRef(0);
   const [thinking, setThinking] = useState(false);   // el motor está procesando
+  const gameRef = useRef(0);       // id de la partida: descarta respuestas de una anterior
+  const [choiceHidden, setChoiceHidden] = useState(false);  // modal de decisión minimizado
   const [status, setStatus] = useState<string>("");   // texto de carga
   const [booting, setBooting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -264,8 +267,27 @@ export default function Play() {
 
   async function ensureEngine() {
     setStatus("Preparando el motor… la primera vez puede tardar unos segundos.");
-    await callWorker("init");
-    setStatus("");
+    try {
+      await callWorker("init");
+    } finally {
+      setStatus("");
+    }
+  }
+
+  // aplica un estado nuevo del motor; si trae un error, lo muestra sin perder la partida
+  function applyState(raw: string | null) {
+    if (!raw) return;
+    const st = JSON.parse(raw) as GameState;
+    setState(st);
+    setChoiceHidden(false);
+    setError(st.engine_error
+      ? `El motor tuvo un error (${st.engine_error}). La partida sigue: podés deshacer, seguir jugando o empezar una nueva.`
+      : null);
+  }
+
+  function newGame() {
+    gameRef.current++;           // una acción en curso de la partida vieja se descarta
+    setState(null); setError(null); setChoiceHidden(false);
   }
 
   function toggleFoe(id: string) {
@@ -274,6 +296,7 @@ export default function Play() {
 
   async function start() {
     setError(null); setBooting(true);
+    const gid = ++gameRef.current;
     try {
       const mineP = pickables.find((p) => p.id === mineId);
       const foesP = foeIds.map((id) => pickables.find((p) => p.id === id)).filter(Boolean) as Pickable[];
@@ -312,7 +335,8 @@ export default function Play() {
       const raw = await callWorker("new_game", {
         specs: JSON.stringify(specs), datamap: JSON.stringify(datamap), seed, level,
       });
-      if (raw) setState(JSON.parse(raw));
+      if (gid !== gameRef.current) return;      // el usuario ya salió de esta partida
+      applyState(raw);
       setPicked(new Set());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -321,15 +345,21 @@ export default function Play() {
 
   async function doAct(kind: string, arg: object = {}) {
     if (!workerRef.current || thinking) return;   // una acción a la vez (motor de 1 hilo)
+    const gid = gameRef.current;
     setThinking(true);
     try {
       const raw = await callWorker("act", { kind, arg: JSON.stringify(arg) });
-      if (raw) setState(JSON.parse(raw));
+      if (gid !== gameRef.current) return;   // "Nueva partida" mientras pensaba: descartar
+      applyState(raw);
       if (kind === "attack" || kind === "end") setPicked(new Set());
       if (kind === "defend") setAssign({});
       if (kind === "mulligan" || kind === "keep") setBottom([]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (gid !== gameRef.current) return;
+      setError((e instanceof Error ? e.message : String(e)) +
+        " — se recargó el estado de la partida.");
+      // resincronizar con lo que el motor tiene de verdad
+      try { applyState(await callWorker("state")); } catch { /* el worker murió */ }
     } finally {
       setThinking(false);
     }
@@ -591,10 +621,16 @@ export default function Play() {
                   <span className="muted"> · {legal.mana_sources} fuentes</span>
                 </span>
               )}
-              <button className="ghost" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5 }} onClick={() => { setState(null); setError(null); }}>
+              <button className="ghost" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5 }} onClick={newGame}>
                 <Icon name="undo" size={14} /> Nueva partida
               </button>
             </div>
+            {error && (
+              <p className="err" role="alert" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Icon name="warning" size={15} /> <span style={{ flex: 1 }}>{error}</span>
+                <button className="inspect-x" style={{ position: "static" }} aria-label="Cerrar aviso" title="Cerrar" onClick={() => setError(null)}><Icon name="x" size={14} /></button>
+              </p>
+            )}
 
             {myTurn && state.opp_turns && state.opp_turns.length > 0 && (
               <div className="opp-recap">
@@ -1261,7 +1297,15 @@ export default function Play() {
         </div>
       )}
 
-      {state?.phase === "choose" && state.choice && (() => {
+      {state?.phase === "choose" && state.choice && choiceHidden && (
+        <button className="go" onClick={() => setChoiceHidden(false)}
+          style={{ position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", zIndex: 50,
+                   display: "inline-flex", alignItems: "center", gap: 6, boxShadow: "var(--shadow)" }}>
+          <Icon name="book" size={14} /> Tenés una decisión pendiente · Abrir
+        </button>
+      )}
+
+      {state?.phase === "choose" && state.choice && !choiceHidden && (() => {
         const ch = state.choice;
         const isCardPick = ch.options.some((o) => o.is_land !== undefined);
         const titles: Record<string, string> = {
@@ -1302,8 +1346,10 @@ export default function Play() {
           : ch.kind === "gy_shuffle" ? "Ninguna más"
           : "No llevarme ninguna";
         return (
-          <div className="inspect-back">
+          <div className="inspect-back" role="dialog" aria-modal="true" aria-label={title}>
             <div className="inspect" onClick={(e) => e.stopPropagation()}>
+              {/* minimizar (no resuelve): deja ver el tablero y llegar a "Nueva partida" */}
+              <button className="inspect-x" aria-label="Ocultar decisión" title="Ocultar (mirar el tablero)" onClick={() => setChoiceHidden(true)}><Icon name="x" size={16} /></button>
               <h3><Icon name="book" size={17} /> {title}</h3>
               {hint && <p className="muted" style={{ marginTop: 2, fontSize: ".82rem", opacity: .85 }}>{hint}</p>}
               <p className="muted" style={{ marginTop: 2 }}>{ch.prompt}</p>

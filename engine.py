@@ -757,6 +757,21 @@ class Game:
     def ap(self) -> "Player":
         return self.players[self.active_index]
 
+    # Decisión pendiente del humano. Si un efecto pide OTRA decisión mientras ya
+    # hay una abierta (p. ej. dos "scry" que resuelven seguidos en la pila), la
+    # nueva espera en choice_queue en vez de pisar a la primera: antes la primera
+    # se perdía junto con las cartas que ya había sacado de la biblioteca.
+    @property
+    def pending_choice(self):
+        return getattr(self, "_pending_choice", None)
+
+    @pending_choice.setter
+    def pending_choice(self, value):
+        if value is not None and getattr(self, "_pending_choice", None) is not None:
+            self.choice_queue.append(value)
+            return
+        self._pending_choice = value
+
     def opponents(self, p: "Player") -> list:
         return [o for o in self.players if o is not p and not o.lost]
 
@@ -1603,8 +1618,14 @@ class Game:
                 if getattr(card, "_kicked", False) and getattr(card, "_kicked_effect", None):
                     g.log(f"{card.name} fue kickeado: bono")
                     card._kicked_effect(g, player)
+                # Flashback/escape: al dejar la pila va al exilio (aunque la
+                # resolución ocurra después de una pausa de reacción del humano).
+                if getattr(card, "_exile_after_cast", False):
+                    card._exile_after_cast = False
+                    player.exile.append(card)
+                    g.log(f"{card.name} se exilia tras lanzarse desde el cementerio")
                 # Buyback: vuelve a la mano en vez de al cementerio.
-                if buyback_used:
+                elif buyback_used:
                     player.hand.append(card)
                     g.log(f"{card.name} vuelve a la mano (buyback)")
                 else:
@@ -1630,6 +1651,29 @@ class Game:
         if rc is not None and rc(player, react_arg):
             raise ReactionPause(self.stack[-1])
         self._run_priority_and_resolve()
+        return True
+
+    def counter_spell(self, obj) -> bool:
+        """Contrarresta el objeto `obj` de la pila y manda su carta a donde
+        corresponde: nada si es una COPIA (la carta original sigue en la pila o ya
+        resolvió), exilio si se lanzó con flashback/escape, zona de mando si es el
+        comandante, cementerio en otro caso. Devuelve False si ya no estaba."""
+        if obj not in self.stack:
+            return False
+        self.stack.remove(obj)
+        card = getattr(obj, "source", None)
+        if card is None or card.is_land() or str(getattr(obj, "label", "")).startswith("copy:"):
+            return True
+        ctrl = obj.controller
+        if getattr(card, "_exile_after_cast", False):
+            card._exile_after_cast = False
+            ctrl.exile.append(card)
+        elif card is ctrl.commander_card:
+            ctrl.command.append(card)
+            self.log(f"{card.name} vuelve a la zona de mando")
+        else:
+            ctrl.graveyard.append(card)
+            self.emit("to_graveyard", player=ctrl, card=card)
         return True
 
     def _respond_order(self):
@@ -2088,18 +2132,28 @@ class Game:
             return True
         # hechizo (flashback / escape / disturb): lanzar por el coste alternativo,
         # luego exiliar. Se reusa cast() sobreescribiendo el coste temporalmente.
+        # La carta queda marcada para ir al exilio cuando deje la pila: si cast()
+        # pausa por una reacción del humano (ReactionPause), el código de abajo no
+        # corre, y antes la carta volvía al cementerio y se relanzaba.
         p.graveyard.remove(card)
         orig = card.cost
+        card._exile_after_cast = True
+        ok = False
         try:
             if cost is not None:
                 card.cost = cost
-            self.cast(p, card, targets=targets, chosen_modes=chosen_modes)
+            ok = self.cast(p, card, targets=targets, chosen_modes=chosen_modes)
+        except ReactionPause:
+            ok = True            # está en la pila esperando la reacción
+            raise
         finally:
             card.cost = orig
-        if card in p.graveyard:
-            p.graveyard.remove(card)
-            p.exile.append(card)
-            self.log(f"{card.name} se exilia tras lanzarse desde el cementerio")
+            if ok is False:      # no se pudo lanzar (p. ej. impuesto stax): no se pierde
+                card._exile_after_cast = False
+                if card not in p.graveyard:
+                    p.graveyard.append(card)
+        if ok is False:
+            return False
         self.sba()
         return True
 
@@ -2119,16 +2173,23 @@ class Game:
             self.play_land(p, card)
             self.sba()
             return True
+        # sacarla del exilio ANTES de lanzar: si cast() pausa por una reacción
+        # del humano, antes quedaba a la vez en el exilio y en la pila (duplicada)
+        p.exile_play.remove(card)
         orig = card.cost
+        ok = False
         try:
             card.cost = cost
             ok = self.cast(p, card, targets=targets, chosen_modes=chosen_modes)
+        except ReactionPause:
+            ok = True
+            raise
         finally:
             card.cost = orig
-        if ok is not False and card in p.exile_play:
-            p.exile_play.remove(card)
+            if ok is False and card not in p.exile_play:
+                p.exile_play.append(card)     # no se lanzó: vuelve al exilio
         self.sba()
-        return True
+        return ok is not False
 
     def suspend_card(self, p: "Player", card: Card) -> bool:
         """Suspende una carta de la mano: paga el coste de suspend, la exilia con N

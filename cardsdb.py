@@ -286,15 +286,11 @@ def _counter_spell_effect():
     carta va al cementerio. Cubre Counterspell y variantes importadas de Scryfall."""
     def eff(game, ctrl, targets):
         obj = (list(targets or []) or [None])[0]
-        if obj is None or obj not in game.stack:
+        if obj is None:
             return
-        game.stack.remove(obj)
-        card = getattr(obj, "source", None)
-        name = getattr(card, "name", "?")
-        if card is not None and not card.is_land():
-            obj.controller.graveyard.append(card)
-            game.emit("to_graveyard", player=obj.controller, card=card)
-        game.log(f"{ctrl.name} contrarresta {name}")
+        name = getattr(getattr(obj, "source", None), "name", "?")
+        if game.counter_spell(obj):
+            game.log(f"{ctrl.name} contrarresta {name}")
     return eff
 
 
