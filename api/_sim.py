@@ -28,6 +28,32 @@ except Exception:     # noqa: BLE001
 MAX_N = 2000          # tope de partidas por request (serverless timeout)
 FREE_N = 100          # tope gratis de partidas por request (supporter sube a MAX_N)
 MAX_CARDS = 200       # tope de entradas de decklist
+MAX_DECKS = 6         # tope de mazos por mesa
+BUDGET_S = 50.0       # la función serverless corta a los 60s: paramos antes
+
+
+def _play_budgeted(play_one, n, budget=BUDGET_S):
+    """Corre hasta n partidas (`play_one(seed) -> ganador`) y corta si se pasa del
+    presupuesto de tiempo (siempre al menos 1). Devuelve (Counter, corridas)."""
+    import time
+    from collections import Counter
+    start = time.monotonic()
+    wins = Counter()
+    ran = 0
+    for i in range(n):
+        wins[play_one(i)] += 1
+        ran = i + 1
+        if ran < n and time.monotonic() - start > budget:
+            break
+    return wins, ran
+
+
+def _check_parsed(parsed):
+    """Rechaza listas con demasiadas entradas (la cantidad por línea ya viene
+    acotada por decklist.parse_decklist)."""
+    if len(parsed["cards"]) > MAX_CARDS:
+        raise ValueError(f"demasiadas cartas (max {MAX_CARDS})")
+    return parsed
 
 
 def deck_list():
@@ -45,21 +71,23 @@ def deck_list():
 
 
 def simulate(matchup, n):
-    matchup = [m for m in matchup if m in decks.DECKS]
+    """GET público sin identidad: tope gratis de partidas, mazos sin repetir
+    (con claves repetidas los wins se mezclaban) y presupuesto de tiempo."""
+    matchup = list(dict.fromkeys(m for m in matchup if m in decks.DECKS))[:MAX_DECKS]
     if len(matchup) < 2:
-        raise ValueError("hacen falta al menos 2 mazos validos")
-    n = max(1, min(int(n), MAX_N))
-    wins = run.many(matchup, n=n, verbose=False)
-    total = n
+        raise ValueError("hacen falta al menos 2 mazos validos (distintos)")
+    n = max(1, min(int(n), FREE_N))
+    wins, ran = _play_budgeted(lambda seed: run.one(matchup, seed=seed), n)
     results = [{"deck": k, "wins": wins.get(k, 0),
-                "pct": round(100 * wins.get(k, 0) / total, 1)} for k in matchup]
+                "pct": round(100 * wins.get(k, 0) / ran, 1)} for k in matchup]
     results.append({"deck": "EMPATE", "wins": wins.get("EMPATE", 0),
-                    "pct": round(100 * wins.get("EMPATE", 0) / total, 1)})
-    return {"matchup": matchup, "n": n, "results": results}
+                    "pct": round(100 * wins.get("EMPATE", 0) / ran, 1)})
+    return {"matchup": matchup, "n": ran, "requested": n,
+            "timed_out": ran < n, "results": results}
 
 
 def game_log(matchup, seed):
-    matchup = [m for m in matchup if m in decks.DECKS]
+    matchup = [m for m in matchup if m in decks.DECKS][:MAX_DECKS]
     if len(matchup) < 2:
         raise ValueError("hacen falta al menos 2 mazos validos")
     g = run._build_game(matchup, seed=int(seed), log=False)
@@ -128,9 +156,7 @@ def _card_row(name, qty, card):
 def resolve_decklist(text):
     """Parsea una lista y resuelve cada carta (registro + Scryfall). Devuelve
     la tabla editable, el comandante y un resumen de cobertura."""
-    parsed = decklist.parse_decklist(text or "")
-    if len(parsed["cards"]) > MAX_CARDS:
-        raise ValueError(f"demasiadas cartas (max {MAX_CARDS})")
+    parsed = _check_parsed(decklist.parse_decklist(text or ""))
     names = ([parsed["commander"]] if parsed["commander"] else []) + \
             [n for _, n in parsed["cards"]]
     fetch = _make_fetch(names)
@@ -203,16 +229,20 @@ def resolve_decklist(text):
 
 def _build_deck_defs(specs):
     """Arma [(label, deck, commander)] desde specs (registered/custom) con una
-    sola resolucion de Scryfall para los custom. Devuelve (deck_defs, max_turns).
+    sola resolucion de Scryfall para los custom. Devuelve
+    (deck_defs, max_turns, unresolved) con unresolved = {label: [cartas]}.
     """
-    specs = [s for s in specs if s][:6]
+    specs = [s for s in (specs or []) if isinstance(s, dict)][:MAX_DECKS]
     if len(specs) < 2:
         raise ValueError("elegí al menos 2 decks")
+    for s in specs:
+        if s.get("kind") not in ("registered", "custom"):
+            raise ValueError(f"tipo de deck desconocido: {s.get('kind')!r}")
 
     custom_names = []
     for s in specs:
         if s.get("kind") == "custom":
-            parsed = decklist.parse_decklist(s.get("text", ""))
+            parsed = _check_parsed(decklist.parse_decklist(s.get("text") or ""))
             s["_parsed"] = parsed
             if parsed.get("commander"):
                 custom_names.append(parsed["commander"])
@@ -220,8 +250,10 @@ def _build_deck_defs(specs):
     fetch = _make_fetch(custom_names) if custom_names else None
 
     deck_defs = []
+    unresolved = {}
     seen = {}
     for s in specs:
+        missing = []
         if s.get("kind") == "registered":
             key = s.get("key")
             if key not in decks.DECKS:
@@ -229,18 +261,28 @@ def _build_deck_defs(specs):
             deck, cmd = decks.build(key)
             label = s.get("name") or key
         else:
-            deck, cmd, _rep = decklist.build_deck(s["_parsed"], fetch=fetch)
+            deck, cmd, rep = decklist.build_deck(s["_parsed"], fetch=fetch)
             label = s.get("name") or cmd.name
+            missing = rep.get("unresolved") or []
+            total = len(s["_parsed"]["cards"])
+            # si no resuelve ni la mitad (Scryfall caído / rate limit) el mazo
+            # sería casi todo básicas: mejor fallar que simular otra cosa
+            if total and len(missing) * 2 > total:
+                raise ValueError(
+                    f"«{label}»: no se pudieron resolver {len(missing)} de {total} "
+                    "cartas (¿Scryfall no disponible?). Probá de nuevo en un rato.")
         base = label
         k = seen.get(base, 0)
         seen[base] = k + 1
         if k:
             label = f"{base} ({k + 1})"
         deck_defs.append((label, deck, cmd))
+        if missing:
+            unresolved[label] = missing
 
     # mas jugadores -> mas turnos para que la partida se resuelva
     max_turns = min(320, 40 + 40 * len(deck_defs))
-    return deck_defs, max_turns
+    return deck_defs, max_turns, unresolved
 
 
 _LEVELS = ("novato", "intermedio", "avanzado")
@@ -279,7 +321,7 @@ def match(specs, n=120, level="intermedio"):
 
     n = max(1, min(int(n), 500))
     level = _lvl(level)
-    deck_defs, max_turns = _build_deck_defs(specs)
+    deck_defs, max_turns, unresolved = _build_deck_defs(specs)
     labels = [lbl for lbl, _d, _c in deck_defs]
     nplayers = len(deck_defs)
     deck_by_label = {lbl: deck for lbl, deck, _c in deck_defs}
@@ -354,7 +396,7 @@ def match(specs, n=120, level="intermedio"):
     }
     return {"n": ran, "requested": n, "timed_out": timed_out,
             "players": nplayers, "level": level, "results": results,
-            "notes": notes, "games": games}
+            "notes": notes, "games": games, "unresolved": unresolved}
 
 
 def _art_url(card):
@@ -434,7 +476,7 @@ def card_info(names):
 def replay(specs, seed=0, level="intermedio"):
     """Juega UNA partida con la traza activa y devuelve los pasos para el
     reproductor visual (Fase 1) + un mapa de arte por carta."""
-    deck_defs, max_turns = _build_deck_defs(specs)
+    deck_defs, max_turns, unresolved = _build_deck_defs(specs)
     players = run.build_players_from_defs(deck_defs, level=_lvl(level))
     g = Game(players, seed=int(seed), max_turns=max_turns, trace=True)
     winner = g.play()
@@ -455,17 +497,18 @@ def replay(specs, seed=0, level="intermedio"):
         "analysis": _matchanalysis.analyze(g.trace, winner, players,
                                            getattr(g, "ability_events", None)),
         "images": _card_images(names),
+        "unresolved": unresolved,
     }
 
 
 def match_log(specs, level="intermedio"):
     """Juega UNA partida de la mesa y devuelve el relato turno a turno."""
-    deck_defs, max_turns = _build_deck_defs(specs)
+    deck_defs, max_turns, unresolved = _build_deck_defs(specs)
     g = run.play_defs(deck_defs, seed=0, log=False, max_turns=max_turns,
                       level=_lvl(level))
     winner = g.play()
     return {"players": len(deck_defs), "winner": winner, "turns": g.turn,
-            "log": g.log_lines}
+            "log": g.log_lines, "unresolved": unresolved}
 
 
 def simulate_custom(cards_list, commander_name, opponent, n):
@@ -473,22 +516,23 @@ def simulate_custom(cards_list, commander_name, opponent, n):
     if opponent not in decks.DECKS:
         raise ValueError(f"oponente desconocido: {opponent}")
     n = max(1, min(int(n), MAX_N))
-    entries = [(int(c.get("qty", 1)), c["name"]) for c in cards_list
-               if c.get("name")]
-    parsed = {"commander": commander_name, "cards": entries}
+    entries = [(decklist.clamp_qty(c.get("qty", 1)), str(c["name"]))
+               for c in (cards_list or []) if isinstance(c, dict) and c.get("name")]
+    parsed = _check_parsed({"commander": commander_name, "cards": entries})
     names = [commander_name] + [name for _, name in entries]
     fetch = _make_fetch(names)
     deck, cmd, report = decklist.build_deck(parsed, fetch=fetch)
 
     odeck, ocmd = decks.build(opponent)
     defs = [("importado", deck, cmd), (opponent, odeck, ocmd)]
-    wins = run.many_defs(defs, n=n)
+    wins, ran = _play_budgeted(lambda seed: run.play_defs(defs, seed=seed).play(), n)
     results = [
         {"deck": "importado", "wins": wins.get("importado", 0),
-         "pct": round(100 * wins.get("importado", 0) / n, 1)},
+         "pct": round(100 * wins.get("importado", 0) / ran, 1)},
         {"deck": opponent, "wins": wins.get(opponent, 0),
-         "pct": round(100 * wins.get(opponent, 0) / n, 1)},
+         "pct": round(100 * wins.get(opponent, 0) / ran, 1)},
         {"deck": "EMPATE", "wins": wins.get("EMPATE", 0),
-         "pct": round(100 * wins.get("EMPATE", 0) / n, 1)},
+         "pct": round(100 * wins.get("EMPATE", 0) / ran, 1)},
     ]
-    return {"n": n, "opponent": opponent, "results": results, "report": report}
+    return {"n": ran, "requested": n, "timed_out": ran < n,
+            "opponent": opponent, "results": results, "report": report}

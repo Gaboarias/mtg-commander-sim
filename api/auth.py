@@ -16,15 +16,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _auth  # noqa: E402
 
 
-def _dispatch(req):
+def _dispatch(req, ip=None):
     action = req.get("action")
     if action == "register":
         return _auth.register(req.get("email"), req.get("password"))
     if action == "login":
-        return _auth.login(req.get("email"), req.get("password"))
+        return _auth.login(req.get("email"), req.get("password"), ip)
     if action == "reset":
         return _auth.reset_password(req.get("email"), req.get("recovery_code"),
-                                    req.get("password"))
+                                    req.get("password"), ip)
     if action == "logout":
         return _auth.logout(req.get("token"))
     if action == "whoami":
@@ -39,7 +39,10 @@ class handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length) if length else b"{}"
             req = json.loads(raw.decode("utf-8") or "{}")
-            body, code = _dispatch(req), 200
+            # Vercel sobrescribe x-forwarded-for con la IP real del cliente
+            ip = ((self.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+                  or self.headers.get("x-real-ip") or self.client_address[0])
+            body, code = _dispatch(req, ip), 200
         except Exception as exc:  # noqa: BLE001
             body, code = {"error": str(exc)}, 400
         payload = json.dumps(body).encode("utf-8")

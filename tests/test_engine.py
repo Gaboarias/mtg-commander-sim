@@ -7656,15 +7656,18 @@ def test_sunfall_exiles_all_creatures_and_incubates():
     assert not any(p.name == "Incubator" for p in op.battlefield)
 
 
-def test_cloud_push_merges_never_wipes_and_pull_matches_client_shape():
-    # Regresión: push hacía DELETE de TODOS los decks + reinsertaba lo local, así
-    # que un dispositivo sin decks (o un autosave del binder) vaciaba la nube; y
-    # pull devolvía deck_id/updated_at, que el cliente (id/updatedAt) colapsaba.
-    import importlib, sqlite3
-    sys.path.insert(0, os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api"))
-    _db = importlib.import_module("_db")
-    cloud = importlib.import_module("cloud")
+def _api_mod(name):
+    import importlib
+    api = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api")
+    if api not in sys.path:
+        sys.path.insert(0, api)
+    return importlib.import_module(name)
+
+
+def _sqlite_run():
+    """Reemplazo de _db.run que ejecuta el SQL REAL contra sqlite en memoria
+    (Turso es libsql = sqlite), así los tests validan también la sintaxis."""
+    import sqlite3
     con = sqlite3.connect(":memory:")
     con.row_factory = sqlite3.Row
 
@@ -7676,6 +7679,16 @@ def test_cloud_push_merges_never_wipes_and_pull_matches_client_shape():
             out.append({"rows": rows, "affected": cur.rowcount, "last_insert_rowid": None})
         con.commit()
         return out
+    return fake_run
+
+
+def test_cloud_push_merges_never_wipes_and_pull_matches_client_shape():
+    # Regresión: push hacía DELETE de TODOS los decks + reinsertaba lo local, así
+    # que un dispositivo sin decks (o un autosave del binder) vaciaba la nube; y
+    # pull devolvía deck_id/updated_at, que el cliente (id/updatedAt) colapsaba.
+    _db = _api_mod("_db")
+    cloud = _api_mod("cloud")
+    fake_run = _sqlite_run()
 
     def deck(i, t):
         return {"id": i, "name": "D" + i, "text": "1 X", "colors": ["R"], "updatedAt": t}
@@ -7884,3 +7897,194 @@ def _run_all():
 
 if __name__ == "__main__":
     _run_all()
+
+
+def test_decklist_quantities_are_capped_and_expansion_stops_at_99():
+    # Regresión (DoS): "1000000 Sol Ring" se expandía a un millón de cartas antes
+    # de recortar a 99 (~4 GB de RAM en la función serverless).
+    import decklist, time
+    p = decklist.parse_decklist("Commander\n1 Kang\n\nDeck\n1000000 Sol Ring")
+    assert p["cards"] == [(decklist.MAX_QTY, "Sol Ring")]
+    real = {"Kang": {"name": "Kang", "type_line": "Legendary Creature", "mana_cost": "{2}{U}",
+                     "power": "3", "toughness": "3", "color_identity": ["U"]}}
+    t = time.time()
+    deck, _cmd, _rep = decklist.build_deck(
+        {"commander": "Kang", "cards": [(10 ** 6, "Island")]}, fetch=real.get)
+    assert len(deck) == 99 and time.time() - t < 5
+    assert len({id(c) for c in deck}) == 99          # cada copia es su propio objeto
+    assert decklist.clamp_qty("abc") == 1 and decklist.clamp_qty(-5) == 1
+
+
+def test_sim_endpoints_bound_cost_and_report_unresolved():
+    _sim = _api_mod("_sim")
+    import run
+    # /api/simulate: claves repetidas se deduplican y n queda en el tope gratis
+    calls = []
+    orig_one = run.one
+    run.one = lambda keys, seed=0, **k: calls.append(seed) or keys[0]
+    try:
+        res = _sim.simulate(["kang", "kang", "lorehold", "nope"], "99999")
+    finally:
+        run.one = orig_one
+    assert res["matchup"] == ["kang", "lorehold"]
+    assert res["requested"] == _sim.FREE_N and len(calls) == _sim.FREE_N
+    assert sum(r["pct"] for r in res["results"]) == 100.0
+    # el presupuesto de tiempo corta (siempre al menos 1 partida)
+    wins, ran = _sim._play_budgeted(lambda seed: "x", 50, budget=-1)
+    assert ran == 1 and wins["x"] == 1
+    # kind desconocido: error claro (antes KeyError '_parsed')
+    try:
+        _sim._build_deck_defs([{"kind": "registered", "key": "kang"}, {"kind": "zzz"}])
+        assert False
+    except ValueError as e:
+        assert "desconocido" in str(e)
+    # cartas no resueltas: se informan; si son más de la mitad, falla
+    data = {"Kang": {"name": "Kang", "type_line": "Legendary Creature",
+                     "mana_cost": "{2}{U}", "power": "3", "toughness": "3",
+                     "color_identity": ["U"]},
+            "Island": {"name": "Island", "type_line": "Basic Land — Island",
+                       "mana_cost": "", "color_identity": []}}
+    orig_fetch = _sim._make_fetch
+    _sim._make_fetch = lambda names: data.get
+    try:
+        ok = "Commander\n1 Kang\n\nDeck\n1 Island\n1 Island\n1 Typo Card"
+        defs, _mt, unresolved = _sim._build_deck_defs(
+            [{"kind": "registered", "key": "kang"}, {"kind": "custom", "name": "Mio", "text": ok}])
+        assert unresolved == {"Mio": ["Typo Card"]}
+        bad = "Commander\n1 Kang\n\nDeck\n1 Island\n1 Nope A\n1 Nope B"
+        try:
+            _sim._build_deck_defs([{"kind": "registered", "key": "kang"},
+                                   {"kind": "custom", "name": "Mio", "text": bad}])
+            assert False
+        except ValueError as e:
+            assert "no se pudieron resolver 2 de 3" in str(e)
+    finally:
+        _sim._make_fetch = orig_fetch
+
+
+def test_stats_server_side_only_and_ranking_survives_garbage_rows():
+    # Regresión: un POST anónimo con commanders=[["x"]] rompía GET /api/stats y
+    # /admin para siempre (unhashable list), y cualquiera inventaba resultados.
+    _db = _api_mod("_db")
+    stats = _api_mod("stats")
+    fake_run = _sqlite_run()
+    orig = _db.run
+    _db.run = fake_run
+    try:
+        _db.ensure_schema()
+        # filas basura ya guardadas por la versión vieja
+        _db.execute("INSERT INTO mtg_matches (winner, commanders, turns, created_at) "
+                    "VALUES (?, ?, 1, 1)", [None, '[["x"], {"a": 1}, "Kang"]'])
+        assert stats.record("Kang", ["Kang", "Atraxa"], 9)["ok"]
+        assert not stats.record("Otro", ["Kang", "Atraxa"], 9)["ok"]   # ganador ajeno
+        assert not stats.record("Kang", [["x"]], 9)["ok"]               # forma inválida
+        top = stats.top(9999)
+        assert {r["commander"] for r in top["top"]} == {"Kang", "Atraxa"}
+        kang = next(r for r in top["top"] if r["commander"] == "Kang")
+        assert kang["games"] == 2 and kang["wins"] == 1
+    finally:
+        _db.run = orig
+
+
+def test_auth_admin_lockout_and_coupon_hardening():
+    _db = _api_mod("_db")
+    os.environ["ADMIN_EMAIL"] = "boss@x.com"
+    import importlib
+    _auth = importlib.reload(_api_mod("_auth"))
+    supporter = _api_mod("supporter")
+    orig = _db.run
+    _db.run = _sqlite_run()
+    try:
+        # el primer registro del email admin es admin; si ya hay admin, no
+        assert _auth.register("boss@x.com", "secretpw123")["user"]["is_admin"]
+        _db.execute("UPDATE mtg_users SET email = 'old@x.com' WHERE email = 'boss@x.com'")
+        assert not _auth.register("boss@x.com", "secretpw123")["user"]["is_admin"]
+        # bloqueo por cuenta+IP: la IP atacante se bloquea, la del dueño no
+        _auth.register("me@x.com", "mypassword1")
+        for _ in range(_auth._MAX_FAILS):
+            try:
+                _auth.login("me@x.com", "wrongpass", ip="6.6.6.6")
+            except ValueError:
+                pass
+        try:
+            _auth.login("me@x.com", "mypassword1", ip="6.6.6.6")
+            assert False
+        except ValueError as e:
+            assert "demasiados intentos" in str(e)
+        assert _auth.login("me@x.com", "mypassword1", ip="1.2.3.4")["user"]["email"] == "me@x.com"
+        # email inexistente: mismo costo (se calcula el PBKDF2 igual)
+        calls = []
+        orig_hash = _auth._hash
+        _auth._hash = lambda *a: calls.append(a) or orig_hash(*a)
+        try:
+            _auth.login("nadie@x.com", "whatever1", ip="9.9.9.9")
+        except ValueError:
+            pass
+        _auth._hash = orig_hash
+        assert len(calls) == 1
+        # el reset también se bloquea tras varios códigos malos
+        for _ in range(_auth._MAX_FAILS):
+            try:
+                _auth.reset_password("me@x.com", "AAAA-BBBB-CCCC", "newpass123", ip="6.6.6.6")
+            except ValueError:
+                pass
+        try:
+            _auth.reset_password("me@x.com", "AAAA-BBBB-CCCC", "newpass123", ip="6.6.6.6")
+            assert False
+        except ValueError as e:
+            assert "demasiados intentos" in str(e)
+        # sin env ADMIN_EMAIL nadie es admin al registrarse
+        os.environ["ADMIN_EMAIL"] = ""
+        _auth = importlib.reload(_auth)
+        assert not _auth.register("x@x.com", "secretpw123")["user"]["is_admin"]
+    finally:
+        _db.run = orig
+        os.environ.pop("ADMIN_EMAIL", None)
+    # cupón: ya no hay uno hardcodeado; solo la env
+    old = os.environ.pop("SUPPORTER_CODES", None)
+    try:
+        assert not supporter._coupon_ok("GRACIAS-MTG")
+        os.environ["SUPPORTER_CODES"] = "NUEVO-1, NUEVO-2"
+        assert supporter._coupon_ok(" NUEVO-2 ") and not supporter._coupon_ok("")
+    finally:
+        os.environ.pop("SUPPORTER_CODES", None)
+        if old is not None:
+            os.environ["SUPPORTER_CODES"] = old
+
+
+def test_scryfall_client_caps_names_and_escapes_paths():
+    _scry = _api_mod("_scry")
+    posts = []
+    orig_post, orig_pause = _scry._post, _scry._BATCH_PAUSE
+    _scry._post = lambda ids: posts.append(len(ids)) or {"data": []}
+    _scry._BATCH_PAUSE = 0
+    try:
+        _scry.resolve_many(["Card %d" % i for i in range(30000)] + [["no-str"]])
+    finally:
+        _scry._post, _scry._BATCH_PAUSE = orig_post, orig_pause
+    assert sum(posts) == _scry.MAX_NAMES and len(posts) == -(-_scry.MAX_NAMES // 75)
+    urls = []
+    orig_get = _scry._get
+    _scry._get = lambda url: urls.append(url) or {}
+    try:
+        _scry.by_collector("../../x", "a/b")
+    finally:
+        _scry._get = orig_get
+    assert urls and "/../" not in urls[0] and "%2F" in urls[0]
+
+
+def test_update_precons_fails_loudly_when_mtgjson_is_down():
+    _precon = _api_mod("_precon")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "update_precons", os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "scripts", "update_precons.py"))
+    up = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(up)
+    orig = _precon._get
+    _precon._get = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("net down"))
+    try:
+        assert up.main([]) == 2          # no reescribe la instantánea ni dice "ok"
+    finally:
+        _precon._get = orig
+        _precon._cache_index = None

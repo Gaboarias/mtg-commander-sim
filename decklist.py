@@ -27,6 +27,19 @@ _HEADERS_MAIN = {"deck", "mainboard", "main", "creatures", "lands", "spells",
                  "planeswalkers", "other"}
 
 
+MAX_QTY = 99            # un mazo de Commander nunca necesita más copias de una carta
+
+
+def clamp_qty(q) -> int:
+    """Cantidad por línea acotada a 1..MAX_QTY: "1000000 Sol Ring" no debe
+    expandirse a un millón de objetos (tumbaba la función serverless)."""
+    try:
+        q = int(q)
+    except (TypeError, ValueError):
+        q = 1
+    return max(1, min(q, MAX_QTY))
+
+
 def parse_decklist(text: str) -> dict:
     commander = None
     entries = []            # [(qty, name)]
@@ -52,7 +65,7 @@ def parse_decklist(text: str) -> dict:
         m = _LINE.match(line)
         if not m:
             continue
-        qty = int(m.group(1)) if m.group(1) else 1
+        qty = clamp_qty(m.group(1)) if m.group(1) else 1
         name = m.group(2)
         is_cmd_mark = bool(_CMDR_MARK.search(name))
         name = _CMDR_MARK.sub("", name)
@@ -99,10 +112,12 @@ def build_deck(parsed: dict, fetch=None, target=99):
         if card is None:
             unresolved.append(name)
             continue
+        qty = clamp_qty(qty)
         if cardsdb.is_implemented(name):
             implemented += qty
-        for _ in range(qty):
-            deck.append(cardsdb.resolve(name, fetch))
+        deck.append(card)
+        for _ in range(min(qty, target - len(deck) + 1) - 1):
+            deck.append(cardsdb.resolve(name, fetch))   # objeto propio por copia
 
     # ajustar a 99: recortar o rellenar con basicas de la identidad
     deck = deck[:target]

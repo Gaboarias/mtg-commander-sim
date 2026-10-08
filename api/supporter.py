@@ -9,6 +9,7 @@ comas). Es el enganche para conectar Ko-fi/Patreon más adelante (un webhook pod
 escribir directamente en mtg_supporters). El core del sitio NO depende de esto: solo
 sube topes gratis (simulaciones grandes, más decks en la nube).
 """
+import hmac
 import json
 import os
 import re
@@ -22,15 +23,19 @@ import _db  # noqa: E402
 _CODE_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 
 
-# Cupón de fallback (sirve aunque no esté seteada la env SUPPORTER_CODES).
-# La env, si existe, SUMA códigos (podés rotar el fallback cambiándolo acá).
-_FALLBACK_CODES = {"GRACIAS-MTG"}
-
-
 def _valid_coupons():
+    """Cupones válidos: SOLO la env SUPPORTER_CODES. Antes había uno hardcodeado
+    acá (público en el repo y sin forma de desactivarlo)."""
     raw = os.environ.get("SUPPORTER_CODES", "")
-    env = {c.strip() for c in raw.split(",") if c.strip()}
-    return env | _FALLBACK_CODES
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+def _coupon_ok(coupon):
+    given = (coupon or "").strip().encode("utf-8")
+    ok = False
+    for c in _valid_coupons():      # recorre todos: tiempo constante por cupón
+        ok |= hmac.compare_digest(given, c.encode("utf-8"))
+    return bool(given) and ok
 
 
 def is_supporter(code):
@@ -49,7 +54,7 @@ def is_supporter(code):
 def redeem(code, coupon):
     if not _CODE_RE.match(code or ""):
         raise ValueError("código inválido")
-    if (coupon or "").strip() not in _valid_coupons():
+    if not _coupon_ok(coupon):
         return {"supporter": False, "error": "cupón inválido"}
     _db.ensure_schema()
     _db.execute(

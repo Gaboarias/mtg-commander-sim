@@ -7,6 +7,8 @@ Scryfall: mana_cost, type_line, power, toughness, keywords, color_identity).
 """
 import json
 import re
+import time
+import urllib.error
 import urllib.request
 from urllib.parse import quote
 
@@ -19,14 +21,32 @@ def _norm(name):
     return re.sub(r"\s+", " ", name.strip().lower())
 
 
+# Tope de nombres únicos por request y pausa entre lotes: Scryfall pide <=10 req/s
+# y banea la IP/UA si se abusa (lo pagan todos los usuarios). 1200 alcanza para 6
+# mazos de 100 o un binder grande; lo que pase del tope queda sin resolver.
+MAX_NAMES = 1200
+_BATCH_PAUSE = 0.1
+
+
 def _post(identifiers):
     body = json.dumps({"identifiers": identifiers}).encode("utf-8")
     req = urllib.request.Request(
         _ENDPOINT, data=body, method="POST",
         headers={"Content-Type": "application/json", "User-Agent": _UA,
                  "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=25) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    for attempt in (0, 1):
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # 429: respetar Retry-After (acotado) y reintentar UNA vez
+            if exc.code != 429 or attempt:
+                raise
+            try:
+                wait = float(exc.headers.get("Retry-After") or 1)
+            except (TypeError, ValueError):
+                wait = 1.0
+            time.sleep(min(max(wait, 0.5), 3.0))
 
 
 def _front_face(name):
@@ -55,13 +75,19 @@ def resolve_many(names):
     uniq = []
     seen = set()
     for n in names:
+        if not isinstance(n, str):
+            continue
         k = _norm(n)
         if k and k not in seen:
             seen.add(k)
             uniq.append(n)
+            if len(uniq) >= MAX_NAMES:
+                break
     out = {}
     for i in range(0, len(uniq), 75):
         chunk = uniq[i:i + 75]
+        if i:
+            time.sleep(_BATCH_PAUSE)
         try:
             data = _post([{"name": n} for n in chunk])
         except Exception:  # noqa: BLE001 (red caida / rate limit)
@@ -73,6 +99,7 @@ def resolve_many(names):
     retry = [n for n in uniq if "//" in n and _norm(n) not in out]
     for i in range(0, len(retry), 75):
         chunk = retry[i:i + 75]
+        time.sleep(_BATCH_PAUSE)
         try:
             data = _post([{"name": _front_face(n)} for n in chunk])
         except Exception:  # noqa: BLE001
@@ -127,7 +154,8 @@ def by_collector(setcode, number):
     if not setcode or not number:
         return None
     try:
-        return _get(f"{_BASE}/cards/{quote(str(setcode).strip().lower())}/"
-                    f"{quote(str(number).strip())}")
+        # safe="": "/" y ".." no pueden cambiar la ruta pedida a Scryfall
+        return _get(f"{_BASE}/cards/{quote(str(setcode).strip().lower(), safe='')}/"
+                    f"{quote(str(number).strip(), safe='')}")
     except Exception:  # noqa: BLE001
         return None

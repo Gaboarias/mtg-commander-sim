@@ -108,8 +108,13 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     import _precon
-    _precon._cache_index = None     # fuerza una lectura fresca de la red
-    current = _precon.list_precons()
+    try:
+        # lectura fresca y SIN la instantánea de respaldo: si MTGJSON está caído
+        # la revisión debe fallar (rc != 0), no reportar "sin precons nuevos"
+        current = _precon.list_precons(force=True, allow_snapshot=False)
+    except RuntimeError as exc:
+        print(f"ERROR: MTGJSON no respondió ({exc}); no se actualizó nada.")
+        return 2
     old = load_snapshot()
     new = diff_new(old.get("precons", []), current)
 

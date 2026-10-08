@@ -1,8 +1,10 @@
-"""POST/GET /api/stats — ranking global de partidas (anónimo).
+"""GET /api/stats — ranking global de partidas (anónimo).
 
-POST body: {"winner":"<comandante>", "commanders":["..",".."], "turns": 8}
-  registra una partida (best-effort desde /watch o el simulador batch).
-GET /api/stats?top=1  -> {top:[{commander, games, wins, pct}], total}
+GET /api/stats?limit=15  -> {top:[{commander, games, wins, pct}], total}
+
+Las partidas las registra el SERVIDOR (`record`, llamado desde /api/replay con el
+resultado que él mismo simuló). El POST público quedó como no-op: antes cualquiera
+podía inventar resultados o guardar datos basura que rompían el ranking y /admin.
 """
 import json
 import os
@@ -15,28 +17,51 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _db  # noqa: E402
 
 
-def record(winner, commanders, turns):
+MAX_PLAYERS = 6
+MAX_NAME = 120
+RECENT = 5000          # el ranking mira las últimas N partidas (costo acotado)
+
+
+def _clean_names(commanders):
+    if not isinstance(commanders, list):
+        return []
+    out = [c.strip()[:MAX_NAME] for c in commanders if isinstance(c, str) and c.strip()]
+    return out[:MAX_PLAYERS]
+
+
+def record(winner, commanders, turns, timeout=5):
+    """Registra una partida simulada por el servidor. Valida forma y tamaño:
+    2-6 nombres de texto y un ganador que esté entre ellos."""
+    cmds = _clean_names(commanders)
+    w = winner.strip()[:MAX_NAME] if isinstance(winner, str) else ""
+    if len(cmds) < 2 or w not in cmds:
+        return {"ok": False}
+    try:
+        t = max(0, min(int(turns or 0), 10_000))
+    except (TypeError, ValueError):
+        t = 0
     _db.ensure_schema()
-    _db.execute(
+    _db.run([(
         "INSERT INTO mtg_matches (winner, commanders, turns, created_at) VALUES (?, ?, ?, ?)",
-        [(winner or "")[:120], json.dumps(commanders or []),
-         int(turns or 0), int(time.time())])
+        [w, json.dumps(cmds), t, int(time.time())])], timeout=timeout)
     return {"ok": True}
 
 
 def top(limit=30):
+    limit = max(1, min(int(limit), 50))
     _db.ensure_schema()
-    rows = _db.query("SELECT winner, commanders FROM mtg_matches", [])
+    rows = _db.query(
+        "SELECT winner, commanders FROM mtg_matches ORDER BY id DESC LIMIT ?", [RECENT])
     games, wins = {}, {}
     for r in rows:
         try:
-            cmds = json.loads(r.get("commanders") or "[]")
+            cmds = _clean_names(json.loads(r.get("commanders") or "[]"))
         except (TypeError, ValueError):
             cmds = []
         for c in cmds:
             games[c] = games.get(c, 0) + 1
         w = r.get("winner")
-        if w:
+        if isinstance(w, str) and w:     # filas viejas con basura no rompen el ranking
             wins[w] = wins.get(w, 0) + 1
     table = []
     for c, g in games.items():
@@ -65,10 +90,6 @@ class handler(BaseHTTPRequestHandler):
             self._send(400, {"error": str(exc)})
 
     def do_POST(self):
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-            raw = self.rfile.read(length) if length else b"{}"
-            req = json.loads(raw.decode("utf-8") or "{}")
-            self._send(200, record(req.get("winner"), req.get("commanders"), req.get("turns")))
-        except Exception as exc:  # noqa: BLE001
-            self._send(400, {"error": str(exc)})
+        # no-op compatible: clientes viejos lo siguen llamando tras cada replay,
+        # pero el resultado ya lo registró /api/replay en el servidor
+        self._send(200, {"ok": True, "ignored": True})

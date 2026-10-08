@@ -1,10 +1,16 @@
 """Autenticación por email + contraseña sobre Turso (solo stdlib).
 
 Seguridad: contraseñas y código de recuperación con pbkdf2_hmac (sha256, muchas
-iteraciones) + salt por usuario; comparación en tiempo constante; errores
-genéricos (no revela si el email existe); largo mínimo; throttling de intentos;
-sesiones con expiración. Sin proveedor de email: la recuperación es por CÓDIGO
-que se muestra UNA vez al registrarse (el usuario lo guarda).
+iteraciones) + salt por usuario; comparación en tiempo constante; login y reset
+con errores genéricos y el mismo costo exista o no el email; largo mínimo;
+throttling por cuenta+IP (un tercero no puede bloquear una cuenta ajena desde
+otra IP); sesiones con expiración. Sin proveedor de email: la recuperación es por
+CÓDIGO que se muestra UNA vez al registrarse (el usuario lo guarda). El registro
+sí avisa si el email ya existe (sin verificación por mail no hay forma útil de
+ocultarlo).
+
+Admin: solo vía la env ADMIN_EMAIL (sin default) y solo si todavía no hay ningún
+admin; si no, quien registrara primero ese email quedaba como admin.
 """
 import hashlib
 import hmac
@@ -16,7 +22,7 @@ import time
 import _db
 import supporter as _supporter
 
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "garias1989@gmail.com").strip().lower()
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip().lower()
 _ITERS = 240_000
 _SESSION_TTL = 90 * 86400          # 90 días
 _MAX_FAILS = 5
@@ -28,6 +34,34 @@ _MIN_PW = 8
 def _hash(secret, salt):
     return hashlib.pbkdf2_hmac("sha256", (secret or "").encode("utf-8"),
                                bytes.fromhex(salt), _ITERS).hex()
+
+
+_DUMMY_SALT = "00" * 16     # para gastar lo mismo cuando el email no existe
+
+
+def _client_key(kind, email, ip):
+    return hashlib.sha256(f"{kind}|{email}|{ip or ''}".encode("utf-8")).hexdigest()
+
+
+def _check_lock(key):
+    rows = _db.query("SELECT fails, last_fail FROM mtg_login_fails WHERE k = ?", [key])
+    if rows and (rows[0].get("fails") or 0) >= _MAX_FAILS \
+            and _now() - (rows[0].get("last_fail") or 0) < _LOCK_SECS:
+        raise ValueError("demasiados intentos; esperá unos minutos")
+
+
+def _note_fail(key):
+    now = _now()
+    # pasada la ventana de bloqueo el contador arranca de nuevo
+    _db.execute(
+        "INSERT INTO mtg_login_fails (k, fails, last_fail) VALUES (?, 1, ?) "
+        "ON CONFLICT(k) DO UPDATE SET fails = CASE WHEN ? - last_fail >= ? "
+        "THEN 1 ELSE fails + 1 END, last_fail = ?",
+        [key, now, now, _LOCK_SECS, now])
+
+
+def _clear_fails(key):
+    _db.execute("DELETE FROM mtg_login_fails WHERE k = ?", [key])
 
 
 def _new_salt():
@@ -73,7 +107,8 @@ def register(email, pw):
     uid = secrets.token_hex(12)
     salt, rsalt = _new_salt(), _new_salt()
     rcode = _recovery_code()
-    is_admin = 1 if email == ADMIN_EMAIL else 0
+    is_admin = 1 if (ADMIN_EMAIL and email == ADMIN_EMAIL and not _db.query(
+        "SELECT 1 FROM mtg_users WHERE is_admin = 1 LIMIT 1", [])) else 0
     _db.execute(
         "INSERT INTO mtg_users (id, email, pass_hash, salt, recovery_hash, "
         "recovery_salt, is_admin, is_supporter, created_at, fails, last_fail) "
@@ -87,32 +122,38 @@ def register(email, pw):
             "recovery_code": rcode}
 
 
-def login(email, pw):
+def login(email, pw, ip=None):
     email = (email or "").strip().lower()
     _db.ensure_schema()
+    key = _client_key("login", email, ip)
+    _check_lock(key)
     u = _user_row(email)
-    generic = ValueError("email o contraseña incorrectos")
-    if not u:
-        raise generic
-    if (u.get("fails") or 0) >= _MAX_FAILS and _now() - (u.get("last_fail") or 0) < _LOCK_SECS:
-        raise ValueError("demasiados intentos; esperá unos minutos")
-    if not hmac.compare_digest(_hash(pw, u["salt"]), u["pass_hash"]):
-        _db.execute("UPDATE mtg_users SET fails = fails + 1, last_fail = ? WHERE id = ?",
-                    [_now(), u["id"]])
-        raise generic
-    _db.execute("UPDATE mtg_users SET fails = 0 WHERE id = ?", [u["id"]])
+    # mismo costo (PBKDF2) exista o no el email: el tiempo no lo delata
+    ok = hmac.compare_digest(_hash(pw, u["salt"] if u else _DUMMY_SALT),
+                             u["pass_hash"] if u else "")
+    if not (u and ok):
+        _note_fail(key)
+        raise ValueError("email o contraseña incorrectos")
+    _clear_fails(key)
     return {"token": _new_session(u["id"]), "user": _public(u)}
 
 
-def reset_password(email, recovery_code, new_pw):
+def reset_password(email, recovery_code, new_pw, ip=None):
     email = (email or "").strip().lower()
     if len(new_pw or "") < _MIN_PW:
         raise ValueError(f"la contraseña necesita al menos {_MIN_PW} caracteres")
     _db.ensure_schema()
+    key = _client_key("reset", email, ip)
+    _check_lock(key)
     u = _user_row(email)
-    if not u or not u.get("recovery_hash") or not hmac.compare_digest(
-            _hash(recovery_code, u["recovery_salt"]), u["recovery_hash"]):
+    has = bool(u and u.get("recovery_hash"))
+    ok = hmac.compare_digest(
+        _hash(recovery_code, u["recovery_salt"] if has else _DUMMY_SALT),
+        u["recovery_hash"] if has else "")
+    if not (has and ok):
+        _note_fail(key)
         raise ValueError("email o código de recuperación incorrectos")
+    _clear_fails(key)
     salt, rsalt = _new_salt(), _new_salt()
     rcode = _recovery_code()
     _db.run([

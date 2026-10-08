@@ -20,7 +20,7 @@ type SlowCard = { name: string; pct: number; reason?: string };
 type DeckNote = { deck: string; commander_avg_turn: number | null; commander_pct: number; slow_cards: SlowCard[] };
 type Notes = { avg_rounds: number; decided_pct: number; decks: DeckNote[] };
 type GameRow = { seed: number; winner: string; turns: number };
-type MatchResult = { players: number; n: number; requested?: number; timed_out?: boolean; results: Res[]; notes?: Notes; games?: GameRow[]; level?: string };
+type MatchResult = { players: number; n: number; requested?: number; timed_out?: boolean; results: Res[]; notes?: Notes; games?: GameRow[]; level?: string; unresolved?: Record<string, string[]> };
 
 function Pips({ ids }: { ids: string[] }) {
   if (!ids || ids.length === 0) return null;
@@ -279,6 +279,12 @@ export default function Home() {
               estadísticas son sobre esas {result.n}.
             </p>
           )}
+          {Object.entries(result.unresolved || {}).map(([deck, names]) => (
+            <p key={deck} className="muted" style={{ marginTop: -6, fontSize: ".82rem" }}>
+              ⚠️ «{deck}»: {names.length} carta(s) no se encontraron y se reemplazaron por
+              tierras básicas: {names.slice(0, 8).join(", ")}{names.length > 8 ? "…" : ""}
+            </p>
+          ))}
           {result.results.map((r, i) => (
             <div className="bar-row" key={r.deck}>
               <div className="bar-head">
