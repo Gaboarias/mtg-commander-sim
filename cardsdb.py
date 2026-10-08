@@ -645,7 +645,16 @@ def _targeted_special(oracle: str):
         temp = "until end of turn" in t or "end of turn" in t
         return _control_effect(temp), "opp_creature", 1
     # clon
-    if re.search(r"copy of (?:up to \w+ )?target (?:creature|permanent)", t):
+    if re.search(r"copy of (?:up to \w+ )?(?:another )?target (?:nonlegendary )?"
+                 r"(?:creature|permanent)", t):
+        _cs = _copy_token_spec(t)
+        if _cs is not None and _cs["kind"] == "target":
+            def eff(game, ctrl, targets, _s=_cs):
+                tg = (list(targets or []) or [None])[0]
+                if tg is not None and hasattr(tg, "card"):
+                    _make_token_copies(game, ctrl, tg, _s)
+            # copiar lo PROPIO salvo que exija una criatura rival
+            return eff, ("opp_creature" if _cs.get("opp") else "own_creature"), 1
         return _clone_effect(), "opp_creature", 1
     # sacrificio forzado dirigido: "its controller sacrifices it" / "~'s controller
     # sacrifices it" (esquiva indestructible pero sigue siendo objetivo)
@@ -737,6 +746,211 @@ def _mass_destroy_effect(text):
             game.destroy(pm, "barrida")
         game.sba()
         game.log(f"{ctrl.name}: barrida ({len(doomed)} permanente(s))")
+    return eff
+
+
+# --------------------------------------------------------------------------- #
+# COPIAS de criaturas/permanentes
+# --------------------------------------------------------------------------- #
+
+def _copy_card(src_card, haste=False, nonlegendary=False):
+    """Copia de las características copiables de `src_card` (para una ficha copia
+    o un clon). 'except it has haste' / 'except it isn't legendary'."""
+    import copy as _cp
+    c = _cp.deepcopy(src_card)
+    if nonlegendary:
+        c.supertypes = set(c.supertypes) - {"legendary"}
+    if haste:
+        c.keywords = set(c.keywords) | {"haste"}
+    return c
+
+
+_COPY_TOKEN_RE = re.compile(
+    r"create (a|an|one|two|three|four|five|x|\w+) tokens? that(?:'s| are) (?:a )?"
+    r"cop(?:y|ies) of ([^,.]+?)(?:,? except ([^.]+))?(?:\.|$)", re.I)
+
+
+def _copy_token_spec(text, name=""):
+    """'create a token that's a copy of <X>[, except …]' -> dict o None.
+    kind: target (elegir), subject ('that creature'), attached ('equipped
+    creature'), self (esta carta)."""
+    t = re.sub(r"\s+", " ", _strip_reminder(text or "")).lower()
+    m = _COPY_TOKEN_RE.search(t)
+    if not m:
+        return None
+    n = _count_word(m.group(1)) or 1
+    who = m.group(2).strip()
+    exc = (m.group(3) or "") + " " + t[m.end():m.end() + 80]
+    spec = {"n": n, "who": who,
+            "haste": bool(re.search(r"\bhas haste|gains? haste|with haste", exc)),
+            "nonleg": bool(re.search(r"isn't legendary|is not legendary|nonlegendary copy", exc)),
+            "eot": (lambda m2: m2.group(1) if m2 else None)(re.search(
+                r"(sacrifice|exile) (?:it|them|that token|those tokens|the token|the tokens)"
+                r" at (?:the beginning of the next end step|end of turn)", t)),
+            "nonlegendary_only": "nonlegendary" in who,
+            "nontoken_only": "nontoken" in who}
+    if "target" in who:
+        spec["kind"] = "target"
+        spec["mine"] = "you control" in who
+        spec["opp"] = bool(re.search(r"an opponent controls|you don't control", who))
+        spec["another"] = "another" in who
+        spec["type"] = "artifact" if re.search(r"\bartifact\b", who) and "creature" not in who \
+            else "permanent" if "permanent" in who else "creature"
+    elif who in ("that creature", "it", "that token", "that permanent", "that artifact"):
+        spec["kind"] = "subject"
+    elif re.match(r"(?:equipped|enchanted) creature", who):
+        spec["kind"] = "attached"
+    elif who in ("~", "this creature", "this permanent") or who in _self_names(name):
+        spec["kind"] = "self"
+    else:
+        return None
+    return spec
+
+
+def _copy_candidates(game, ctrl, spec, source=None):
+    pool = []
+    for pl in game.players:
+        if spec.get("mine") and pl is not ctrl:
+            continue
+        if spec.get("opp") and pl is ctrl:
+            continue
+        for pm in pl.battlefield:
+            if spec.get("type") == "creature" and not pm.is_creature():
+                continue
+            if spec.get("type") == "artifact" and "artifact" not in pm.card.types:
+                continue
+            if spec.get("another") and pm is source:
+                continue
+            if spec.get("nonlegendary_only") and "legendary" in pm.card.supertypes:
+                continue
+            if spec.get("nontoken_only") and pm.is_token:
+                continue
+            if pl is not ctrl and not game.can_target(ctrl, pm):
+                continue
+            pool.append(pm)
+    pool.sort(key=lambda pm: (pm.power + pm.toughness if pm.is_creature() else 0,
+                              pm.card.cost.cmc if pm.card.cost else 0), reverse=True)
+    return pool
+
+
+def _make_token_copies(game, ctrl, src_perm, spec):
+    """Crea spec['n'] fichas copia de `src_perm` con sus excepciones."""
+    if src_perm is None:
+        return
+    card = _copy_card(src_perm.card, haste=spec.get("haste"), nonlegendary=spec.get("nonleg"))
+    for _ in range(max(1, spec.get("n", 1))):
+        before = set(id(p) for p in ctrl.battlefield)
+        cards.make_copy_token(game, ctrl, card)
+        made = [p for p in ctrl.battlefield if id(p) not in before]
+        for tok in made:
+            if spec.get("haste"):
+                tok.summoning_sick = False
+            if spec.get("eot"):                 # "sacrifice/exile it at the next end step"
+                attr = "blitz_sac" if spec["eot"] == "sacrifice" else "unearth_eot"
+                lst = getattr(game, attr, None)
+                if lst is None:
+                    lst = []
+                    setattr(game, attr, lst)
+                lst.append((ctrl, tok.card))
+    game.log(f"{ctrl.name} crea una ficha copia de {src_perm.name}")
+
+
+def _copy_token_effect(spec):
+    """Efecto genérico (ETB / disparo / hechizo sin objetivo previo): elige la
+    fuente de la copia según spec. Firma eff(game, ctrl, *a, subject=None):
+    a[0] puede ser el permanente fuente (para 'equipped creature' / 'self')."""
+    def eff(game, ctrl, *a, subject=None, _s=spec, **_kw):
+        src = a[0] if a and hasattr(a[0], "card") else getattr(game, "_trigger_source", None)
+        if subject is None:
+            subject = getattr(game, "_trigger_subject", None)
+        kind = _s["kind"]
+        if kind == "subject":
+            _make_token_copies(game, ctrl, subject, _s)
+        elif kind == "self":
+            _make_token_copies(game, ctrl, src, _s)
+        elif kind == "attached":
+            host = None
+            if src is not None:
+                host = getattr(src, "enchanting", None)
+            _make_token_copies(game, ctrl, host, _s)
+        else:
+            pool = _copy_candidates(game, ctrl, _s, source=src)
+            if not pool:
+                return
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness} · {pm.controller.name}"
+                      if pm.is_creature() else f"{pm.name} · {pm.controller.name}", pm)
+                     for pm in pool]
+            _human_target_choice(game, ctrl, "etb_target", "Elegí qué copiar", cands,
+                                 lambda pm: _make_token_copies(game, ctrl, pm, _s))
+    return eff
+
+
+def _clone_enter_spec(text, name):
+    """'You may have ~ enter (the battlefield) as a copy of any creature on the
+    battlefield[, except …]' (Clone, Phantasmal Image, Spark Double…)."""
+    names = _self_names(name)
+    for l in _ability_lines(text):
+        m = re.match(r"you may have (.+?) enter(?: the battlefield)? as a copy of "
+                     r"(?:any|a|an) ([a-z ]+?) (on the battlefield|you control)"
+                     r"(?:,? except (.+))?$", l.strip().rstrip("."), re.I)
+        if not m:
+            continue
+        subj = m.group(1).lower()
+        if subj not in names and subj not in ("~", "this creature", "this artifact",
+                                              "this permanent"):
+            continue
+        types = [x for x in re.split(r"\s+or\s+|,\s*", m.group(2).lower()) if x]
+        exc = (m.group(4) or "").lower()
+        return {"types": types, "mine": m.group(3).lower() == "you control",
+                "nonleg": "isn't legendary" in exc or "is not legendary" in exc,
+                "plus1": bool(re.search(r"additional \+1/\+1 counter", exc))}
+    return None
+
+
+def _clone_enter_effect(spec):
+    """ETB de un clon: el permanente PASA A SER una copia del elegido (se conserva el
+    mismo Permanent) y luego resuelve el ETB de lo copiado."""
+    def _ok(pm, _t=tuple(spec["types"])):
+        return any((t in ("creature", "creatures") and pm.is_creature())
+                   or t.rstrip("s") in pm.card.types or t == "permanent" for t in _t)
+
+    def eff(game, ctrl, perm, _s=spec):
+        pool = [pm for pl in game.players for pm in pl.battlefield
+                if pm is not perm and _ok(pm) and (not _s["mine"] or pl is ctrl)]
+        pool.sort(key=lambda pm: (pm.power + pm.toughness if pm.is_creature() else 0,
+                                  pm.card.cost.cmc if pm.card.cost else 0), reverse=True)
+        if not pool:
+            game.log(f"{perm.name}: no hay nada que copiar")
+            return
+
+        human = ctrl is getattr(game, "interactive_human", None)
+        if human:
+            # mientras el humano elige, el clon (0/0) no debe morir por SBA
+            perm.temp_pt[1] += 1000
+
+        def _unguard():
+            if human:
+                perm.temp_pt[1] -= 1000
+                game.sba()
+
+        def _become(tg):
+            if human:
+                perm.temp_pt[1] -= 1000
+            new = _copy_card(tg.card, nonlegendary=_s["nonleg"])
+            perm.card = new
+            if _s["plus1"] and perm.is_creature():
+                game.add_counters(perm, "+1/+1", 1)
+            if "planeswalker" in new.types and new.loyalty:
+                perm.counters["loyalty"] = new.loyalty + (1 if _s["plus1"] else 0)
+            game.log(f"{ctrl.name}: {perm.name} entra como copia de {tg.name}")
+            if new.on_etb:                       # entra como esa carta: su ETB dispara
+                new.on_etb(game, ctrl, perm)
+            game.sba()
+        cands = [(f"{pm.name} {pm.power}/{pm.toughness} · {pm.controller.name}"
+                  if pm.is_creature() else f"{pm.name} · {pm.controller.name}", pm)
+                 for pm in pool]
+        _human_target_choice(game, ctrl, "etb_target", "Elegí qué copiar al entrar",
+                             cands, _become, allow_none=True, on_none=_unguard)
     return eff
 
 
@@ -888,6 +1102,20 @@ def _fragment_effect(seg: str):
         return putc, "own_creature", 1
     # Barridas por tipo como MODO ("destroy all creatures/planeswalkers/battles",
     # "exile all graveyards"). En un modo van por _fragment_effect (no por el tag wipe).
+    _cs = _copy_token_spec(seg)
+    if _cs is not None:
+        if _cs["kind"] == "target":
+            def copy_tg(game, ctrl, targets, _s=_cs):
+                tg = (list(targets or []) or [None])[0]
+                if (tg is None or not hasattr(tg, "card")
+                        or (_s.get("nonlegendary_only") and "legendary" in tg.card.supertypes)
+                        or (_s.get("nontoken_only") and tg.is_token)):
+                    _copy_token_effect(_s)(game, ctrl)     # sin objetivo: elegir acá
+                    return
+                _make_token_copies(game, ctrl, tg, _s)
+            return copy_tg, ("opp_creature" if _cs.get("opp") else "own_creature"), 1
+        _ce = _copy_token_effect(_cs)
+        return (lambda game, ctrl, targets=None, _e=_ce: _e(game, ctrl)), None, 1
     _md = _mass_destroy_effect(seg)
     if _md == "?":
         return None, None, 1         # calificador desconocido: sin efecto (regla 5)
@@ -1696,20 +1924,26 @@ def _event_trigger_effect(oracle: str):
 
     # disparo GLOBAL al atacar: "whenever a creature you control attacks, <efecto>"
     # (Hellrider: pega N al jugador/planeswalker atacado; otros: efecto genérico).
-    mca = re.search(r"whenever a creature you control attacks,?\s*(.{0,160})", t, re.I)
+    mca = re.search(r"whenever an? (nontoken )?creature you control attacks,?\s*(.{0,160})",
+                    t, re.I)
     if mca:
-        _body = mca.group(1)
+        _nt = bool(mca.group(1))
+        _body = mca.group(2)
         mdmg = re.search(r"deals? (\w+) damage to (?:the player|that player|"
                          r"the player or planeswalker|it)", _body, re.I)
         if mdmg and (dn := _count_word(mdmg.group(1))):
-            def cb_ca(game, perm, attacker=None, defender=None, _n=dn, **_kw):
+            def cb_ca(game, perm, attacker=None, defender=None, _n=dn, _nt=_nt, **_kw):
+                if _nt and getattr(attacker, "is_token", False):
+                    return
                 if defender is not None:
                     game.deal_damage(perm, defender, _n)
             out["creature_attacks"] = cb_ca
         else:
             _eff = _generic_amount_effect(_body)
             if _eff is not None:
-                def cb_ca2(game, perm, attacker=None, defender=None, _e=_eff, **_kw):
+                def cb_ca2(game, perm, attacker=None, defender=None, _e=_eff, _nt=_nt, **_kw):
+                    if _nt and getattr(attacker, "is_token", False):
+                        return
                     _e(game, perm.controller)
                 out["creature_attacks"] = cb_ca2
 
@@ -1778,7 +2012,12 @@ def _event_trigger_effect(oracle: str):
         eff = _generic_amount_effect(mbc.group(1))
         if eff is not None:
             def cb_bc(game, perm, _e=eff, **_kw):
-                _e(game, perm.controller)
+                prev = getattr(game, "_trigger_source", None)
+                game._trigger_source = perm      # 'equipped creature' / '~' (copias)
+                try:
+                    _e(game, perm.controller)
+                finally:
+                    game._trigger_source = prev
             out["begin_combat"] = cb_bc
 
     # robo: "whenever you draw a/your first/second card, …" (self-scoped)
@@ -1940,10 +2179,11 @@ def _event_trigger_effect(oracle: str):
         yours = "you control" in head or "under your control" in head
         opp = bool(re.search(r"(?:an opponent|your opponents?) controls?", head))
         another = "another" in head
+        nontoken = "nontoken" in head
         once = "only once each turn" in t.lower()
 
         def cb(game, watcher, entered=None, _e=eff, _lim=lim,
-               _yours=yours, _opp=opp, _another=another, _once=once):
+               _yours=yours, _opp=opp, _another=another, _once=once, _nt=nontoken):
             if entered is None:
                 return
             if _yours and entered.controller is not watcher.controller:
@@ -1952,12 +2192,20 @@ def _event_trigger_effect(oracle: str):
                 return
             if _another and entered is watcher:
                 return
+            if _nt and entered.is_token:
+                return
             if _lim is not None and _cmc(entered) > _lim:
                 return
             if _once and getattr(watcher, "_ce_turn", None) == game.turn:
                 return
             watcher._ce_turn = game.turn
-            _e(game, watcher.controller)
+            prev = (getattr(game, "_trigger_subject", None),
+                    getattr(game, "_trigger_source", None))
+            game._trigger_subject, game._trigger_source = entered, watcher
+            try:
+                _e(game, watcher.controller)      # 'that creature' = la que entró
+            finally:
+                game._trigger_subject, game._trigger_source = prev
         out["creature_enters"] = cb
     return out
 
@@ -2715,7 +2963,7 @@ def _parse_saga(oracle: str):
 
 
 def _human_target_choice(game, ctrl, kind, prompt, options, apply_one,
-                         allow_none=False):
+                         allow_none=False, on_none=None):
     """Elección de objetivo genérica para efectos (p. ej. ETB dirigidos).
     `options` = lista de (etiqueta, objeto). El HUMANO elige vía pending_choice
     (mismo modal que scry/revelar); los bots aplican al primero (auto)."""
@@ -2724,9 +2972,11 @@ def _human_target_choice(game, ctrl, kind, prompt, options, apply_one,
     if ctrl is getattr(game, "interactive_human", None):
         objs = [o for _lbl, o in options]
 
-        def _apply(idx, _objs=objs, _fn=apply_one):
+        def _apply(idx, _objs=objs, _fn=apply_one, _none=on_none):
             if idx is not None and 0 <= idx < len(_objs):
                 _fn(_objs[idx])
+            elif _none is not None:
+                _none()
 
         game.pending_choice = {
             "kind": kind,
@@ -3493,6 +3743,11 @@ def _generic_amount_effect(oracle: str):
     sents = [x for x in sents if not re.match(r"as an additional cost", x, re.I)]
     text = " ".join(sents)
     low = text.lower()
+    # ficha COPIA: "…, except it has haste. Sacrifice it at the beginning of the next
+    # end step." es UNA habilidad (la 2ª oración no es un sacrificio independiente)
+    _cs = _copy_token_spec(text)
+    if _cs is not None:
+        return _copy_token_effect(_cs)
     if (not text or re.search(r"choose (?:one|two|three|one or more|one or both)", low)
             or "for each" in low):
         return _generic_amount_single(text)
@@ -3521,6 +3776,11 @@ def _generic_amount_single(oracle: str):
     if _amt_depth > 6:
         return None
     t = re.sub(r"\s+", " ", (oracle or "").lower())
+
+    # ficha COPIA de una criatura/permanente (ETB, disparos, hechizos)
+    _cs = _copy_token_spec(oracle)
+    if _cs is not None:
+        return _copy_token_effect(_cs)
 
     # efecto MODAL ("choose one/two/… — • ... • ..."): abre el selector de modo para
     # el humano (y el bot auto-elige). Cubre disparos/ETB modales que antes caían en
@@ -5331,6 +5591,13 @@ def _build_card_from_data_impl(data: dict) -> Card:
         if geff is not None:
             card.on_etb = geff
 
+    # CLONES: "You may have ~ enter as a copy of any creature on the battlefield"
+    # (Clone, Phantasmal Image, Spark Double…): al entrar PASA A SER esa carta.
+    if {"creature", "artifact", "enchantment"} & types:
+        _cl = _clone_enter_spec(data.get("oracle_text", ""), name)
+        if _cl is not None:
+            card.on_etb = _clone_enter_effect(_cl)
+
     # Skyclave Apparition y similares: ETB exilia un permanente rival con tope de
     # CMV y, al DEJAR el campo, el dueño crea una ficha X/X (X = CMV exiliado).
     _sky_t = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "").lower())
@@ -5554,6 +5821,9 @@ def _build_card_from_data_impl(data: dict) -> Card:
         # Dethrone: keyword/estática al atacar (lo resuelve el motor).
         if "dethrone" in _kws_lc or re.search(r"\bdethrone\b", _lt):
             card.dethrone = True
+        # Myriad: copias atacando a cada otro rival (lo resuelve el motor).
+        if "myriad" in _kws_lc or _has_keyword(data, "myriad"):
+            card.myriad = True
         # Aniquilador N: al atacar, el defensor sacrifica N permanentes.
         man = re.search(r"annihilator (\d+)", _lt)
         if man:

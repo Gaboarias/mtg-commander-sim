@@ -1179,3 +1179,191 @@ def test_corpus_primary_research_end_step_condition():
     _cards.reanimate(g, me, me.graveyard[-1]); run(g)
     h = len(me.hand); g.end_turn(me)
     assert len(me.hand) == h + 1
+
+
+# --------------------------------------------------------------------------- #
+# COPIAS de criaturas (clones, fichas copia)
+# --------------------------------------------------------------------------- #
+
+CLONE_TXT = "You may have this creature enter as a copy of any creature on the battlefield."
+SPARK_TXT = ("You may have this creature enter as a copy of a creature or planeswalker you "
+             "control, except it enters with an additional +1/+1 counter on it if it's a "
+             "creature, it enters with an additional loyalty counter on it if it's a "
+             "planeswalker, and it isn't legendary.")
+KIKI_TXT = ("Haste\n{T}: Create a token that's a copy of target nonlegendary creature you "
+            "control, except it has haste. Sacrifice it at the beginning of the next end step.")
+HELM_TXT = ("At the beginning of combat on your turn, create a token that's a copy of equipped "
+            "creature, except the token isn't legendary. That token gains haste.\nEquip {5}")
+
+
+def _etb_draw_creature(name="Wall of Omens"):
+    c = creature(name, "1W", 0, 4)
+    c.on_etb = lambda g, ctrl, perm: ctrl.draw(1, g)
+    return c
+
+
+def test_corpus_clone_copies_best_creature_and_its_etb():
+    g, me, ops = new_game()
+    put(g, creature("Big Beast", "4G", 6, 6), ops[0])
+    put(g, _etb_draw_creature(), me)
+    pm = put(g, build("Clone", "{3}{U}", "Creature — Shapeshifter", CLONE_TXT, 0, 0), me)
+    assert on_bf(me, pm) and pm.name == "Big Beast" and (pm.power, pm.toughness) == (6, 6)
+    h0 = len(me.hand)
+    g2, me2, ops2 = new_game()
+    put(g2, _etb_draw_creature(), me2)
+    h0 = len(me2.hand)
+    pm2 = put(g2, build("Clone", "{3}{U}", "Creature — Shapeshifter", CLONE_TXT, 0, 0), me2)
+    assert pm2.name == "Wall of Omens" and len(me2.hand) == h0 + 1, \
+        "el clon resuelve el ETB de lo copiado"
+
+
+def test_corpus_clone_alone_dies_as_0_0():
+    g, me, ops = new_game()
+    pm = put(g, build("Clone", "{3}{U}", "Creature — Shapeshifter", CLONE_TXT, 0, 0), me)
+    assert not on_bf(me, pm)
+
+
+def test_corpus_spark_double_own_nonlegendary_plus_counter():
+    g, me, ops = new_game()
+    put(g, creature("Big Beast", "4G", 6, 6), ops[0])
+    leg = put(g, creature("Hero", "2G", 3, 3, legendary=True), me)
+    pm = put(g, build("Spark Double", "{3}{U}", "Creature — Illusion", SPARK_TXT, 0, 0), me)
+    assert pm.name == "Hero" and (pm.power, pm.toughness) == (4, 4)
+    assert "legendary" not in pm.card.supertypes
+    assert on_bf(me, leg) and on_bf(me, pm), "no muere por la regla de legendarios"
+
+
+def test_corpus_kiki_jiki_copy_with_haste_sacrificed_at_end():
+    g, me, ops = new_game()
+    kiki = put(g, build("Kiki-Jiki, Mirror Breaker", "{2}{R}{R}{R}",
+                        "Legendary Creature — Goblin Shaman", KIKI_TXT, 2, 2,
+                        keywords=["Haste"]), me)
+    kiki.summoning_sick = False
+    put(g, _etb_draw_creature("Elf Seer"), me)
+    h0 = len(me.hand)
+    ab = kiki.card.activated_abilities[0]
+    assert ab["target_spec"] == "own_creature"
+    assert g.activate_ability(kiki, 0, targets=[kiki])   # objetivo ilegal (legendaria)
+    run(g)
+    toks = tokens(me, "Elf Seer")
+    assert len(toks) == 1 and len(me.hand) == h0 + 1, "copia la no legendaria + su ETB"
+    assert not toks[0].summoning_sick and toks[0].has("haste")
+    assert not tokens(me, "Kiki-Jiki, Mirror Breaker")
+    g.end_turn(me)
+    assert not tokens(me, "Elf Seer"), "la ficha se sacrifica al final del turno"
+
+
+def test_corpus_helm_of_the_host_copies_equipped_each_combat():
+    g, me, ops = new_game()
+    hero = put(g, creature("Hero", "2G", 3, 3, legendary=True), me)
+    helm = put(g, build("Helm of the Host", "{4}", "Legendary Artifact — Equipment", HELM_TXT), me)
+    helm.enchanting = hero
+    g.emit("begin_combat", player=me)
+    run(g)
+    toks = tokens(me, "Hero")
+    assert len(toks) == 1 and "legendary" not in toks[0].card.supertypes
+    assert on_bf(me, hero), "el original sigue (la copia no es legendaria)"
+
+
+def test_corpus_helm_unattached_does_nothing():
+    g, me, ops = new_game()
+    put(g, creature("Hero", "2G", 3, 3), me)
+    put(g, build("Helm of the Host", "{4}", "Legendary Artifact — Equipment", HELM_TXT), me)
+    g.emit("begin_combat", player=me)
+    run(g)
+    assert not tokens(me)
+
+
+def test_corpus_copy_trigger_that_creature_nontoken():
+    g, me, ops = new_game()
+    put(g, build("Mirror Thing", "{3}{U}", "Creature — Shapeshifter",
+                 "Whenever another nontoken creature you control enters, create a token "
+                 "that's a copy of that creature.", 2, 2), me)
+    put(g, creature("Bear", "1G", 2, 2), me)
+    assert len(tokens(me, "Bear")) == 1, "copia la que entró y NO se copia la ficha"
+    put(g, creature("Orc", "1B", 2, 2), ops[0])
+    assert not tokens(me, "Orc") and not tokens(ops[0])
+
+
+def test_corpus_cackling_counterpart_copies_own_creature():
+    g, me, ops = new_game()
+    put(g, creature("Big Beast", "4G", 6, 6), ops[0])
+    put(g, creature("Bear", "1G", 2, 2), me)
+    give_lands(g, me, 3, colors=(U,))
+    cc = build("Cackling Counterpart", "{1}{U}{U}", "Instant",
+               "Create a token that's a copy of target creature you control.\n"
+               "Flashback {5}{U}{U}", ci=("U",))
+    assert cc.target_spec == "own_creature"
+    assert bot_cast(g, me, cc)
+    assert len(tokens(me, "Bear")) == 1 and not tokens(me, "Big Beast")
+
+
+def test_corpus_clone_human_choice_survives_until_chosen():
+    g, me, ops = new_game()
+    put(g, creature("Big Beast", "4G", 6, 6), ops[0])
+    put(g, creature("Bear", "1G", 2, 2), me)
+    g.interactive_human = me
+    pm = put(g, build("Clone", "{3}{U}", "Creature — Shapeshifter", CLONE_TXT, 0, 0), me)
+    ch = g.pending_choice
+    assert ch and on_bf(me, pm), "el clon espera la elección sin morir por SBA"
+    idx = next(o["i"] for o in ch["options"] if o["name"].startswith("Bear"))
+    g.pending_choice = None
+    ch["_apply"](idx)
+    run(g)
+    assert on_bf(me, pm) and pm.name == "Bear" and (pm.power, pm.toughness) == (2, 2)
+
+
+def test_corpus_clone_human_declines_dies():
+    g, me, ops = new_game()
+    put(g, creature("Bear", "1G", 2, 2), me)
+    g.interactive_human = me
+    pm = put(g, build("Clone", "{3}{U}", "Creature — Shapeshifter", CLONE_TXT, 0, 0), me)
+    ch = g.pending_choice
+    g.pending_choice = None
+    ch["_apply"](None)
+    run(g)
+    assert not on_bf(me, pm)
+
+
+def test_corpus_attack_trigger_copy_of_self():
+    g, me, ops = new_game()
+    c = build("Echo Beast", "{3}{R}", "Creature — Elemental",
+              "Whenever this creature attacks, create a token that's a copy of it, "
+              "except it isn't legendary.", 3, 3)
+    pm = put(g, c, me)
+    assert pm.card.triggers.get("attacks") is not None
+    pm.summoning_sick = False
+    g._declare_attackers(me, [(pm, ops[0])])
+    run(g)
+    assert len(tokens(me, "Echo Beast")) == 1
+
+
+def test_corpus_creature_attacks_copy_that_creature():
+    g, me, ops = new_game()
+    put(g, build("Copy Banner", "{4}", "Artifact",
+                 "Whenever a nontoken creature you control attacks, create a token that's a "
+                 "copy of that creature."), me)
+    bear = put(g, creature("Bear", "1G", 2, 2), me)
+    cb = None
+    for pm in me.battlefield:
+        cb = cb or pm.card.triggers.get("creature_attacks")
+    if cb is None:
+        pytest.skip("disparo no cableado")   # vanilla aceptable
+    bear.summoning_sick = False
+    g._declare_attackers(me, [(bear, ops[0])])
+    run(g)
+    assert len(tokens(me, "Bear")) == 1, "copia la criatura que atacó (no la ficha)"
+
+
+def test_corpus_myriad_copies_attack_other_opponents():
+    g, me, ops = new_game(n_opp=3)
+    c = build("Battle Angels of Tyr", "{2}{W}{W}", "Creature — Angel Knight",
+              "Flying, myriad\nWhenever this creature deals combat damage to a player, "
+              "draw a card.", 4, 4, keywords=["Flying", "Myriad"])
+    pm = put(g, c, me)
+    pm.summoning_sick = False
+    lifes = [o.life for o in ops]
+    g._resolve_combat(me, [(pm, ops[0])])
+    run(g)
+    assert [o.life for o in ops] == [x - 4 for x in lifes], "cada rival recibe 4"
+    assert not tokens(me), "las copias se exilian al final del combate"

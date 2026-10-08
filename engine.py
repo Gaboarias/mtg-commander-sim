@@ -7,6 +7,7 @@ Python puro, sin dependencias externas.
 """
 from __future__ import annotations
 
+import copy
 import random
 import sys
 from collections import Counter
@@ -998,7 +999,8 @@ class Game:
                     inner["subject"] = kw["perm"]
                 self.stack.append(StackObject(
                     controller=pl,
-                    resolve=(lambda g, _cb=cb, _perm=perm, _kw=inner: _cb(g, _perm, **_kw)),
+                    resolve=(lambda g, _cb=cb, _perm=perm, _kw=inner:
+                             g._run_trigger(_cb, _perm, _kw)),
                     source=perm,
                     label=f"trigger:{event}:{perm.name}",
                     kind="trigger", perm=perm,
@@ -1010,7 +1012,8 @@ class Game:
                 self.last_ability = {
                     "source": perm.card, "perm": perm,
                     "label": self.EVENT_KIND.get(event, event),
-                    "run": (lambda g, _cb=cb, _perm=perm, _kw=inner: _cb(g, _perm, **_kw)),
+                    "run": (lambda g, _cb=cb, _perm=perm, _kw=inner:
+                            g._run_trigger(_cb, _perm, _kw)),
                 }
             # Fase D: disparos MIENTRAS la carta está en el cementerio/exilio.
             for zone in (pl.graveyard, pl.exile):
@@ -1124,6 +1127,19 @@ class Game:
                     n = mod(self, perm, kind, n)
         perm.counters[kind] = perm.counters.get(kind, 0) + n
         return n
+
+    def _run_trigger(self, cb, perm, kw, subject=None):
+        """Resuelve una disparada dejando a mano la FUENTE (el permanente que
+        observa) y el SUJETO del evento, para efectos que dicen '~' / 'that
+        creature' / 'equipped creature' sin recibirlos como argumento."""
+        prev = (getattr(self, "_trigger_source", None),
+                getattr(self, "_trigger_subject", None))
+        self._trigger_source = perm
+        self._trigger_subject = subject if subject is not None else kw.get("subject")
+        try:
+            return cb(self, perm, **kw)
+        finally:
+            self._trigger_source, self._trigger_subject = prev
 
     def move_to_battlefield(self, card: Card, player: "Player",
                             is_token: bool = False) -> Permanent:
@@ -2625,7 +2641,8 @@ class Game:
             cb = perm.card.triggers.get("attacks")
             if cb:
                 self.stack.append(StackObject(
-                    p, (lambda g, _cb=cb, _perm=perm, _d=defender: _cb(g, _perm, defender=_d)),
+                    p, (lambda g, _cb=cb, _perm=perm, _d=defender:
+                        g._run_trigger(_cb, _perm, {"defender": _d}, subject=_perm)),
                     source=perm, label=f"attacks:{perm.name}"))
             # disparos "whenever EQUIPPED creature attacks": viven en el equipo/aura
             # anexado al atacante, no en la criatura. Se disparan con el equipo.
@@ -2634,7 +2651,8 @@ class Game:
                     ecb = src.card.triggers.get("attacks")
                     if ecb:
                         self.stack.append(StackObject(
-                            p, (lambda g, _cb=ecb, _s=src, _d=defender: _cb(g, _s, defender=_d)),
+                            p, (lambda g, _cb=ecb, _s=src, _d=defender, _a=perm:
+                                g._run_trigger(_cb, _s, {"defender": _d}, subject=_a)),
                             source=src, label=f"attacks:{src.name}"))
             # disparos GLOBALES "whenever a creature you control attacks" (Hellrider…):
             # cuentan CADA criatura tuya que ataca, incluida la fuente si ella misma
@@ -2644,7 +2662,8 @@ class Game:
                 if gcb:
                     self.stack.append(StackObject(
                         p, (lambda g, _cb=gcb, _s=src, _a=perm, _d=defender:
-                            _cb(g, _s, attacker=_a, defender=_d)),
+                            g._run_trigger(_cb, _s, {"attacker": _a, "defender": _d},
+                                           subject=_a)),
                         source=src, label=f"creature_attacks:{src.name}"))
         # Exalted: si atacó UNA sola criatura, recibe +1/+1 por cada permanente
         # con exaltación que controle el atacante.
@@ -2671,6 +2690,25 @@ class Game:
                 if boost:
                     a.temp_pt[0] += boost
             self.log(f"Grito de guerra: +{cries}/+0 al resto de atacantes")
+        # myriad: por cada OTRO rival, una ficha copia girada y atacándolo; se
+        # exilian al final del combate. Se agregan a `declared` (misma lista).
+        for a in list(declared):
+            if not getattr(a.card, "myriad", False) or a.is_token and getattr(a, "_myriad", False):
+                continue
+            dfn = a.attacking if isinstance(a.attacking, Player) else a.attacking.controller
+            for opp in self.opponents(p):
+                if opp is dfn or opp.lost:
+                    continue
+                for _ in range(self.token_multiplier(p)):
+                    tok = self.move_to_battlefield(copy.deepcopy(a.card), p, is_token=True)
+                    if tok is None:
+                        continue
+                    tok._myriad = True
+                    tok.tapped = True
+                    tok.summoning_sick = False
+                    tok.attacking = opp
+                    declared.append(tok)
+                    self.log(f"Miríada: copia de {a.name} ataca a {opp.name}")
         # melee: +1/+1 por cada jugador atacado este combate.
         opp_players = {(a.attacking if isinstance(a.attacking, Player)
                         else a.attacking.controller) for a in declared}
@@ -2828,6 +2866,9 @@ class Game:
                 if a in b.blocking:
                     b.blocking.remove(a)
             a.blocked_by = []
+            if getattr(a, "_myriad", False) and a in a.controller.battlefield:
+                a.controller.battlefield.remove(a)     # myriad: exiliar al fin del combate
+                self.log(f"Miríada: la copia de {a.name} se exilia")
 
     def _resolve_combat(self, p: "Player", attackers: list):
         """Aplica los atacantes declarados (por la política o por un humano):
@@ -2969,8 +3010,9 @@ class Game:
                 for perm in list(owner.battlefield):
                     if perm.card is card:
                         owner.battlefield.remove(perm)
-                        owner.exile.append(card)
-                        self.log(f"{card.name} se exilia (unearth)")
+                        if not perm.is_token:     # una ficha exiliada deja de existir
+                            owner.exile.append(card)
+                        self.log(f"{card.name} se exilia (fin de turno)")
                         break
             pend.clear()
         # Dash: las criaturas jugadas por dash vuelven a la mano al fin del turno.
