@@ -2,6 +2,8 @@
 
   ?q=nombre            -> {"suggestions":[nombres], "best":"nombre"|null}
   ?set=xxx&number=nn   -> {"name":..,"type_line":..,"mana_cost":..} | {"error":..}
+  ?oracle=A|B|C        -> {"cards":[{name, mana_cost, type_line, oracle_text, power,
+                           toughness, loyalty, keywords, color_identity}]} (máx. 40)
 """
 import json
 import os
@@ -27,8 +29,26 @@ class handler(BaseHTTPRequestHandler):
         setcode = qs.get("set", [None])[0]
         number = qs.get("number", [None])[0]
         q = qs.get("q", [None])[0]
+        oracle = qs.get("oracle", [None])[0]
         try:
-            if setcode and number:
+            if oracle:
+                names = [n.strip() for n in oracle.split("|") if n.strip()][:40]
+                found = _scry.resolve_many(names)
+                keys = ("name", "mana_cost", "type_line", "oracle_text", "power",
+                        "toughness", "loyalty", "keywords", "color_identity")
+                cards = []
+                for n in names:
+                    c = found.get(_scry._norm(n))
+                    if not c:
+                        cards.append({"name": n, "missing": True})
+                        continue
+                    row = {k: c.get(k) for k in keys}
+                    if c.get("card_faces") and not c.get("oracle_text"):
+                        row["faces"] = [{k: f.get(k) for k in keys}
+                                        for f in c["card_faces"]]
+                    cards.append(row)
+                self._send(200, {"cards": cards})
+            elif setcode and number:
                 card = _scry.by_collector(setcode, number)
                 if not card or not card.get("name"):
                     self._send(200, {"error": "no encontrada para ese set/numero"})
