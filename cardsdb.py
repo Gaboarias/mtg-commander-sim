@@ -2180,6 +2180,42 @@ def _wipe_then_tokens_effect(oracle: str):
     return eff
 
 
+def _exile_all_creatures_effect(oracle: str):
+    """Barrida por EXILIO: 'Exile all creatures' (Sunfall, Farewell parcial…).
+    A diferencia de 'destroy', esquiva indestructible y manda las criaturas al
+    exilio (no al cementerio). Si el texto incuba X = criaturas exiliadas, crea una
+    ficha Incubator aproximada (artefacto que se transforma en 0/0 con X contadores).
+    Devuelve effect(g, ctrl, targets) o None."""
+    t = re.sub(r"\s+", " ", (oracle or "").lower())
+    if not re.search(r"exile all creatures", t):
+        return None
+    incubate = ("incubate" in t and ("creatures exiled" in t or "incubate x" in t))
+
+    def eff(game, ctrl, targets=None, _inc=incubate):
+        n = 0
+        for pl in game.players:
+            for pm in list(pl.battlefield):
+                if not pm.is_creature():
+                    continue
+                pl.battlefield.remove(pm)
+                if not pm.is_token:
+                    pl.exile.append(pm.card)
+                game.emit("leave", perm=pm)
+                n += 1
+        game.sba()
+        game.log(f"{ctrl.name}: exilia todas las criaturas ({n})")
+        if _inc and n > 0:
+            # Incubate X: ficha Incubator (artefacto) con X contadores +1/+1 y
+            # "{2}: transformar" en una 0/0 Phyrexian. La aproximamos como un
+            # artefacto-criatura durmiente X/X que entra sin poder atacar aún.
+            tok = cards.make_token(game, ctrl, "Incubator", 0, 0,
+                                   subtypes=("Phyrexian",), counters=n)
+            if tok is not None:
+                tok.card.types = set(tok.card.types) | {"artifact"}
+            game.log(f"{ctrl.name}: incuba X={n} (ficha {n}/{n})")
+    return eff
+
+
 def _parse_gy_grant(oracle: str):
     """Habilidad ESTÁTICA desde el cementerio (Anger/Brawn/Wonder): 'as long as
     ~ is in your graveyard[ and you control a <Subtipo>], creatures you control
@@ -3086,11 +3122,21 @@ def _singular(w):
     return w
 
 
+_amt_depth = 0
+
+
 def _generic_amount_effect(oracle: str):
     """Efecto APROXIMADO con monto, deducido del oracle. Devuelve una función
     eff(game, ctrl, *_) o None. Cubre patrones comunes de creaturas/hechizos que
     la capa por tags (wipe/removal/draw/ramp) no modela. Prioridad: fichas >
     quema a cada rival > ganancia de vida > mill propio."""
+    # cortafuegos de recursión mutua con _fragment_effect: ciertos textos (p. ej.
+    # "Incubate X, where X is..." de Sunfall) hacían rebotar _generic<->_fragment sin
+    # fin -> RecursionError -> la carta caía a vainilla (no hacía NADA). Limitamos la
+    # anidación para que el parseo continúe con las otras ramas (barrida, etc.).
+    global _amt_depth
+    if _amt_depth > 6:
+        return None
     t = re.sub(r"\s+", " ", (oracle or "").lower())
 
     # efecto MODAL ("choose one/two/… — • ... • ..."): abre el selector de modo para
@@ -4350,7 +4396,11 @@ def _generic_amount_effect(oracle: str):
         effs = []
         for frag in re.split(r"[.;]", oracle or ""):
             if re.search(r"\b(investigate|bolster|amass|incubate)\b", frag, re.I):
-                keff, _spec, _cnt = _fragment_effect(frag)
+                _amt_depth += 1
+                try:
+                    keff, _spec, _cnt = _fragment_effect(frag)
+                finally:
+                    _amt_depth -= 1
                 if keff is not None and _spec is None:
                     effs.append(keff)
         if effs:
@@ -4755,6 +4805,14 @@ def _build_card_from_data_impl(data: dict) -> Card:
             card.target_spec = spec
             card.target_count = max(1, count)
             card.tags = card.tags | {"targeted"}
+
+    # barrida por EXILIO ("exile all creatures": Sunfall) — se cablea antes de la capa
+    # genérica para que EXILIE (no destruya) y maneje el incubate.
+    if {"instant", "sorcery"} & types and not card.on_cast_resolve:
+        xa = _exile_all_creatures_effect(data.get("oracle_text", ""))
+        if xa is not None:
+            card.on_cast_resolve = xa
+            card.tags = card.tags | {"wipe"}
 
     # barrida CON rider de fichas ("destroy all creatures, then create N tokens per
     # your nontoken creature destroyed this way"): p. ej. Ceaseless Conflict. Se

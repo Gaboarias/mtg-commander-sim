@@ -7623,6 +7623,39 @@ def test_gain_life_trigger_does_not_loop_with_drain_ability():
     assert not op.lost and not me.lost
 
 
+def test_sunfall_exiles_all_creatures_and_incubates():
+    # Regresión (Sunfall): el parseo de "Exile all creatures. Incubate X..." entraba
+    # en recursión mutua (_generic_amount_effect <-> _fragment_effect) y la carta caía
+    # a vainilla -> "no hace nada, no exilia". Ahora EXILIA todas las criaturas
+    # (incluso indestructibles) y crea una ficha Incubadora con X contadores.
+    import cardsdb, cards
+    from engine import Game, Player
+    data = {"name": "Sunfall", "type_line": "Sorcery", "mana_cost": "{3}{W}{W}",
+            "color_identity": ["W"],
+            "oracle_text": ('Exile all creatures. Incubate X, where X is the number '
+                            'of creatures exiled this way. (Create an Incubator token '
+                            'with X +1/+1 counters on it and "{2}: Transform this '
+                            'token." It transforms into a 0/0 Phyrexian artifact '
+                            'creature.)')}
+    sun = cardsdb.build_card_from_data(data)
+    assert sun.on_cast_resolve is not None          # NO cayó a vainilla
+    me = Player("me", [], cards.creature("cmdr", "1W", 2, 2))
+    op = Player("op", [], cards.creature("ocmd", "1B", 2, 2))
+    g = Game([me, op], seed=1); g.interactive_human = None
+    g.move_to_battlefield(cards.creature("A", "1", 1, 1), me)
+    g.move_to_battlefield(cards.creature("B", "2", 3, 3), me)
+    g.move_to_battlefield(cards.creature("Indes", "2", 4, 4, kw=("indestructible",)), op)
+    g.move_to_battlefield(cards.creature("C", "3", 5, 5), op)
+    sun.on_cast_resolve(g, me, []); g.resolve_stack(); g.sba()
+    # todas las criaturas preexistentes salieron del campo (exilio, no destrucción)
+    exiled = [c.name for c in me.exile + op.exile]
+    assert {"A", "B", "Indes", "C"}.issubset(set(exiled))  # la indestructible también
+    # queda la ficha Incubadora con X = 4 contadores, del lado del lanzador
+    incs = [p for p in me.battlefield if p.name == "Incubator"]
+    assert len(incs) == 1 and incs[0].counters.get("+1/+1") == 4
+    assert not any(p.name == "Incubator" for p in op.battlefield)
+
+
 def test_card_build_recursion_falls_back_to_vanilla_not_crash():
     # Regresión: cargar un mazo (p. ej. un precon nuevo) con una carta cuyo parseo
     # recursa daba "maximum recursion depth exceeded" y tiraba toda la carga. Ahora
