@@ -73,6 +73,8 @@ async function ensurePyodide(): Promise<any> {
       if (!res.ok) throw new Error(`no se pudo bajar el motor (HTTP ${res.status})`);
       const { modules } = await res.json();
       for (const [name, src] of Object.entries(modules as Record<string, string>)) {
+        const dir = name.includes("/") ? name.slice(0, name.lastIndexOf("/")) : "";
+        if (dir) p.FS.mkdirTree(dir);            // p. ej. data/preset_cards.json
         p.FS.writeFile(name, src as string);
       }
       p.runPython(BOOTSTRAP);

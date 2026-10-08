@@ -88,13 +88,9 @@ def etb(game, ctrl, perm):
 
 ### Motor de salida de cementerio
 
-```python
-Card("Bag of Holding", {"artifact"}, parse_cost("1"),
-     tags={"engine", "gy_exile"})
-```
-
-El tag `gy_exile` es lo que consulta `Quintorius()` para saber si puede crear
-Espiritus. Si tu carta permite sacar cartas del cementerio, ponle ese tag.
+Cualquier efecto que saque cartas del cementerio debe pasar por
+`game.leave_graveyard(...)` (emite `leaves_graveyard`): eso es lo que dispara a
+Quintorius, Field Historian. El tag `gy_exile` solo orienta a la IA.
 
 ---
 

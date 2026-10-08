@@ -14,6 +14,7 @@ _MODULES = [
     "carddesc.py", "engine.py", "cards.py", "abilities.py", "cardsdb.py",
     "decklist.py", "mdparse.py", "policy.py", "decks.py", "run.py",
     "interactive.py",
+    "data/preset_cards.json",      # datos reales de las cartas de los presets
 ]
 
 

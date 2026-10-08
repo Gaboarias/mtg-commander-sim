@@ -361,10 +361,15 @@ class Permanent:
 # --------------------------------------------------------------------------- #
 
 class Player:
-    def __init__(self, name: str, deck: list, commander: Card, policy=None):
+    def __init__(self, name: str, deck: list, commander: Card, policy=None, partner=None):
         self.name = name
-        self.deck_template = deck            # lista de Card (99)
+        self.deck_template = deck            # lista de Card (99, o 98 con partner)
         self.commander_card = commander
+        if partner is None:
+            partner = getattr(commander, "_partner", None)
+        # 1 o 2 comandantes (partner / background / friends forever)
+        self.commanders: list = [commander] + ([partner] if partner is not None else [])
+        self.cmdr_taxes: list = [0] * len(self.commanders)
         self.life = 40
         self.poison = 0
         self.library: list = []
@@ -374,9 +379,8 @@ class Player:
         self.impulse: list = []              # exiliadas por "impulse", jugables este turno
         self.exile_play: list = []           # jugables desde el exilio de forma persistente
         #   (predichas por foretell, etc.); cada carta lleva ._play_cost (Cost)
-        self.command: list = [commander]
+        self.command: list = list(self.commanders)
         self.battlefield: list = []          # lista de Permanent
-        self.cmdr_tax = 0                    # +2 por lanzamiento desde la zona de mando
         self.cmdr_damage: dict = {}          # {nombre_comandante: int}; 21 elimina
         self.lands_played = 0
         self.mana_pool = 0           # maná flotante (genérico) de rituales; se vacía por turno
@@ -420,8 +424,38 @@ class Player:
         return [p for p in self.battlefield if p.card.is_land()]
 
     def identity(self) -> set:
-        ident = set(self.commander_card.identity())
+        ident = set()
+        for c in self.commanders:
+            ident |= set(c.identity())
         return ident
+
+    # -- comandantes ------------------------------------------------------ #
+    def is_commander(self, card) -> bool:
+        """¿`card` es uno de MIS comandantes? (por identidad: Card compara por valor)"""
+        return card is not None and any(c is card for c in self.commanders)
+
+    def _cmdr_index(self, card) -> int:
+        for i, c in enumerate(self.commanders):
+            if c is card:
+                return i
+        return 0
+
+    def tax_for(self, card) -> int:
+        """Impuesto de comandante de ESA carta (+2 por cada lanzamiento previo
+        desde la zona de mando; cada partner lleva el suyo)."""
+        return self.cmdr_taxes[self._cmdr_index(card)]
+
+    def add_tax(self, card):
+        self.cmdr_taxes[self._cmdr_index(card)] += 2
+
+    @property
+    def cmdr_tax(self) -> int:
+        """Impuesto del comandante principal (compatibilidad)."""
+        return self.cmdr_taxes[0]
+
+    @cmdr_tax.setter
+    def cmdr_tax(self, v):
+        self.cmdr_taxes[0] = v
 
     def mana_sources(self, exclude=None) -> list:
         """Fuentes de maná utilizables: sin girar, sin mareo de invocación si son
@@ -851,15 +885,16 @@ class Game:
     def commander_owner(self, card):
         """Jugador DUEÑO de `card` si es un comandante (aunque lo controle otro)."""
         for p in self.players:
-            if p.commander_card is card:
+            if p.is_commander(card):
                 return p
         return None
 
-    def cmdr_key(self, owner) -> str:
-        """Clave del daño de comandante: el nombre, y el dueño si otro jugador
-        tiene un comandante con el mismo nombre (antes dos Kang sumaban juntos)."""
-        name = owner.commander_card.name
-        if sum(1 for p in self.players if p.commander_card.name == name) > 1:
+    def cmdr_key(self, owner, card=None) -> str:
+        """Clave del daño de comandante: el nombre de ESE comandante (con partners
+        cada uno cuenta aparte), y el dueño si otro jugador tiene un comandante con
+        el mismo nombre (antes dos Kang sumaban juntos)."""
+        name = (card if card is not None else owner.commander_card).name
+        if sum(1 for p in self.players for c in p.commanders if c.name == name) > 1:
             return f"{name} ({owner.name})"
         return name
 
@@ -1286,7 +1321,7 @@ class Game:
         # primero lo más barato de perder.
         def worth(pm):
             v = pm.card.power + pm.card.toughness if pm.is_creature() else 0
-            if pm.card is ctrl.commander_card:
+            if ctrl.is_commander(pm.card):
                 v += 100
             return v
         pool.sort(key=worth)
@@ -1385,7 +1420,7 @@ class Game:
             # dano de comandante (por identidad: cuenta aunque lo controle otro)
             cowner = self.commander_owner(source.card) if (combat and src_perm) else None
             if cowner is not None:
-                key = self.cmdr_key(cowner)
+                key = self.cmdr_key(cowner, source.card)
                 target.cmdr_damage[key] = target.cmdr_damage.get(key, 0) + amount
             # Cipher: al pegar daño de combate a un jugador, lanzar una copia GRATIS
             # de cada hechizo cifrado en esta criatura.
@@ -1437,7 +1472,9 @@ class Game:
 
     # -- acciones basadas en estado -------------------------------------- #
     def _return_commander(self, p) -> bool:
-        cmd = p.commander_card
+        return any([self._return_one_commander(p, c) for c in p.commanders])
+
+    def _return_one_commander(self, p, cmd) -> bool:
         if cmd is None or any(c is cmd for c in p.command):
             return False
         for pl in self.players:
@@ -1599,16 +1636,28 @@ class Game:
         }
 
     # -- lanzar hechizos -------------------------------------------------- #
+    def effective_cost(self, player: "Player", card: Card, from_command: bool = False):
+        """Coste a pagar de verdad: impuesto de comandante, reducciones ("cuesta {N}
+        menos", "{1} menos por cada criatura…", descuentos de permanentes) e
+        impuestos (stax). La IA y /play lo usan para saber qué es lanzable."""
+        cost = card.cost
+        if cost is None:
+            return None
+        extra = player.tax_for(card) if from_command else 0
+        red = (getattr(card, "cost_reduction", 0) or 0) + self._static_cost_reduction(player, card)
+        fn = getattr(card, "cost_reduction_fn", None)
+        if fn is not None:
+            red += fn(self, player)
+        tax = self._static_cost_increase(player, card)      # stax: "cuesta {N} más"
+        if extra or red or tax:
+            return Cost(generic=max(0, cost.generic + extra - red + tax), pips=cost.pips)
+        return cost
+
     def cast(self, player: "Player", card: Card, from_command: bool = False,
              targets=None, chosen_modes=None, x_value=None):
         cost = card.cost
-        # impuesto de comandante + reducción "cuesta {N} menos"
-        extra = player.cmdr_tax if from_command else 0
-        red = (getattr(card, "cost_reduction", 0) or 0) + self._static_cost_reduction(player, card)
-        tax = self._static_cost_increase(player, card)      # stax: "cuesta {N} más"
-        pay_cost = cost
-        if cost is not None and (extra or red or tax):
-            pay_cost = Cost(generic=max(0, cost.generic + extra - red + tax), pips=cost.pips)
+        # impuesto de comandante + reducciones + stax
+        pay_cost = self.effective_cost(player, card, from_command)
         # hechizos con {X}: se elige X = maná sobrante tras pagar el coste base.
         # X se guarda EN ESTE lanzamiento (cast_x) y se expone como game.spell_x
         # solo mientras resuelve: antes era global, así que un hechizo lanzado en
@@ -1729,7 +1778,7 @@ class Game:
         if from_command:
             if card in player.command:
                 player.command.remove(card)
-            player.cmdr_tax += 2
+            player.add_tax(card)
         else:
             if card in player.hand:
                 player.hand.remove(card)
@@ -1751,7 +1800,7 @@ class Game:
         st = getattr(player, "stats", None)
         if st is not None:
             st["cast_counts"][card.name] += 1
-            if card is player.commander_card and st["commander_turn"] is None:
+            if player.is_commander(card) and st["commander_turn"] is None:
                 st["commander_turn"] = self.turn
         # Storm: copias = hechizos ya lanzados este turno ANTES de este.
         # Replicate: copias = pagos extra ya calculados arriba. Ambas repiten efecto.
@@ -2035,7 +2084,7 @@ class Game:
             # exiliar ESTE permanente como coste (Perpetual Timepiece, etc.).
             if perm in ctrl.battlefield:
                 ctrl.battlefield.remove(perm)
-                if not perm.is_token and perm.card is not ctrl.commander_card:
+                if not perm.is_token and not ctrl.is_commander(perm.card):
                     ctrl.exile.append(perm.card)
                 self.log(f"{ctrl.name} exilia {perm.name} (coste)")
         self.log(f"{ctrl.name}: {perm.name} activa «{ab.get('label', '')}»")

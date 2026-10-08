@@ -395,12 +395,12 @@ class InteractiveGame:
     def _has_instant_response(self, hu):
         """¿El humano tiene en mano un instantáneo/destello que pueda pagar?"""
         return any((("instant" in c.types) or ("flash" in c.keywords))
-                   and c.cost is not None and hu.can_pay(c.cost) for c in hu.hand)
+                   and c.cost is not None and hu.can_pay(self.g.effective_cost(hu, c)) for c in hu.hand)
 
     def _has_counter_response(self, hu):
         """¿El humano tiene un contrahechizo (apunta a la pila) que pueda pagar?"""
         return any(getattr(c, "target_spec", None) == "stack_spell"
-                   and c.cost is not None and hu.can_pay(c.cost) for c in hu.hand)
+                   and c.cost is not None and hu.can_pay(self.g.effective_cost(hu, c)) for c in hu.hand)
 
     def _affects_human(self, hu, top=None):
         """¿El objeto en el tope de la pila afecta al humano? Le apunta a él o a un
@@ -430,7 +430,7 @@ class InteractiveGame:
         hu = self.human()
         if action == "cast" and i is not None and 0 <= i < len(hu.hand):
             c = hu.hand[i]
-            if (("instant" in c.types) or ("flash" in c.keywords)) and hu.can_pay(c.cost):
+            if (("instant" in c.types) or ("flash" in c.keywords)) and hu.can_pay(self.g.effective_cost(hu, c)):
                 spec = getattr(c, "target_spec", None)
                 if spec == "stack_spell":
                     tgt = [ctx["spell"]]                 # contrahechizo: apunta a la pila
@@ -508,7 +508,7 @@ class InteractiveGame:
         if 0 <= i < len(me.hand):
             c = me.hand[i]
             fast = ("instant" in c.types) or ("flash" in c.keywords)
-            if fast and c.cost is not None and me.can_pay(c.cost):
+            if fast and c.cost is not None and me.can_pay(self.g.effective_cost(me, c)):
                 modes = getattr(c, "modes", ())
                 chosen = spec = None
                 if modes and mode is not None and 0 <= mode < len(modes):
@@ -908,7 +908,7 @@ class InteractiveGame:
             return self.state()
         if zone == "command":
             cand = [c for c in p.command if c.cost is None or
-                    p.can_pay(Cost(c.cost.generic + p.cmdr_tax, c.cost.pips))]
+                    p.can_pay(Cost(c.cost.generic + p.tax_for(c), c.cost.pips))]
             if i is None and cand:
                 card = cand[0]
             elif i is not None and 0 <= i < len(p.command):
@@ -948,7 +948,7 @@ class InteractiveGame:
     def _prompt_x(self, p, card, from_command, targets, chosen):
         """Deja que el HUMANO elija X (0..máximo pagable) antes de lanzar."""
         base = card.cost
-        extra = p.cmdr_tax if from_command else 0
+        extra = p.tax_for(card) if from_command else 0
         red = getattr(card, "cost_reduction", 0) or 0
         base_cmc = max(0, (base.cmc if base else 0) + extra - red)
         xc = max(1, getattr(card, "x_count", 1))        # maná por cada punto de X
@@ -1180,7 +1180,7 @@ class InteractiveGame:
         if self._my_turn():
             for i, c in enumerate(p.impulse):   # exiliadas por impulse, jugables hoy
                 playable = (c.is_land() and p.lands_played < self.g.land_limit(p)) or \
-                           (not c.is_land() and c.cost is not None and p.can_pay(c.cost))
+                           (not c.is_land() and c.cost is not None and p.can_pay(self.g.effective_cost(p, c)))
                 impulse.append({"i": i, "name": c.name, "cost": _cost_str(c),
                                 "is_land": c.is_land(), "playable": playable})
             for i, c in enumerate(p.exile_play):   # exilio persistente (foretell, etc.)
@@ -1218,7 +1218,7 @@ class InteractiveGame:
                 if c.is_land():
                     if p.lands_played < self.g.land_limit(p):
                         lands.append({"i": i, "name": c.name})
-                elif c.cost is not None and p.can_pay(c.cost):
+                elif c.cost is not None and p.can_pay(self.g.effective_cost(p, c)):
                     tgts = self._targets_for(c)
                     entry = {"i": i, "name": c.name, "zone": "hand",
                              "cost": _cost_str(c),
@@ -1292,12 +1292,12 @@ class InteractiveGame:
                             "modes": self._modes_for(bf),
                             "mode_pick": getattr(bf, "mode_pick", 1)})
             for c in p.command:
-                pay = None if c.cost is None else Cost(c.cost.generic + p.cmdr_tax,
+                pay = None if c.cost is None else Cost(c.cost.generic + p.tax_for(c),
                                                        c.cost.pips)
                 if pay is None or p.can_pay(pay):
                     casts.append({"name": c.name, "zone": "command",
                                   "cost": _cost_str(c),
-                                  "tax": p.cmdr_tax})
+                                  "tax": p.tax_for(c)})
             if not self.attacked:
                 for pm in p.creatures():
                     if pm.can_attack():
@@ -1427,7 +1427,7 @@ class InteractiveGame:
         incoming = self._defense_incoming()
         attackers = [{
             "uid": a.uid, "name": a.name, "power": a.power, "toughness": a.toughness,
-            "commander": a.card is a.controller.commander_card,
+            "commander": self.g.commander_owner(a.card) is not None,
             "from": a.controller.name,
             # a quién ataca: None = a tu vida; si no, el nombre del planeswalker tuyo
             # (un Permanent tiene .card; el jugador no).
@@ -1447,7 +1447,7 @@ class InteractiveGame:
             "modes": self._modes_for(c), "mode_pick": getattr(c, "mode_pick", 1),
         } for i, c in enumerate(me.hand)
             if (("instant" in c.types) or ("flash" in c.keywords))
-            and c.cost is not None and me.can_pay(c.cost)]
+            and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
         return {
             "stage": "declare",
             "from": self._attacker.name if self._attacker else "",
@@ -1544,7 +1544,7 @@ class InteractiveGame:
             "modes": self._modes_for(c), "mode_pick": getattr(c, "mode_pick", 1),
         } for i, c in enumerate(me.hand)
             if (("instant" in c.types) or ("flash" in c.keywords))
-            and c.cost is not None and me.can_pay(c.cost)]
+            and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
         return {
             "stage": "damage",
             "attacking": attacking,
@@ -1570,7 +1570,7 @@ class InteractiveGame:
             "targets": self._targets_for(c),
         } for i, c in enumerate(me.hand)
             if (("instant" in c.types) or ("flash" in c.keywords))
-            and c.cost is not None and me.can_pay(c.cost)]
+            and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
         # item 4: habilidades a velocidad de instante (permanentes y cementerio)
         abilities = []
         for pm in me.battlefield:

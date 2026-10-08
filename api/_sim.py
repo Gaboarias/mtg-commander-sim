@@ -157,8 +157,9 @@ def resolve_decklist(text):
     """Parsea una lista y resuelve cada carta (registro + Scryfall). Devuelve
     la tabla editable, el comandante y un resumen de cobertura."""
     parsed = _check_parsed(decklist.parse_decklist(text or ""))
-    names = ([parsed["commander"]] if parsed["commander"] else []) + \
-            [n for _, n in parsed["cards"]]
+    names = list(parsed.get("commanders") or
+                 ([parsed["commander"]] if parsed["commander"] else [])) + \
+        [n for _, n in parsed["cards"]]
     fetch = _make_fetch(names)
 
     def _attach_price_legal(row, name, qty):
@@ -173,6 +174,14 @@ def resolve_decklist(text):
     if cmd_card is not None:
         commander = _card_row(cmd_name, 1, cmd_card)
         _attach_price_legal(commander, cmd_name, 1)
+    # segundo comandante (partner / background)
+    partner_name = (parsed.get("commanders") or [None, None])[1:2]
+    partner_name = partner_name[0] if partner_name else None
+    partner = None
+    if partner_name:
+        p_card = cardsdb.resolve(partner_name, fetch)
+        partner = _card_row(partner_name, 1, p_card)
+        _attach_price_legal(partner, partner_name, 1)
 
     rows = []
     missing = []
@@ -200,8 +209,11 @@ def resolve_decklist(text):
             suggested = row["name"]
     if commander and commander.get("price"):
         price_total += commander["price"]
+    if partner and partner.get("price"):
+        price_total += partner["price"]
     # Game Changers + estimacion de bracket (#4)
-    all_names = ([cmd_name] if cmd_name else []) + [n for _, n in parsed["cards"]]
+    all_names = ([cmd_name] if cmd_name else []) + ([partner_name] if partner_name else []) \
+        + [n for _, n in parsed["cards"]]
     gcs = gamechangers.find_in(all_names)
     est_bracket, est_label, bracket_info = gamechangers.estimate_bracket(all_names)
     m = re.search(r"bracket[:\s]+([1-5])", text or "", re.IGNORECASE)
@@ -210,6 +222,8 @@ def resolve_decklist(text):
     return {
         "commander": commander,
         "commander_name": cmd_name,
+        "partner": partner,
+        "partner_name": partner_name,
         "commander_suggested": suggested,
         "cards": rows,
         "total": total,
@@ -244,8 +258,8 @@ def _build_deck_defs(specs):
         if s.get("kind") == "custom":
             parsed = _check_parsed(decklist.parse_decklist(s.get("text") or ""))
             s["_parsed"] = parsed
-            if parsed.get("commander"):
-                custom_names.append(parsed["commander"])
+            custom_names += list(parsed.get("commanders") or
+                                 ([parsed["commander"]] if parsed.get("commander") else []))
             custom_names += [nm for _, nm in parsed["cards"]]
     fetch = _make_fetch(custom_names) if custom_names else None
 
@@ -431,8 +445,9 @@ def resolve_decks(texts):
     names = set()
     for t in texts or []:
         parsed = decklist.parse_decklist(t or "")
-        if parsed.get("commander"):
-            names.add(parsed["commander"])
+        for c in (parsed.get("commanders") or
+                  ([parsed["commander"]] if parsed.get("commander") else [])):
+            names.add(c)
         for _q, n in parsed["cards"]:
             names.add(n)
     if _scry is None or not names:

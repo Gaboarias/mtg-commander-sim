@@ -217,10 +217,11 @@ class Policy:
                         and not pressured and spare_removal <= 1
                         and self._threat_value(targets[0]) <= 3):
                     continue
-            cmc = card.cost.cmc if card.cost else 0
+            eff = game.effective_cost(me, card) if card.cost else None
+            cmc = eff.cmc if eff else 0
             if reserve and me.available_mana() - cmc < reserve:
                 continue
-            if me.can_pay(card.cost):
+            if me.can_pay(eff):
                 game.cast(me, card, targets=targets, chosen_modes=chosen_modes)
 
         # 5) las MISMAS jugadas fuera del campo que puede hacer el humano:
@@ -398,7 +399,7 @@ class Policy:
                 v += 3
         v += self._engine_value(perm)       # el motor pesa aunque el cuerpo sea chico
         try:
-            if perm.card is perm.controller.commander_card:
+            if perm.controller.is_commander(perm.card):
                 v += 12             # el comandante es el objetivo de mayor valor
         except AttributeError:
             pass
@@ -523,13 +524,16 @@ class Policy:
         return min((c.cost.cmc for c in reactive), default=0)
 
     def _maybe_cast_commander(self, game, me):
-        on_field = any(p.card is me.commander_card for p in me.battlefield)
-        if on_field:
+        # con partners, cada comandante se considera por separado
+        for cmd in list(getattr(me, "commanders", [me.commander_card])):
+            self._maybe_cast_one_commander(game, me, cmd)
+
+    def _maybe_cast_one_commander(self, game, me, cmd):
+        if any(p.card is cmd for p in me.battlefield):
             return
-        cmd = me.commander_card
-        if cmd not in me.command or cmd.cost is None:
+        if not any(c is cmd for c in me.command) or cmd.cost is None:
             return
-        pay_cost = Cost(generic=cmd.cost.generic + me.cmdr_tax, pips=cmd.cost.pips)
+        pay_cost = Cost(generic=cmd.cost.generic + me.tax_for(cmd), pips=cmd.cost.pips)
         if not me.can_pay(pay_cost):
             return
         # comandantes que QUIEREN otra criatura en mesa para rendir (p. ej. Omo, que

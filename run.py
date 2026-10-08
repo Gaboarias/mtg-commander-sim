@@ -26,11 +26,22 @@ from policy import Policy
 DEFAULT_MATCHUP = ["lorehold", "tricky", "kang"]
 
 
+def seat_labels(keys):
+    """Nombre de cada asiento: el mazo, y '#2', '#3'… si se repite ('kang kang'
+    sumaba las victorias de ambos asientos en 'kang': 200%)."""
+    seen = Counter()
+    out = []
+    for k in keys:
+        seen[k] += 1
+        out.append(k if seen[k] == 1 else f"{k}#{seen[k]}")
+    return out
+
+
 def _build_game(keys, seed=0, log=False, max_turns=60, mulligan=False):
     players = []
-    for i, key in enumerate(keys):
+    for key, label in zip(keys, seat_labels(keys)):
         deck, commander = decks.build(key)
-        p = Player(f"{key}", deck, commander, policy=Policy())
+        p = Player(label, deck, commander, policy=Policy())
         players.append(p)
     return Game(players, seed=seed, log=log, max_turns=max_turns,
                 mulligan=mulligan)
@@ -92,7 +103,7 @@ def many(keys, n=200, verbose=True, mulligan=False, jobs=1):
     wins = Counter(w for _seed, w in results)
     if verbose:
         print(f"\n=== {' vs '.join(keys)}  ({n} partidas) ===")
-        for key in keys:
+        for key in seat_labels(keys):
             w = wins.get(key, 0)
             print(f"  {key:12s} {w:5d}  {100*w/n:5.1f}%")
         draws = wins.get("EMPATE", 0)
@@ -121,7 +132,7 @@ def export_json(keys, n, path, mulligan=False, jobs=1, full_log=False):
         "mulligan": mulligan,
         "wins": dict(wins),
         "winrate": {k: round(100 * wins.get(k, 0) / n, 2)
-                    for k in keys + ["EMPATE"]},
+                    for k in seat_labels(keys) + ["EMPATE"]},
         "games": games,
     }
     with open(path, "w", encoding="utf-8") as f:

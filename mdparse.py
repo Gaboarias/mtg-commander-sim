@@ -58,31 +58,12 @@ def _build_card_row(name, coste, pt, kws, tags):
     if reg is not None and cardsdb.is_implemented(name):
         if ("creature" in reg.types) == is_creature:
             return reg
-    # oracle conocido -> construir con EFECTO REAL (vía cardsdb). Para criaturas
-    # usamos el mapa de relleno (decks._FILLER_ORACLE) con el tipo "Creature"; para
-    # no-criaturas, el mapa con TIPO (cardsdb.PRESET_NONCREATURE), porque la tabla
-    # .md no trae el tipo real de las cartas sin P/T (caerían a 'sorcery').
-    def _braces(cs):
-        import re as _re
-        return "".join("{%s}" % t for t in _re.findall(r"\d+|[WUBRGCX]", (cs or "").upper()))
-
-    if is_creature:
-        import decks
-        _oracle = decks._FILLER_ORACLE.get(name)
-        if _oracle:
-            m = re.match(r"^(-?\d+)\s*/\s*(-?\d+)$", pt.strip())
-            if m:
-                return cardsdb.build_card_from_data({
-                    "name": name, "type_line": "Creature", "mana_cost": _braces(coste),
-                    "power": m.group(1), "toughness": m.group(2),
-                    "keywords": list({k for k in kws.split()} & KEYWORDS),
-                    "oracle_text": _oracle})
-    else:
-        _nc = cardsdb.PRESET_NONCREATURE.get(name)
-        if _nc:
-            return cardsdb.build_card_from_data({
-                "name": name, "type_line": _nc[0], "mana_cost": _braces(coste),
-                "oracle_text": _nc[1]})
+    # carta REAL (snapshot de Scryfall de los presets): coste, tipos, P/T y oráculo
+    # reales; los tags de la tabla se suman (antes: mapas de oráculo tipeados a mano)
+    import decks
+    _real = decks.real_or_none(name, tags=[t for t in tags.split() if t != "?"])
+    if _real is not None:
+        return _real
 
     # construir vainilla con datos exactos de la tabla
     power = tough = 0

@@ -44,7 +44,9 @@ type Row = {
 };
 type Resolved = {
   commander: Row | null;
+  partner?: Row | null;
   commander_name: string | null;
+  partner_name?: string | null;
   commander_suggested?: string | null;
   cards: Row[];
   total: number;
@@ -511,6 +513,7 @@ export default function DeckPage() {
     if (!resolved) return text;
     const lines = ["Commander"];
     if (resolved.commander_name) lines.push(`1 ${resolved.commander_name}`);
+    if (resolved.partner_name) lines.push(`1 ${resolved.partner_name}`);
     lines.push("", "Deck");
     for (const c of resolved.cards) if (c.qty > 0) lines.push(`${c.qty} ${c.name}`);
     return lines.join("\n");
@@ -592,6 +595,7 @@ export default function DeckPage() {
       const rows: Row[] = (d.cards || []).filter((c: Row) => c.qty > 0);
       const entries = rows.map((c) => ({ name: c.name, qty: c.qty }));
       if (d.commander_name) entries.push({ name: d.commander_name, qty: 1 });
+      if (d.partner_name) entries.push({ name: d.partner_name, qty: 1 });
       setBinder(addManyToBinder(entries));
       scheduleAutosave();
       // guardo los detalles (identidad/coste/estado) que ya vinieron resueltos
@@ -1045,10 +1049,13 @@ export default function DeckPage() {
   function buildWithCommander(name: string): string {
     const rest: string[] = [];
     let removed = false;
+    let skip = false;              // sideboard/maybeboard: no pasan al mazo
     for (const raw of text.split("\n")) {
       const l = raw.trim();
       if (!l) continue;
-      if (/^(commander|comandante|deck|mainboard|sideboard|maybeboard)\b/i.test(l)) continue;
+      if (/^(sideboard|maybeboard|considering)\b/i.test(l)) { skip = true; continue; }
+      if (/^(commander|comandante|deck|mainboard)\b/i.test(l)) { skip = false; continue; }
+      if (skip) continue;
       if (!removed && _lineName(l).toLowerCase() === name.toLowerCase()) {
         removed = true;
         continue;
@@ -1393,8 +1400,14 @@ export default function DeckPage() {
           <h2><span className="step">2</span> Revisá y editá</h2>
           {resolved.commander ? (
             <p>
-              <strong>Comandante:</strong> {resolved.commander.name}{" "}
+              <strong>{resolved.partner ? "Comandantes:" : "Comandante:"}</strong> {resolved.commander.name}{" "}
               <Tag r={resolved.commander} />
+              {resolved.partner && (
+                <>
+                  {" + "}{resolved.partner.name}{" "}
+                  <Tag r={resolved.partner} />
+                </>
+              )}
             </p>
           ) : (
             <p className="err">Elegí tu comandante en el recuadro de arriba <Icon name="flag" size={13} /></p>

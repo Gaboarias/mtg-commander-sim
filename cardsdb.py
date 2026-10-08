@@ -20,16 +20,18 @@ import cards
 # Registro de cartas implementadas (nombre -> constructor)
 # --------------------------------------------------------------------------- #
 
+# Solo implementaciones FIELES al oráculo real (regla 5). Las que antes tenían
+# texto inventado (Bag of Holding, Sevinne's Reclamation, Underworld Breach,
+# Simic Ascendancy, Doomed Traveler, Bloodrage Brawler, Quintorius Kand) ya no
+# están: se construyen desde su oráculo real con el parser.
 _IMPLEMENTED = [
-    cards.Quintorius, cards.Hofri, cards.BagOfHolding, cards.FaithlessLooting,
-    cards.SevinnesReclamation, cards.UnderworldBreach, cards.SunTitan,
-    cards.KarmicGuide, cards.CronistaEspectral, cards.MerodeadorDeTumbas,
-    cards.Managorger, cards.Kalonian, cards.HardenedScales,
-    cards.SimicAscendancy, cards.BranchingEvolution,
+    cards.Quintorius, cards.Hofri, cards.FaithlessLooting, cards.SunTitan,
+    cards.KarmicGuide, cards.Managorger, cards.Kalonian, cards.HardenedScales,
+    cards.BranchingEvolution,
     cards.Kang, cards.GrayMerchant, cards.GoForTheThroat, cards.NightsWhisper,
     cards.DamnationWipe,
     cards.SolRing, cards.ArcaneSignet, cards.CommandTower,
-    cards.Counterspell, cards.QuintoriusPlaneswalker,
+    cards.Counterspell,
 ]
 
 
@@ -45,7 +47,9 @@ def _norm(name: str) -> str:
     return re.sub(r"\s+", " ", name.strip().lower())
 
 
-REGISTRY = _build_registry()
+# REGISTRY se arma al FINAL del módulo: algunas implementaciones (Quintorius,
+# Hofri) se construyen desde su oráculo con build_card_from_data.
+REGISTRY: dict = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -2392,7 +2396,7 @@ def _persist_undying_ondeath(oracle: str):
     def on_death(game, ctrl, perm, _kind=kind):
         if perm.is_token:                       # las fichas dejan de existir
             return False
-        if perm.card is ctrl.commander_card:    # el comandante va a la zona de mando
+        if game.commander_owner(perm.card) is not None:    # el comandante va a la zona de mando
             return False
         if perm.counters.get(_kind, 0) > 0:     # ya tenía el contador -> al cementerio
             return False
@@ -3656,6 +3660,29 @@ _KEYWORD_WORDS = [
 ]
 
 
+def _each_count_fn(phrase: str):
+    """'creature on the battlefield' / 'artifact you control' / 'opponent you have'
+    (lo que sigue a 'for each') -> f(game, ctrl) o None."""
+    p = (phrase or "").lower().strip()
+    if re.match(r"opponents? you have", p):
+        return lambda g, c: len(g.opponents(c))
+    if re.match(r"cards? in your hand", p):
+        return lambda g, c: len(c.hand)
+    m = re.match(r"(creature|artifact|enchantment|land|planeswalker|permanent)s? "
+                 r"(on the battlefield|you control|your opponents control)$", p)
+    if not m:
+        return None
+    kind, whose = m.group(1), m.group(2)
+
+    def _cnt(g, c, _k=kind, _w=whose):
+        pls = ([c] if _w == "you control" else
+               g.opponents(c) if "opponents" in _w else g.players)
+        return sum(1 for pl in pls for pm in pl.battlefield
+                   if _k == "permanent" or (pm.is_creature() if _k == "creature"
+                                            else _k in pm.card.types))
+    return _cnt
+
+
 def _count_fn(phrase: str):
     """Devuelve una función f(game, ctrl) -> int para expresiones de cantidad
     variable comunes ('the number of creatures you control', 'cards in your hand',
@@ -3781,6 +3808,53 @@ def _generic_amount_single(oracle: str):
     _cs = _copy_token_spec(oracle)
     if _cs is not None:
         return _copy_token_effect(_cs)
+
+    # "Discard a card." / "you discard two cards" como efecto PROPIO (Bloodrage
+    # Brawler al entrar): antes no se parseaba y la carta no tenía su contra.
+    _md = re.fullmatch(r"\s*(?:you )?discard (a|one|two|three|\d+) cards?\.?\s*",
+                       oracle or "", re.I)
+    if _md:
+        _dn = _count_word(_md.group(1)) or 1
+
+        def eff_discard(game, ctrl, *a, _n=_dn):
+            _human_or_auto_discard(game, ctrl, _n)
+        return eff_discard
+
+    # barrida de DAÑO: "deals N damage to each creature [and each player]"
+    # (Pyroclasm, Anger of the Gods, Blasphemous Act…). Antes no se parseaba: la
+    # carta no hacía nada.
+    _sw = re.search(r"deals? (\d+) damage to each (creature|other creature)"
+                    r"( you don't control| your opponents control| an opponent controls)?"
+                    r"(?:,? and|,)? ?(?:each (player|opponent|planeswalker))?",
+                    oracle or "", re.I)
+    _sw_sent = ""
+    if _sw:
+        _o = oracle or ""
+        _a = _o.rfind(".", 0, _sw.start()) + 1
+        _b = _o.find(".", _sw.end())
+        _sw_sent = _o[_a:_b if _b >= 0 else len(_o)]
+    if _sw and not re.search(r"with (?:flying|power|toughness)|without flying|"
+                             r"\bif |for each", _sw_sent, re.I):
+        _n = int(_sw.group(1))
+        _opp_only = bool(_sw.group(3))
+        _also = (_sw.group(4) or "").lower()
+
+        def eff_sweep(game, ctrl, *a, _n=_n, _oo=_opp_only, _al=_also):
+            src = getattr(game, "_trigger_source", None)
+            for pl in list(game.players):
+                if _oo and pl is ctrl:
+                    continue
+                for pm in list(pl.battlefield):
+                    if pm.is_creature() and pm is not src:
+                        game.deal_damage(src, pm, _n)
+            if _al in ("player", "opponent"):
+                for pl in list(game.players):
+                    if not pl.lost and (_al == "player" or pl is not ctrl):
+                        game.deal_damage(src, pl, _n)
+            game.log(f"{ctrl.name}: {_n} de daño a cada criatura")
+            game.sba()
+        eff_sweep._is_sweep = True
+        return eff_sweep
 
     # efecto MODAL ("choose one/two/… — • ... • ..."): abre el selector de modo para
     # el humano (y el bot auto-elige). Cubre disparos/ETB modales que antes caían en
@@ -4063,7 +4137,7 @@ def _generic_amount_single(oracle: str):
                 if victim not in owner.battlefield:
                     return
                 owner.battlefield.remove(victim)
-                if not victim.is_token and victim.card is not owner.commander_card:
+                if not victim.is_token and game.commander_owner(victim.card) is None:
                     owner.exile.append(victim.card)
                 game.log(f"{ctrl.name} exilia {victim.name} "
                          f"(CMV {_cmv(victim)}) de {owner.name}")
@@ -4096,7 +4170,7 @@ def _generic_amount_single(oracle: str):
                 if _mode == "exile":
                     owner = pm.controller
                     owner.battlefield.remove(pm)
-                    if not pm.is_token and pm.card is not owner.commander_card:
+                    if not pm.is_token and game.commander_owner(pm.card) is None:
                         owner.exile.append(pm.card)
                     game.log(f"{ctrl.name} exilia {pm.name}")
                 else:
@@ -4149,7 +4223,7 @@ def _generic_amount_single(oracle: str):
                 if _mode == "exile":
                     owner = pm.controller
                     owner.battlefield.remove(pm)
-                    if not pm.is_token and pm.card is not owner.commander_card:
+                    if not pm.is_token and game.commander_owner(pm.card) is None:
                         owner.exile.append(pm.card)
                     game.log(f"{ctrl.name} exilia {pm.name}")
                 else:
@@ -4794,8 +4868,8 @@ def _generic_amount_single(oracle: str):
                     pl.battlefield.remove(pm)
                     if pm.is_token:
                         continue
-                    if pm.card is pl.commander_card:
-                        pl.command.append(pm.card)
+                    if game.commander_owner(pm.card) is not None:
+                        game.commander_owner(pm.card).command.append(pm.card)
                     else:
                         pl.hand.append(pm.card)
             game.log(f"{ctrl.name}: todas las criaturas vuelven a la mano")
@@ -5560,6 +5634,8 @@ def _build_card_from_data_impl(data: dict) -> Card:
             geff = _generic_amount_effect(data.get("oracle_text", ""))
             if geff is not None:
                 card.on_cast_resolve = geff
+                if getattr(geff, "_is_sweep", False):
+                    card.tags = set(card.tags) | {"wipe"}   # la IA lo evalúa como barrida
         elif ({"creature", "artifact", "enchantment"} & types and _etb_body
               and not re.match(r"if\b", _etb_body, re.I)):
             # solo el CUERPO del disparo de entrada propio (antes se parseaba todo el
@@ -5629,7 +5705,7 @@ def _build_card_from_data_impl(data: dict) -> Card:
                     return
                 mv = victim.card.cost.cmc if getattr(victim.card, "cost", None) else 0
                 owner.battlefield.remove(victim)
-                if not victim.is_token and victim.card is not owner.commander_card:
+                if not victim.is_token and game.commander_owner(victim.card) is None:
                     owner.exile.append(victim.card)
                 perm._skyclave_exiled = (owner, mv)     # recordar para la salida
                 game.log(f"{ctrl.name} exilia {victim.name} (CMV {mv}) de {owner.name}")
@@ -6287,8 +6363,15 @@ def _build_card_from_data_impl(data: dict) -> Card:
                 add["sacrifice"] = True
         if add:
             card.additional_cost = add
-        mr = re.search(r"this spell costs \{(\d+)\} less to cast", _ot)
-        if mr:
+        mr = re.search(r"this spell costs \{(\d+)\} less to cast(?: for each ([^.]+))?", _ot)
+        if mr and mr.group(2):
+            # "{1} menos por CADA criatura en el campo…": reducción dinámica (antes
+            # quedaba fija en 1: Blasphemous Act costaba 8)
+            _fn = _each_count_fn(mr.group(2))
+            if _fn is not None:
+                card.cost_reduction_fn = (lambda g, p, _n=int(mr.group(1)), _f=_fn:
+                                          _n * _f(g, p))
+        elif mr:
             card.cost_reduction = int(mr.group(1))
 
     # efectos de REEMPLAZO estáticos (dobladores / muerte->exilio)
@@ -6380,19 +6463,6 @@ def _build_card_from_data_impl(data: dict) -> Card:
     return card
 
 
-# Cartas NO criatura de los presets (.md) cuyo tipo real no viene en la tabla
-# (las filas sin P/T caen a 'sorcery' por defecto). Con el tipo correcto + oracle,
-# el parser las implementa. {nombre: (type_line, oracle_text)}.
-PRESET_NONCREATURE = {
-    "Inexorable Tide": ("Enchantment",
-                        "Whenever you cast a spell, proliferate."),
-    "Patchwork Banner": (
-        "Artifact",
-        "As Patchwork Banner enters the battlefield, choose a creature type.\n"
-        "Creatures you control of the chosen type get +1/+1.\n"
-        "{T}: Add one mana of any color. Spend this mana only to cast a creature "
-        "spell of the chosen type."),
-}
 
 
 # --------------------------------------------------------------------------- #
@@ -6455,3 +6525,6 @@ def _basic_land(name: str):
 
 def is_implemented(name: str) -> bool:
     return _norm(name) in REGISTRY
+
+
+REGISTRY.update(_build_registry())

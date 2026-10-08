@@ -67,6 +67,14 @@ instantaneos (P2.1) si el Lorehold todavia no sabe hacer Espiritus (P1.1).
 Ver `ADDING_CARDS.md`. Resumen: una entrada en `cards.py` con sus ganchos y sus
 tags, y una linea en `decks.py`.
 
+Los mazos de ejemplo (`decks.py`, `presets/*.md`) arman cada carta desde su
+oráculo REAL en `data/preset_cards.json` (`decks.real(nombre)`). Para sumar una
+carta nueva a un preset: agregá el nombre a `data/preset_card_names.txt` y corré
+el workflow "Snapshot de cartas de los presets" (o
+`python3 scripts/snapshot_preset_cards.py` con red). `tests/test_decklist.py`
+falla si un preset usa una carta que no está en el snapshot o si no es legal
+(99, singleton, identidad).
+
 ## Definicion de terminado, por tarea
 
 - El codigo corre: `python3 run.py` sin excepciones

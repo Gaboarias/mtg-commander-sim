@@ -209,16 +209,16 @@ def remove_targets(mode="destroy"):
                 owner.battlefield.remove(perm)
                 if perm.is_token:
                     continue
-                if perm.card is owner.commander_card:
-                    owner.command.append(perm.card)      # el comandante puede ir a la zona de mando
+                if game.commander_owner(perm.card) is not None:   # a la zona de mando de su dueño
+                    game.commander_owner(perm.card).command.append(perm.card)
                 else:
                     owner.exile.append(perm.card)
             elif mode == "bounce":
                 owner.battlefield.remove(perm)
                 if perm.is_token:
                     continue
-                if perm.card is owner.commander_card:
-                    owner.command.append(perm.card)
+                if game.commander_owner(perm.card) is not None:
+                    game.commander_owner(perm.card).command.append(perm.card)
                 else:
                     owner.hand.append(perm.card)
     return eff
@@ -334,91 +334,80 @@ def reanimate(game, ctrl, card):
     return game.move_to_battlefield(card, ctrl)
 
 
+def _from_oracle(data):
+    """Carta desde su oráculo REAL vía el parser (import tardío: cardsdb importa cards)."""
+    import cardsdb
+    return cardsdb.build_card_from_data(dict(data, keywords=list(data.get("keywords", []))))
+
+
 def _quintorius_lgy(game, perm, **kw):
-    """Quintorius: cuando una o mas cartas dejan TU cementerio, crea un
-    Espiritu 3/2."""
+    """Quintorius: 'Whenever one or more cards leave your graveyard, create a 3/2
+    red and white Spirit creature token.'"""
     if kw.get("player") is not perm.controller:
         return
-    # "Esta habilidad se dispara solo una vez cada turno."
-    if getattr(perm, "_quint_last_turn", None) == game.turn:
-        return
-    perm._quint_last_turn = game.turn
-    make_token(game, perm.controller, "Spirit", 3, 2)
+    make_token(game, perm.controller, "Spirit", 3, 2, subtypes=("Spirit",))
     game.log(f"{perm.controller.name}: Quintorius crea un Spirit 3/2")
 
 
-def _quintorius_upkeep(game, perm, **kw):
-    """Motor auto-suficiente (decision de diseno del simulador): en tu
-    mantenimiento exilia una carta de tu cementerio. Eso emite
-    leaves_graveyard, que dispara la creacion del Espiritu. Sin esto, el
-    arquetipo dependeria de robar un enabler concreto en un mazo singleton."""
-    ctrl = perm.controller
-    if ctrl.graveyard:
-        card = next((c for c in ctrl.graveyard if c.is_land()), ctrl.graveyard[0])
-        game.leave_graveyard(ctrl, card, dest="exile")
-
-
 def Quintorius():
-    c = creature("Quintorius, Field Historian", "2RW", 3, 4, legendary=True,
-                 tags=("engine",), color_id=(R, W))
-    def etb(game, ctrl, perm):     # siembra el cementerio al entrar
-        mill(game, ctrl, 2)
-    c.on_etb = etb
-    c.triggers = {"leaves_graveyard": _quintorius_lgy,
-                  "upkeep": _quintorius_upkeep}
+    """Quintorius, Field Historian (oráculo real). El '+1/+0 a tus Spirits' lo
+    cablea el parser; el disparo de salida del cementerio va acá."""
+    c = _from_oracle({
+        "name": "Quintorius, Field Historian", "mana_cost": "{3}{R}{W}",
+        "type_line": "Legendary Creature — Elephant Cleric", "power": "2",
+        "toughness": "4", "color_identity": ["R", "W"],
+        "oracle_text": "Spirits you control get +1/+0.\nWhenever one or more cards "
+                       "leave your graveyard, create a 3/2 red and white Spirit "
+                       "creature token."})
+    c.triggers = dict(c.triggers or {}, leaves_graveyard=_quintorius_lgy)
+    c.tags = set(c.tags) | {"engine"}
     return c
 
 
 def _hofri_watch(game, hofri_perm, **kw):
+    """'Whenever another nontoken creature you control dies, exile it. If you do,
+    create a token that's a copy of that creature, except it's a Spirit in addition
+    to its other types and it has "When this token leaves the battlefield, return
+    the exiled card to its owner's graveyard."'"""
     dead = kw.get("subject")         # la criatura que murió (sujeto del evento)
     if dead is None or dead.controller is not hofri_perm.controller:
         return
-    if dead is hofri_perm or not dead.is_creature() or dead.is_token:
+    if dead is hofri_perm or not dead.card.is_creature() or dead.is_token:
         return
     ctrl = hofri_perm.controller
-    make_token(game, ctrl, dead.name + " (Spirit)",
-               dead.card.power + 1, dead.card.toughness + 1, kw=("haste",))
+    card = dead.card
+    owner = next((pl for pl in game.players if any(c is card for c in pl.graveyard)), None)
+    if owner is None:
+        return                       # ya no está en el cementerio: "if you do" falla
+    owner.graveyard[:] = [c for c in owner.graveyard if c is not card]
+    owner.exile.append(card)
+    game.emit("leaves_graveyard", player=owner, card=card)
+    tok_card = _copy.deepcopy(card)
+    tok_card.subtypes = set(getattr(tok_card, "subtypes", set()) or set()) | {"Spirit"}
+    prev_leave = tok_card.on_leave
+
+    def _back(g, c, perm, _card=card, _owner=owner, _prev=prev_leave):
+        if _prev:
+            _prev(g, c, perm)
+        if any(x is _card for x in _owner.exile):
+            _owner.exile[:] = [x for x in _owner.exile if x is not _card]
+            _owner.graveyard.append(_card)
+            g.log(f"{_card.name} vuelve al cementerio (Hofri)")
+    tok_card.on_leave = _back
+    make_copy_token(game, ctrl, tok_card)
     game.log(f"{ctrl.name}: Hofri devuelve {dead.name} como Spirit")
 
 
 def Hofri():
-    c = creature("Hofri Ghostforge", "2RRW", 4, 4, legendary=True,
-                 tags=("engine", "gy_exile"), color_id=(R, W))
-    c.triggers = {"death": _hofri_watch}
-    return c
-
-
-def _bag_upkeep(game, perm, **kw):
-    # Bag of Holding: exilia una carta del cementerio en tu mantenimiento.
-    # (motor repetible de salida de cementerio -> alimenta a Quintorius)
-    ctrl = perm.controller
-    if ctrl.graveyard:
-        card = next((c for c in ctrl.graveyard if c.is_land()), ctrl.graveyard[0])
-        game.leave_graveyard(ctrl, card, dest="exile")
-
-
-def QuintoriusPlaneswalker():
-    """Planeswalker Lorehold (P2.3): +1 crea un Espiritu 3/2; -4 hace 4 a cada
-    oponente. (Es una carta distinta del comandante criatura Quintorius.)"""
-    def plus(game, ctrl, perm):
-        make_token(game, ctrl, "Spirit", 3, 2)
-        game.log(f"{ctrl.name}: PW crea un Spirit 3/2")
-
-    def ultimate(game, ctrl, perm):
-        for o in game.opponents(ctrl):
-            game.deal_damage(perm, o, 4)
-        game.log(f"{ctrl.name}: PW -4 hace 4 a cada oponente")
-
-    # lealtad inicial real (3): un planeswalker VULNERABLE — un par de ataques o un
-    # golpe de daño lo bajan antes de que llegue a su definitiva.
-    return planeswalker("Quintorius Kand", "3RW", 3,
-                        ((+1, plus), (-4, ultimate)), (R, W))
-
-
-def BagOfHolding():
-    c = Card("Bag of Holding", {"artifact"}, parse_cost("1"),
-             tags={"engine", "gy_exile"})
-    c.triggers = {"upkeep": _bag_upkeep}
+    """Hofri Ghostforge (oráculo real): el anthem de Spirits lo cablea el parser;
+    la copia-Spirit al morir va acá."""
+    c = _from_oracle({
+        "name": "Hofri Ghostforge", "mana_cost": "{3}{R}{W}",
+        "type_line": "Legendary Creature — Human Shaman", "power": "4",
+        "toughness": "5", "color_identity": ["R", "W"],
+        "oracle_text": "Spirits you control get +1/+1 and have trample and haste."})
+    c.triggers = dict(c.triggers or {}, death=_hofri_watch)
+    c.tags = set(c.tags) | {"engine", "gy_exile"}
     return c
 
 
@@ -440,69 +429,26 @@ def FaithlessLooting():
                 on_cast_resolve=eff, tags={"draw", "engine"}, color_id={R})
 
 
-def CronistaEspectral():
-    # siembra el cementerio para el motor de Espiritus (carta real -> trae arte)
-    def etb(game, ctrl, perm):
-        mill(game, ctrl, 3)
-    c = creature("Doomed Traveler", "W", 1, 1, tags=("engine",), color_id=(W,))
-    c.on_etb = etb
-    return c
-
-
-def MerodeadorDeTumbas():
-    def etb(game, ctrl, perm):
-        mill(game, ctrl, 2)
-    c = creature("Bloodrage Brawler", "1R", 4, 1, tags=("engine",), color_id=(R,))
-    c.on_etb = etb
-    return c
-
-
-def SevinnesReclamation():
-    def eff(game, ctrl, targets):
-        from cardsdb import _pick_card_from_zone
-        # devuelve un permanente de coste <=3 del cementerio a la mano (el humano elige)
-        opts = [c for c in ctrl.graveyard
-                if c.cost and c.cost.cmc <= 3 and ({"creature", "artifact",
-                 "enchantment"} & c.types)]
-        opts.sort(key=lambda c: c.cost.cmc, reverse=True)   # bot: el de mayor CMV
-
-        def _do(card):
-            game.leave_graveyard(ctrl, card, dest="hand")
-            game.log(f"{ctrl.name}: Sevinne's Reclamation recupera {card.name}")
-        _pick_card_from_zone(game, ctrl, opts, _do,
-                             "Elegí un permanente (CMV≤3) para devolver a tu mano")
-    return Card("Sevinne's Reclamation", {"sorcery"}, parse_cost("1W"),
-                on_cast_resolve=eff, tags={"engine", "gy_exile"}, color_id={W})
-
-
-def UnderworldBreach():
-    def etb(game, ctrl, perm):
-        # exilia hasta 3 cartas del cementerio (cada una dispara leaves_graveyard)
-        for _ in range(3):
-            if not ctrl.graveyard:
-                break
-            game.leave_graveyard(ctrl, ctrl.graveyard[0], dest="exile")
-    c = Card("Underworld Breach", {"enchantment"}, parse_cost("1R"),
-             tags={"engine", "gy_exile"}, color_id={R})
-    c.on_etb = etb
-    return c
-
-
 def SunTitan():
+    """'Whenever this creature enters or attacks, you may return target permanent
+    card with mana value 3 or less from your graveyard to the battlefield.'"""
+    _perm_types = {"creature", "artifact", "enchantment", "land", "planeswalker", "battle"}
+
     def etb(game, ctrl, perm):
         from cardsdb import _pick_card_from_zone
-        opts = [c for c in ctrl.graveyard
-                if c.cost and c.cost.cmc <= 3 and "creature" in c.types]
-        opts.sort(key=lambda c: c.cost.cmc, reverse=True)
+        opts = [c for c in ctrl.graveyard if c.types & _perm_types
+                and (c.cost.cmc if c.cost else 0) <= 3]
+        opts.sort(key=lambda c: c.cost.cmc if c.cost else 0, reverse=True)
 
         def _do(card):
             reanimate(game, ctrl, card)
-            game.log(f"{ctrl.name}: Sun Titan reanima {card.name}")
+            game.log(f"{ctrl.name}: Sun Titan devuelve {card.name}")
         _pick_card_from_zone(game, ctrl, opts, _do,
-                             "Sun Titan: elegí una criatura (CMV≤3) para reanimar")
+                             "Sun Titan: elegí un permanente (CMV≤3) para devolver")
     c = creature("Sun Titan", "4WW", 6, 6, kw=("vigilance",),
                  tags=("engine", "gy_exile"), color_id=(W,))
     c.on_etb = etb
+    c.triggers = {"attacks": lambda g, perm, **_kw: etb(g, perm.controller, perm)}
     return c
 
 
@@ -534,16 +480,22 @@ def _managorger_cast(game, perm, **kw):
 def Managorger():
     c = creature("Managorger Hydra", "2G", 1, 1, kw=("trample",),
                  tags=("creature",), color_id=(G,))
-    c.triggers = {"cast": _managorger_cast}
+    # "Whenever a PLAYER casts a spell": los propios por "cast" y los ajenos por
+    # "opp_cast" (antes solo contaba tus hechizos)
+    c.triggers = {"cast": _managorger_cast,
+                  "opp_cast": lambda g, perm, caster=None, **kw:
+                      None if caster is perm.controller else _managorger_cast(g, perm)}
     return c
 
 
 def _kalonian_attacks(game, perm, **kw):
+    # "doblar" = poner tantos contadores como tiene: los dobladores/Hardened
+    # Scales aplican (antes se asignaba directo y se los salteaba)
     ctrl = perm.controller
     for p in ctrl.creatures():
         cur = p.counters.get("+1/+1", 0)
         if cur > 0:
-            p.counters["+1/+1"] = cur * 2
+            game.add_counters(p, "+1/+1", cur)
 
 
 def Kalonian():
@@ -563,23 +515,6 @@ def HardenedScales():
     c = Card("Hardened Scales", {"enchantment"}, parse_cost("G"),
              tags={"engine"}, color_id={G})
     c.counter_modifier = mod
-    return c
-
-
-def _ascendancy_cast(game, perm, **kw):
-    perm.counters["growth"] = perm.counters.get("growth", 0) + 1
-    if perm.counters["growth"] >= 20:
-        # condicion de victoria alternativa: los demas pierden
-        for o in game.opponents(perm.controller):
-            o.lost = True
-        game.log(f"{perm.controller.name} GANA con Simic Ascendancy")
-
-
-def SimicAscendancy():
-    c = Card("Simic Ascendancy", {"enchantment"}, parse_cost("1GU"),
-             tags={"engine"}, color_id={G, U})
-    # gana un contador de crecimiento cada vez que pones un +1/+1 (aprox: por hechizo)
-    c.triggers = {"cast": _ascendancy_cast}
     return c
 
 
@@ -628,27 +563,35 @@ def _kang_draw(game, perm, **kw):
     ctrl = perm.controller
     opps = game.opponents(ctrl)
     for o in opps:
-        game.deal_damage(perm, o, 1)      # "cada oponente pierde 1 vida"
+        o.life -= 1                       # "each opponent LOSES 1 life" (no es daño)
     if opps:
         game.gain_life(ctrl, 1)           # "y ganás 1 vida" (1 fija, NO por oponente)
         game.log(f"{ctrl.name}: Kang — cada oponente pierde 1, ganás 1 (2da carta del turno)")
 
 
 def Kang():
-    c = creature("Kang, the Trickster", "2B", 2, 2, kw=("menace",),
-                 legendary=True, tags=("engine",), color_id=(B,))
+    """Kang, Temporal Tyrant {2}{U}{B} 3/4: al atacar connive; con tu 2da carta
+    robada cada turno, cada rival pierde 1 y ganás 1."""
+    c = creature("Kang, Temporal Tyrant", "2UB", 3, 4,
+                 legendary=True, tags=("engine",), color_id=(U, B))
     c.triggers = {"attacks": _kang_attacks, "draw": _kang_draw}
     return c
 
 
 def GrayMerchant():
     def etb(game, ctrl, perm):
-        devocion = sum(1 for p in ctrl.battlefield
-                       if p.card.cost and B in p.card.cost.pips)
+        # devoción al negro = cantidad de SÍMBOLOS {B} en los costes de tus
+        # permanentes (antes contaba permanentes: Gray Merchant mismo valía 1, no 2)
+        devocion = sum(p.card.cost.pips.count(B) for p in ctrl.battlefield
+                       if p.card.cost)
+        # "each opponent loses X life. You gain life equal to the life lost"
+        # (pérdida de vida, no daño: no se previene)
+        lost = 0
         for o in game.opponents(ctrl):
-            game.deal_damage(None, o, devocion)
-        game.gain_life(ctrl, devocion * len(game.opponents(ctrl)))
-        game.log(f"{ctrl.name}: Gray Merchant drena {devocion}")
+            o.life -= devocion
+            lost += devocion
+        game.gain_life(ctrl, lost)
+        game.log(f"{ctrl.name}: Gray Merchant drena {devocion} a cada rival")
     c = creature("Gray Merchant of Asphodel", "3BB", 2, 4, tags=("creature",),
                  color_id=(B,))
     c.on_etb = etb
@@ -662,8 +605,11 @@ def GoForTheThroat():
 
 
 def NightsWhisper():
+    def eff(game, ctrl, targets):        # "You draw two cards and lose 2 life."
+        ctrl.draw(2, game)
+        ctrl.life -= 2
     return Card("Night's Whisper", {"sorcery"}, parse_cost("1B"),
-                on_cast_resolve=draw_n(2), tags={"draw"}, color_id={B})
+                on_cast_resolve=eff, tags={"draw"}, color_id={B})
 
 
 def DamnationWipe():

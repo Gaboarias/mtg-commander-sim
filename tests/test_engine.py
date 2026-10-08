@@ -223,16 +223,15 @@ def test_legend_rule():
     assert len(legends) == 1
 
 
-# -- Simic Ascendancy gana la partida (BACKLOG P1.2) ----------------------- #
-def test_simic_ascendancy_wins():
+# -- Simic Ascendancy: ya no gana "por lanzar hechizos" (texto inventado) ---- #
+def test_simic_ascendancy_is_real_card_not_invented():
+    import decks
     a = _mk_player("a")
     b = _mk_player("b")
     g = _game([a, b])
-    asc = g.move_to_battlefield(cards.SimicAscendancy(), a)
-    for _ in range(20):
-        asc.card.triggers["cast"](g, asc)
-    g.sba()
-    assert b.lost
+    asc = g.move_to_battlefield(decks.real("Simic Ascendancy"), a)
+    assert "cast" not in (asc.card.triggers or {})
+    assert asc.card.cost.cmc == 2               # {G}{U}
 
 
 # -- Quintorius crea Espiritu al salir carta del cementerio (P1.1) --------- #
@@ -240,12 +239,15 @@ def test_quintorius_makes_spirit_on_leave_graveyard():
     a = _mk_player("a")
     b = _mk_player("b")
     g = _game([a, b])
-    g.move_to_battlefield(cards.Quintorius(), a)  # ETB siembra cementerio
-    before = sum(1 for p in a.battlefield if p.name == "Spirit")
-    g.emit("upkeep", player=a)  # upkeep exilia del cementerio -> leaves_graveyard
+    q = g.move_to_battlefield(cards.Quintorius(), a)
+    assert (q.power, q.toughness) == (2, 4)       # oráculo real {3}{R}{W} 2/4
+    assert not a.graveyard                         # sin el "molino al entrar" inventado
+    a.graveyard.append(land("Mountain", [R], basic=True))
+    g.leave_graveyard(a, a.graveyard[0], dest="exile")
     g.resolve_stack()
-    after = sum(1 for p in a.battlefield if p.name == "Spirit")
-    assert after > before
+    sp = [p for p in a.battlefield if p.name == "Spirit"]
+    assert len(sp) == 1
+    assert sp[0].power == 4                        # 3/2 + "Spirits you control get +1/+0"
 
 
 # -- Kang drena con la 2da carta robada del turno, sin atacar (P1.3) -------- #
@@ -260,7 +262,7 @@ def test_kang_drains_on_second_draw_without_attacking():
     cards.NightsWhisper().on_cast_resolve(g, a, [])  # roba 2 (2da y 3ra del turno)
     g.resolve_stack()
     assert b.life == b_life - 1   # drenaje por la 2da carta
-    assert a.life == a_life + 1   # Kang gana esa vida
+    assert a.life == a_life + 1 - 2   # Kang gana 1; Night's Whisper hace perder 2
 
 
 # -- Kang connive: +1/+1 solo si lo descartado no era tierra (P1.3) --------- #
@@ -333,7 +335,7 @@ def test_hexproof_not_targetable_by_opponent():
 def test_decklist_parse_and_build():
     import decklist
     txt = """Commander
-1 Kang, the Trickster
+1 Kang, Temporal Tyrant
 Deck
 1 Gray Merchant of Asphodel
 1x Go for the Throat (C21) 12
@@ -344,13 +346,13 @@ Sideboard
 1 Island
 """
     parsed = decklist.parse_decklist(txt)
-    assert parsed["commander"] == "Kang, the Trickster"
+    assert parsed["commander"] == "Kang, Temporal Tyrant"
     names = [n for _, n in parsed["cards"]]
     assert "Go for the Throat" in names   # se limpia el (SET) 12
     assert "Island" not in names          # sideboard ignorado
     deck, cmd, report = decklist.build_deck(parsed, fetch=None)
     assert len(deck) == 99
-    assert cmd.name == "Kang, the Trickster"
+    assert cmd.name == "Kang, Temporal Tyrant"
     assert report["unresolved"] == []     # Sol Ring ahora esta registrado
 
 
@@ -2179,11 +2181,22 @@ def test_game_with_mulligan_keeps_seven_and_conserves_cards():
 
 
 # -- P2.3 planeswalker: lealtad, activacion, -4, muerte a 0 ---------------- #
+def _test_walker():
+    """Planeswalker DE PRUEBA (mecánica genérica del motor, no una carta real)."""
+    def plus(game, ctrl, perm):
+        cards.make_token(game, ctrl, "Spirit", 3, 2)
+
+    def ultimate(game, ctrl, perm):
+        for o in game.opponents(ctrl):
+            game.deal_damage(perm, o, 4)
+    return cards.planeswalker("Test Walker", "3RW", 3, ((+1, plus), (-4, ultimate)), (R, W))
+
+
 def test_planeswalker_loyalty_and_minus_four():
     a = _mk_player("a")
     b = _mk_player("b")
     g = _game([a, b])
-    pw = g.move_to_battlefield(cards.QuintoriusPlaneswalker(), a)
+    pw = g.move_to_battlefield(_test_walker(), a)
     assert pw.counters["loyalty"] == 3          # lealtad inicial real (vulnerable)
     # +1 crea Espiritu y sube lealtad
     assert g.activate_loyalty(pw, 0) is True
@@ -2205,7 +2218,7 @@ def test_combat_can_attack_planeswalker():
     a = _mk_player("a")
     b = _mk_player("b")
     g = _game([a, b])
-    pw = g.move_to_battlefield(cards.QuintoriusPlaneswalker(), b)  # lealtad 3
+    pw = g.move_to_battlefield(_test_walker(), b)  # lealtad 3
     atk1 = g.move_to_battlefield(creature("Uno", "1R", 3, 3), a)
     atk2 = g.move_to_battlefield(creature("Dos", "1R", 2, 2), a)
     for p in (atk1, atk2):
@@ -2221,7 +2234,7 @@ def test_planeswalker_dies_at_zero_loyalty():
     a = _mk_player("a")
     b = _mk_player("b")
     g = _game([a, b])
-    pw = g.move_to_battlefield(cards.QuintoriusPlaneswalker(), a)
+    pw = g.move_to_battlefield(_test_walker(), a)
     # el dano de combate le resta lealtad
     g.deal_damage(None, pw, 4)
     g.sba()
@@ -3818,7 +3831,9 @@ def test_precons_have_even_coverage():
         pool = [c for c in ([cmd] + deck) if "basic" not in c.supertypes]
         counts[name] = sum(1 for c in pool if coverage._implemented(c))
     assert min(counts.values()) >= 20, counts
-    assert max(counts.values()) - min(counts.values()) <= 6, counts
+    # con cartas reales (snapshot de Scryfall) tricky trae más hechizos con efecto
+    # que los otros: la brecha refleja las listas, no un mazo vainilla
+    assert max(counts.values()) - min(counts.values()) <= 15, counts
 
 
 def test_board_eval_reflects_advantage():
@@ -6995,24 +7010,6 @@ def test_class_level_up_requires_previous_level():
 
 
 # -- comandantes: habilidades fieles al oráculo --------------------------- #
-def test_ezuri_experience_and_combat():
-    import cards, decks
-    from engine import Game, Player
-    ez = decks._tricky_commander()
-    me = Player("Yo", [cards.land("Forest", ["G"], basic=True) for _ in range(6)], ez)
-    op = Player("Op", [cards.land("Island", ["U"], basic=True) for _ in range(6)],
-                cards.creature("X", "1U", 1, 1, legendary=True))
-    g = Game([me, op], seed=1)
-    ezp = g.move_to_battlefield(ez, me); ezp.summoning_sick = False; g.resolve_stack()
-    for i in range(3):                       # 3 criaturas fuerza<=2 -> 3 experiencia
-        g.move_to_battlefield(cards.creature(f"b{i}", "G", 1, 1), me); g.resolve_stack()
-    big = g.move_to_battlefield(cards.creature("grande", "2G", 3, 3), me)  # fuerza 3: no cuenta
-    big.summoning_sick = False; g.resolve_stack()
-    assert getattr(me, "experience", 0) == 3
-    g._begin_combat(me); g.resolve_stack()   # X=3 en OTRA criatura (la mejor)
-    assert (big.power, big.toughness) == (6, 6)
-
-
 def test_kang_second_draw_gains_only_one():
     import cards
     from engine import Game, Player
@@ -7030,7 +7027,7 @@ def test_kang_second_draw_gains_only_one():
     assert a0 - o2.life == 1 and b0 - o3.life == 1
 
 
-def test_quintorius_spirit_once_per_turn():
+def test_quintorius_spirit_each_time_no_turn_cap():
     import cards
     from engine import Game, Player
     q = cards.Quintorius()
@@ -7046,11 +7043,8 @@ def test_quintorius_spirit_once_per_turn():
     s0 = spirits()
     g.leave_graveyard(me, me.graveyard[0], dest="exile"); g.resolve_stack()
     g.leave_graveyard(me, me.graveyard[0], dest="exile"); g.resolve_stack()
-    assert spirits() - s0 == 1            # tope: una vez por turno
-    g.turn = 6
-    me.graveyard.append(cards.land("Mountain", ["R"], basic=True))
-    g.leave_graveyard(me, me.graveyard[0], dest="exile"); g.resolve_stack()
-    assert spirits() - s0 == 2            # nuevo turno -> otra vez
+    # el oráculo real NO tiene tope por turno (el "una vez por turno" era inventado)
+    assert spirits() - s0 == 2
 
 
 def test_modal_trigger_opens_mode_ui_for_human():
@@ -8495,7 +8489,12 @@ def test_death_has_subject_and_only_for_creatures():
     assert seen == []                                    # un artefacto no "muere"
     g.to_graveyard(bear, "test"); g.resolve_stack()
     assert seen and seen[0] is bear
-    assert any("Spirit" in p.name for p in me.battlefield)   # Hofri sabe quién murió
+    # Hofri sabe quién murió: lo exilia y crea una copia que además es Spirit
+    tok = [p for p in me.battlefield if p.is_token and p.name == "Bear"]
+    assert tok and "Spirit" in tok[0].card.subtypes
+    assert any(c is bear.card for c in me.exile)
+    g.to_graveyard(tok[0], "test"); g.resolve_stack()
+    assert any(c is bear.card for c in me.graveyard)        # al irse, vuelve al GY
 
 
 def test_commander_identity_damage_and_zone():

@@ -47,7 +47,7 @@ _COMBOS = [
     (["Grand Architect", "Pili-Pala"],
      "Maná infinito", "U"),
     (["Devoted Druid", "Vizier of Remedies"],
-     "Maná verde infinito", "G"),
+     "Maná verde infinito", "GW"),
     (["Peregrine Drake", "Deadeye Navigator"],
      "Maná infinito", "U"),
     (["Palinchron", "Deadeye Navigator"],
@@ -72,10 +72,10 @@ _COMBOS = [
      "Daño infinito", "UR"),
 
     # --- aristócratas / persistencia (BG) ---
-    (["Mikaeus, the Unhallowed", "Ballista", "Blood Artist"],
-     "Drenás toda la mesa (persistencia + aristócrata)", "B"),
+    (["Kitchen Finks", "Vizier of Remedies", "Viscera Seer"],
+     "Vida infinita (persist sin contador -1/-1 + sacrificio gratis)", "WBG"),
     (["Melira, Sylvok Outcast", "Murderous Redcap", "Goblin Bombardment"],
-     "Daño infinito (persist + sac outlet)", "BG"),
+     "Daño infinito (persist + sac outlet)", "BRG"),
     (["Karmic Guide", "Reveillark", "Ashnod's Altar"],
      "Bucle de reanimación / sacrificio infinito", "W"),
 
@@ -84,24 +84,24 @@ _COMBOS = [
      "Combates infinitos", "R"),
     (["Aggravated Assault", "Bear Umbra"],
      "Combates infinitos", "RG"),
-    (["Time Warp", "Archaeomancer", "Ghostly Flicker"],
-     "Turnos infinitos", "U"),
+    (["Archaeomancer", "Ghostly Flicker", "Peregrine Drake"],
+     "Maná infinito (Flicker parpadea Archaeomancer y Drake)", "U"),
 
     # --- artefactos ---
     (["Thopter Foundry", "Sword of the Meek", "Ashnod's Altar"],
      "Fichas Thopter y vida infinitas", "WUB"),
-    (["Krark-Clan Ironworks", "Myr Retriever", "Scrap Trawler"],
-     "Bucle de artefactos / maná", ""),
 
     # --- reanimación rota ---
     (["Worldgorger Dragon", "Animate Dead"],
-     "Maná infinito y ETBs (loop de Worldgorger)", "B"),
+     "Maná infinito y ETBs (loop de Worldgorger)", "BR"),
 
     # --- Food Chain ---
     (["Food Chain", "Eternal Scourge"],
-     "Maná de criatura infinito", "B"),
+     "Maná de criatura infinito", "G"),
     (["Food Chain", "Squee, the Immortal"],
-     "Maná de criatura infinito", "R"),
+     "Maná de criatura infinito", "BRG"),
+    (["Food Chain", "Misthollow Griffin"],
+     "Maná de criatura infinito", "UG"),
 
     # --- Dockside ---
     (["Dockside Extortionist", "Temur Sabertooth"],
