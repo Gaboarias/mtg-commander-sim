@@ -1,0 +1,30 @@
+name: Snapshot de cartas de los presets
+
+# Baja de Scryfall el oráculo real de las cartas de los mazos de ejemplo
+# (data/preset_card_names.txt -> data/preset_cards.json) y lo empuja a la rama
+# data/preset-cards. Solo manual.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Bajar oráculos
+        run: python3 scripts/snapshot_preset_cards.py
+      - name: Empujar a data/preset-cards
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B data/preset-cards
+          git add data/preset_cards.json
+          git commit -m "Snapshot de cartas de los presets (Scryfall)" || true
+          git push --force origin data/preset-cards
