@@ -48,10 +48,10 @@ export function listDecks(): SavedDeck[] {
 export function saveDeck(name: string, text: string, colors?: string[], id?: string): SavedDeck[] {
   const decks = listDecks();
   const now = Date.now();
-  if (id) {
-    const i = decks.findIndex((d) => d.id === id);
-    if (i >= 0) decks[i] = { ...decks[i], name, text, colors, updatedAt: now };
-  } else {
+  const i = id ? decks.findIndex((d) => d.id === id) : -1;
+  if (i >= 0) {
+    decks[i] = { ...decks[i], name, text, colors, updatedAt: now };
+  } else {   // nuevo (o el que se editaba ya no existe: no perder lo guardado)
     decks.push({
       id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
       name,

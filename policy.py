@@ -600,10 +600,9 @@ class Policy:
             return False  # el novato no responde
         if getattr(top, "controller", None) is me:
             return False
-        if str(getattr(top, "label", "")).startswith("trigger"):
-            return False
         if getattr(top, "kind", "spell") != "spell":
-            return False          # no se contrarrestan habilidades/disparos
+            # habilidad/disparo rival: Stifle y similares (apuntan a habilidades)
+            return self._respond_to_ability(game, me, top)
         card = getattr(top, "source", None)
         if card is None or not hasattr(card, "types") or card.is_land():
             return False
@@ -619,6 +618,25 @@ class Policy:
         if counter is None:
             return False
         game.cast(me, counter, targets=[top])
+        return True
+
+    def _respond_to_ability(self, game, me, top):
+        """Contrarrestar una habilidad rival (Stifle) si me afecta: apunta a algo mío
+        o a mí, o viene de un motor/remoción del rival."""
+        stifle = next((c for c in me.hand
+                       if getattr(c, "target_spec", None) == "stack_ability"
+                       and c.cost is not None
+                       and me.can_pay(game.effective_cost(me, c))), None)
+        if stifle is None:
+            return False
+        hits_me = any(t is me or getattr(t, "controller", None) is me
+                      for t in (getattr(top, "targets", None) or []))
+        src = getattr(top, "source", None)
+        src_card = getattr(src, "card", src)
+        tags = getattr(src_card, "tags", set()) or set()
+        if not (hits_me or tags & {"removal", "wipe", "engine"}):
+            return False
+        game.cast(me, stifle, targets=[top])
         return True
 
     def respond_copy(self, game, me, top):
@@ -895,7 +913,11 @@ class Policy:
             return result
 
         def can_block(b, atk):
-            return not (atk.has("flying") and not (b.has("flying") or b.has("reach")))
+            if atk.has("unblockable"):
+                return False
+            if atk.has("flying") and not (b.has("flying") or b.has("reach")):
+                return False
+            return game._can_block_evasion(atk, b)
 
         def kills(b, atk):    # ¿b mata a atk? deathtouch: con 1 alcanza
             return b.power >= atk.toughness or (b.has("deathtouch") and b.power > 0)
@@ -953,4 +975,48 @@ class Policy:
                     for b in chump:
                         result.append((atk, b))
                         used.add(b.uid)
+
+        # 4) SUPERVIVENCIA: si lo que queda sin bloquear me mata (vida, daño de
+        #    comandante o veneno), chump-bloquear lo que más pega hasta no morir.
+        #    Antes solo se bloqueaban atacantes "grandes": 5 criaturas 2/2 mataban
+        #    a un jugador con 10 de vida y bloqueadores libres.
+        blocked = {id(a) for a, _b in result}
+        if self._unblocked_lethal(game, me, incoming, blocked):
+            for atk in sorted(incoming, key=lambda a: -a.power):
+                if id(atk) in blocked:
+                    continue
+                need = 2 if atk.has("menace") else 1
+                avail = [b for b in blockers if b.uid not in used and can_block(b, atk)]
+                if len(avail) < need:
+                    continue
+                if atk.has("trample") and sum(b.toughness for b in avail[:need]) <= 0:
+                    continue
+                avail.sort(key=lambda x: (not expendable(x), x.power + x.toughness))
+                for b in avail[:need]:
+                    result.append((atk, b))
+                    used.add(b.uid)
+                blocked.add(id(atk))
+                if not self._unblocked_lethal(game, me, incoming, blocked):
+                    break
         return result
+
+    @staticmethod
+    def _unblocked_lethal(game, me, incoming, blocked):
+        """¿Los atacantes NO bloqueados que vienen a mí me eliminan este combate?"""
+        dmg, poison, cmdr = 0, me.poison, {}
+        for a in incoming:
+            if id(a) in blocked or a.attacking is not me:
+                continue
+            p = max(0, a.power) * (2 if a.has("double_strike") else 1)
+            if a.has("infect"):
+                poison += p
+                continue
+            dmg += p
+            if a.has("toxic"):
+                poison += getattr(a.card, "toxic_n", 1)
+            owner = game.commander_owner(a.card)
+            if owner is not None:
+                k = game.cmdr_key(owner, a.card)
+                cmdr[k] = cmdr.get(k, me.cmdr_damage.get(k, 0)) + p
+        return (dmg >= me.life or poison >= 10
+                or any(v >= 21 for v in cmdr.values()))

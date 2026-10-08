@@ -1605,6 +1605,13 @@ class InteractiveGame:
         }
 
     def state(self):
+        # la partida termina EN CUANTO queda un solo jugador (antes, matar al último
+        # rival en tu turno no terminaba hasta que tocabas "Terminar turno")
+        if self.phase != "over":
+            if any(not pl.lost and (pl.life <= 0 or pl.poison >= 10) for pl in self.players):
+                self.g.sba()
+            if len(self.g.alive()) <= 1:
+                self._finish()
         players = []
         for i, pl in enumerate(self.players):
             s = self.g._player_state(pl)

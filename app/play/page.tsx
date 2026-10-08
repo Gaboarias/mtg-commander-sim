@@ -112,6 +112,25 @@ type AbilityEvent = { turn: number; controller: string | null; card: string; kin
 type OppTurn = { turn: number; player: string; lines: string[] };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+// Motor compartido entre visitas a /play (navegación del lado del cliente): al
+// volver a la página no se baja ni se inicializa Pyodide de nuevo.
+let SHARED_WORKER: Worker | null = null;
+const SHARED_PENDING = new Map<number, { resolve: (v: string | null) => void; reject: (e: Error) => void }>();
+let SHARED_MSG_ID = 0;
+
+type AtkTarget = { index: number; name: string; life: number; pw_uid?: number };
+
+// clave estable de un objetivo de ataque (jugador o planeswalker)
+function atkKey(t?: AtkTarget): string {
+  if (!t) return "";
+  return t.pw_uid ? `pw:${t.pw_uid}` : `p:${t.index}`;
+}
+
+// objetivo elegido por clave; si ya no existe (murió/cayó), el primero de la lista
+function atkTargetFor(at: AtkTarget[], key?: string): AtkTarget | undefined {
+  return at.find((t) => atkKey(t) === key) || at[0];
+}
+
 export default function Play() {
   const reduce = useReducedMotion() ?? false;
   const [pickables, setPickables] = useState<Pickable[]>([]);
@@ -123,8 +142,7 @@ export default function Play() {
   // motor en un Web Worker: los turnos de los bots corren fuera del hilo de UI,
   // así la pantalla no se congela mientras resuelven.
   const workerRef = useRef<Worker | null>(null);
-  const pendingRef = useRef<Map<number, { resolve: (v: string | null) => void; reject: (e: Error) => void }>>(new Map());
-  const msgIdRef = useRef(0);
+  const pendingRef = useRef(SHARED_PENDING);
   const [thinking, setThinking] = useState(false);   // el motor está procesando
   const gameRef = useRef(0);       // id de la partida: descarta respuestas de una anterior
   const [choiceHidden, setChoiceHidden] = useState(false);  // modal de decisión minimizado
@@ -143,8 +161,10 @@ export default function Play() {
     if (!state?.winner) countedRef.current = false;   // reset para la próxima
   }, [state?.winner]);
   const [picked, setPicked] = useState<Set<number>>(new Set());  // atacantes elegidos
-  const [atkTarget, setAtkTarget] = useState<number | null>(null); // rival a atacar
-  const [atkAssign, setAtkAssign] = useState<Record<number, number>>({}); // atacante -> rival
+  // atacante -> objetivo, por CLAVE estable ("p:<jugador>" / "pw:<uid>"): antes se
+  // guardaba la posición en la lista y, si la lista cambiaba (muere un planeswalker,
+  // cae un rival), el ataque iba a otro objetivo
+  const [atkAssign, setAtkAssign] = useState<Record<number, string>>({});
   const [abilityToast, setAbilityToast] = useState<AbilityEvent | null>(null);
   const abilitySeen = useRef<number>(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -208,8 +228,9 @@ export default function Play() {
     return () => window.removeEventListener("keydown", onKey);
   }, [inspect, targeting, modePick]);
 
-  // terminar el worker del motor al desmontar la página
-  useEffect(() => () => { workerRef.current?.terminate(); workerRef.current = null; }, []);
+  // el worker del motor NO se termina al salir de la página: queda compartido
+  // (Pyodide + el código del motor ya cargados) para la próxima visita a /play
+  useEffect(() => () => { workerRef.current = null; }, []);
 
   // auto-scroll del relato a la última jugada (la más nueva está abajo)
   useEffect(() => {
@@ -238,6 +259,10 @@ export default function Play() {
 
   function getWorker(): Worker {
     if (workerRef.current) return workerRef.current;
+    if (SHARED_WORKER) {
+      workerRef.current = SHARED_WORKER;
+      return SHARED_WORKER;
+    }
     const w = new Worker(new URL("./engine.worker.ts", import.meta.url));
     w.onmessage = (e: MessageEvent) => {
       const { id, ok, result, error } = e.data || {};
@@ -252,13 +277,14 @@ export default function Play() {
       for (const [, p] of pendingRef.current) p.reject(new Error(e.message || "error del worker"));
       pendingRef.current.clear();
     };
+    SHARED_WORKER = w;
     workerRef.current = w;
     return w;
   }
 
   function callWorker(type: string, payload?: object): Promise<string | null> {
     const w = getWorker();
-    const id = ++msgIdRef.current;
+    const id = ++SHARED_MSG_ID;
     return new Promise<string | null>((resolve, reject) => {
       pendingRef.current.set(id, { resolve, reject });
       w.postMessage({ id, type, payload: payload || {} });
@@ -906,6 +932,14 @@ export default function Play() {
                     return (
                       <div key={hc.i} className={`handcard ${sel ? "playable" : ""}`}>
                         <div className="hc-art" title="Tocar para ver / elegir"
+                          role="button" tabIndex={0}
+                          aria-pressed={m.to_bottom > 0 ? sel : undefined}
+                          aria-label={m.to_bottom > 0 ? `${hc.name}${sel ? " (al fondo)" : ""}` : `Ver ${hc.name}`}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault(); (e.currentTarget as HTMLElement).click();
+                            }
+                          }}
                           onClick={() => {
                             if (m.to_bottom > 0) {
                               setBottom((b) => b.includes(hc.i) ? b.filter((x) => x !== hc.i)
@@ -1116,15 +1150,17 @@ export default function Play() {
                     <span className="act-label">A quién ataca cada criatura (rivales o sus planeswalkers):</span>
                     {[...picked].map((uid) => {
                       const atk = legal!.attackers.find((a) => a.uid === uid);
-                      const def = atkTarget ?? 0;   // posición en attack_targets
+                      const def = atkKey(legal!.attack_targets[0]);
+                      const cur = legal!.attack_targets.some((t) => atkKey(t) === atkAssign[uid])
+                        ? atkAssign[uid] : def;
                       return (
                         <label key={"asg" + uid} className="muted" style={{ fontSize: ".82rem", display: "flex", alignItems: "center", gap: 6 }}>
                           <Icon name="swords" size={12} />
                           <b style={{ color: "#eef1f6" }}>{atk?.name ?? "?"}</b> →{" "}
-                          <select value={atkAssign[uid] ?? def}
-                            onChange={(e) => setAtkAssign((m) => ({ ...m, [uid]: Number(e.target.value) }))}>
-                            {legal!.attack_targets.map((t, pos) => (
-                              <option key={pos} value={pos}>{t.name} {t.pw_uid ? `(${t.life}⬧)` : `(${t.life}♥)`}</option>
+                          <select value={cur}
+                            onChange={(e) => setAtkAssign((m) => ({ ...m, [uid]: e.target.value }))}>
+                            {legal!.attack_targets.map((t) => (
+                              <option key={atkKey(t)} value={atkKey(t)}>{t.name} {t.pw_uid ? `(${t.life}⬧)` : `(${t.life}♥)`}</option>
                             ))}
                           </select>
                         </label>
@@ -1134,14 +1170,13 @@ export default function Play() {
                 )}
                 {picked.size > 0 && (() => {
                   const at = legal?.attack_targets || [];
-                  const multi = at.length > 1;
-                  const defPos = atkTarget ?? 0;
                   const pickedAtk = [...picked]
                     .map((uid) => legal!.attackers.find((a) => a.uid === uid))
                     .filter((a): a is NonNullable<typeof a> => !!a);
                   const dmgByPos: Record<number, number> = {};
                   for (const a of pickedAtk) {
-                    const pos = multi ? (atkAssign[a.uid] ?? defPos) : defPos;
+                    const t = atkTargetFor(at, atkAssign[a.uid]);
+                    const pos = Math.max(0, at.indexOf(t as (typeof at)[number]));
                     dmgByPos[pos] = (dmgByPos[pos] || 0) + effDamage(a);
                   }
                   return (
@@ -1179,16 +1214,14 @@ export default function Play() {
                 <div className="act-block">
                   <button className="go" onClick={() => {
                     const at = legal?.attack_targets || [];
-                    const multi = at.length > 1;
-                    const defPos = atkTarget ?? 0;
-                    const tgt = (pos: number) => {
-                      const t = at[pos] || at[0];
+                    const tgt = (key?: string) => {
+                      const t = atkTargetFor(at, key);
                       return { target: t?.index, pw: t?.pw_uid };
                     };
-                    if (multi) {
-                      doAct("attack", { assign: [...picked].map((uid) => ({ uid, ...tgt(atkAssign[uid] ?? defPos) })) });
+                    if (at.length > 1) {
+                      doAct("attack", { assign: [...picked].map((uid) => ({ uid, ...tgt(atkAssign[uid]) })) });
                     } else {
-                      const t0 = tgt(0);
+                      const t0 = tgt();
                       doAct("attack", { uids: [...picked], target: t0.target, target_pw: t0.pw });
                     }
                     setAtkAssign({});

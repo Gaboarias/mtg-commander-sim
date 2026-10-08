@@ -630,7 +630,11 @@ class StackObject:
         self.targets = targets or []
         self.label = label
         self.chosen_modes = list(chosen_modes) if chosen_modes else None
-        # kind: "spell" | "ability" | "trigger" — para responder/copiar habilidades
+        # kind: "spell" | "ability" | "trigger" — para responder/copiar habilidades.
+        # Disparos apilados sin kind explícito (attacks:, creature_enters:, cdmg:…)
+        # son habilidades disparadas, no hechizos.
+        if kind == "spell" and label and not label.startswith(("spell:", "copy:", "cipher")):
+            kind = "trigger"
         self.kind = kind
         self.perm = perm                # permanente fuente si es una habilidad activada
         self.is_copy_ability = is_copy_ability  # la propia habilidad de copia (no copiable)

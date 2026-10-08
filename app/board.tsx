@@ -53,6 +53,14 @@ export function CardMini({
       title={perm.tapped ? `${perm.name} (girada)` : perm.name}
       onClick={onClick}
       style={onClick ? { cursor: "pointer" } : undefined}
+      // seleccionable con teclado (Tab + Enter/Espacio) para elegir atacantes
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-pressed={onClick ? !!selected : undefined}
+      aria-label={onClick ? `${perm.name}${selected ? " (elegida)" : ""}` : undefined}
+      onKeyDown={onClick ? (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
+      } : undefined}
     >
       {onInspect && (
         <button className="cm-info" title="Ver carta" aria-label="Ver detalle de la carta"

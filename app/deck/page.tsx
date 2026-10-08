@@ -326,6 +326,14 @@ export default function DeckPage() {
   const [profile, setProfileState] = useState("");
   const [savedDecks, setSavedDecks] = useState<SavedDeck[]>([]);
   const [deckName, setDeckName] = useState("");
+  // deck guardado que se está editando: "Guardar" lo ACTUALIZA (antes Cargar +
+  // Guardar creaba un deck duplicado)
+  const [editingId, setEditingId] = useState<string | null>(null);
+  // texto al que corresponde la tabla de "Revisar": si el textarea cambió después,
+  // la tabla quedó vieja y se guarda/simula el texto (antes se pisaban)
+  const [resolvedText, setResolvedText] = useState<string | null>(null);
+  // solo la ÚLTIMA resolución pedida actualiza la tabla (respuestas fuera de orden)
+  const resolveSeq = useRef(0);
   const [noStorage, setNoStorage] = useState(false);
   const [justSaved, setJustSaved] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -376,6 +384,7 @@ export default function DeckPage() {
   // plantilla al azar al abrir (solo en cliente, para no romper la hidratación)
   useEffect(() => {
     setText(TEMPLATES[Math.floor(Math.random() * TEMPLATES.length)]);
+    setEditingId(null);          // otro mazo: ya no se edita el guardado
   }, []);
 
   useEffect(() => {
@@ -420,6 +429,7 @@ export default function DeckPage() {
         const d = await r.json();
         if (d.error || !d.text) { setError("No se encontró el deck compartido."); return; }
         setText(d.text);          // el texto ya incluye la sección Commander
+        setEditingId(null);          // otro mazo: ya no se edita el guardado
         resolve(d.text);
       } catch { setError("No se pudo cargar el deck compartido."); }
     })();
@@ -488,6 +498,7 @@ export default function DeckPage() {
       const d = await r.json();
       if (d.error || !d.text) { setError(d.error || "No se pudo cargar el precon."); setPreconPick(null); return; }
       setText(d.text);
+      setEditingId(null);          // otro mazo: ya no se edita el guardado
       setResolved(null);
       resolve(d.text);
       const cmd: string | null = d.commander || null;
@@ -509,8 +520,17 @@ export default function DeckPage() {
     }
   }
 
+  function deckTextFrom(r: Resolved): string {
+    const lines = ["Commander"];
+    if (r.commander_name) lines.push(`1 ${r.commander_name}`);
+    if (r.partner_name) lines.push(`1 ${r.partner_name}`);
+    lines.push("", "Deck");
+    for (const c of r.cards) if (c.qty > 0) lines.push(`${c.qty} ${c.name}`);
+    return lines.join("\n");
+  }
+
   function currentDeckText(): string {
-    if (!resolved) return text;
+    if (!resolved || text !== resolvedText) return text;   // textarea editado después
     const lines = ["Commander"];
     if (resolved.commander_name) lines.push(`1 ${resolved.commander_name}`);
     if (resolved.partner_name) lines.push(`1 ${resolved.partner_name}`);
@@ -962,9 +982,16 @@ export default function DeckPage() {
     setColorOverride(COLOR_ORDER.filter((x) => next.includes(x)));
   }
 
-  function onSaveDeck() {
-    const name = deckName.trim() || resolved?.commander_name || "Mi deck";
-    setSavedDecks(saveDeck(name, currentDeckText(), effectiveColors()));
+  function onSaveDeck(asNew = false) {
+    const editing = asNew ? null : savedDecks.find((d) => d.id === editingId) || null;
+    const name = deckName.trim() || editing?.name || resolved?.commander_name || "Mi deck";
+    const list = saveDeck(name, currentDeckText(), effectiveColors(), editing?.id);
+    setSavedDecks(list);
+    if (!editing) {        // el recién creado pasa a ser el que se edita
+      const newest = list.reduce<SavedDeck | null>(
+        (a, d) => (!a || (d.updatedAt || 0) > (a.updatedAt || 0) ? d : a), null);
+      setEditingId(newest?.id ?? null);
+    }
     setDeckName("");
     setJustSaved(name);
     setTimeout(() => setJustSaved(null), 4000);
@@ -973,6 +1000,8 @@ export default function DeckPage() {
     setText(d.text);
     setResolved(null);
     setColorOverride(null);
+    setEditingId(d.id);
+    setDeckName(d.name);
   }
   function onDeleteSaved(id: string) {
     const d = savedDecks.find((x) => x.id === id);
@@ -1000,6 +1029,7 @@ export default function DeckPage() {
       }
       if (d.error) throw new Error(d.error);
       setText(d.text);
+      setEditingId(null);          // otro mazo: ya no se edita el guardado
       setResolved(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1108,6 +1138,7 @@ export default function DeckPage() {
 
   async function resolve(listText?: string) {
     const list = listText ?? text;
+    const seq = ++resolveSeq.current;
     setBusy(true);
     setError(null);
     try {
@@ -1123,24 +1154,33 @@ export default function DeckPage() {
       } catch {
         throw new Error(`HTTP ${r.status} — respuesta no-JSON: ${raw.slice(0, 240)}`);
       }
+      if (seq !== resolveSeq.current) return;       // llegó tarde: hay una más nueva
       if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
       setResolved(d as unknown as Resolved);
+      setResolvedText(list);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (seq === resolveSeq.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (seq === resolveSeq.current) setBusy(false);
     }
   }
 
+  // un cambio en la tabla actualiza también el texto (quedan sincronizados)
+  function applyTable(next: Resolved) {
+    const t = deckTextFrom(next);
+    setResolved(next);
+    setText(t);
+    setResolvedText(t);
+  }
   function setQty(i: number, q: number) {
     if (!resolved) return;
     const cards = resolved.cards.slice();
     cards[i] = { ...cards[i], qty: Math.max(0, q) };
-    setResolved({ ...resolved, cards });
+    applyTable({ ...resolved, cards });
   }
   function remove(i: number) {
     if (!resolved) return;
-    setResolved({ ...resolved, cards: resolved.cards.filter((_, j) => j !== i) });
+    applyTable({ ...resolved, cards: resolved.cards.filter((_, j) => j !== i) });
   }
 
   const totalQty = resolved ? resolved.cards.reduce((s, c) => s + c.qty, 0) : 0;
@@ -1398,6 +1438,12 @@ export default function DeckPage() {
       {resolved && (
         <div className="card">
           <h2><span className="step">2</span> Revisá y editá</h2>
+          {resolvedText !== null && text !== resolvedText && (
+            <p className="muted" style={{ fontSize: ".82rem" }}>
+              <Icon name="warning" size={13} /> Cambiaste la lista de arriba: tocá «Resolver» para
+              actualizar esta tabla. Se guarda y se simula el texto nuevo.
+            </p>
+          )}
           {resolved.commander ? (
             <p>
               <strong>{resolved.partner ? "Comandantes:" : "Comandante:"}</strong> {resolved.commander.name}{" "}
@@ -1887,7 +1933,12 @@ export default function DeckPage() {
                 padding: "8px 10px", width: 220,
               }}
             />
-            <button className="go" onClick={onSaveDeck}>Guardar deck</button>
+            <button className="go" onClick={() => onSaveDeck()}>
+              {editingId && savedDecks.some((d) => d.id === editingId) ? "Guardar cambios" : "Guardar deck"}
+            </button>
+            {editingId && savedDecks.some((d) => d.id === editingId) && (
+              <button className="ghost" onClick={() => onSaveDeck(true)}>Guardar como nuevo</button>
+            )}
             {justSaved && (
               <span style={{ color: "var(--g)", display: "inline-flex", alignItems: "center", gap: 5 }}>
                 <Icon name="check" size={14} /> «{justSaved}» guardado — ya lo podés elegir en la{" "}

@@ -8559,3 +8559,52 @@ def test_each_players_upkeep_trigger_fires_on_every_upkeep():
     g.active_index = 1
     g.begin_turn(op)                          # mantenimiento del RIVAL
     assert me.life == life0 + 1
+
+
+# -- restos de la revisión: fin de partida, bloqueos letales, Stifle --------- #
+def test_play_ends_as_soon_as_last_opponent_dies():
+    ig, me, op = _ig_tricky_vs_kang()
+    op.life = 0
+    st = ig.state()
+    assert st["phase"] == "over" and st["winner"] == me.name
+
+
+def test_ai_chump_blocks_many_small_attackers_when_lethal():
+    import policy
+    g, me, op = _duel2()
+    op.policy = policy.Policy("intermedio")
+    op.life = 6
+    atk = []
+    for i in range(4):
+        a = g.move_to_battlefield(creature(f"A{i}", "1R", 2, 2), me)
+        a.summoning_sick = False
+        atk.append(a)
+    for i in range(3):
+        b = g.move_to_battlefield(creature(f"W{i}", "1W", 0, 1), op)
+        b.summoning_sick = False
+    g._resolve_combat(me, [(a, op) for a in atk])
+    assert not op.lost and op.life > 0, op.life
+
+
+def test_ai_stifles_opponent_removal_ability():
+    import cardsdb, policy
+    g, me, op = _duel2()
+    op.policy = policy.Policy("intermedio")
+    stifle = cardsdb.build_card_from_data({
+        "name": "Stifle", "type_line": "Instant", "mana_cost": "{U}",
+        "color_identity": ["U"], "oracle_text": "Counter target activated or triggered ability."})
+    assert stifle.target_spec == "stack_ability"
+    op.hand = [stifle]
+    g.move_to_battlefield(land("Island", [U], basic=True), op)
+    mine = g.move_to_battlefield(creature("Bear", "1G", 2, 2), op)
+    assassin = cardsdb.build_card_from_data({
+        "name": "Royal Assassin", "type_line": "Creature — Human Assassin",
+        "mana_cost": "{1}{B}{B}", "power": "1", "toughness": "1", "color_identity": ["B"],
+        "oracle_text": "{T}: Destroy target tapped creature."})
+    ra = g.move_to_battlefield(assassin, me)
+    ra.summoning_sick = False
+    mine.tapped = True
+    assert g.activate_ability(ra, 0, targets=[mine])
+    g.resolve_stack()
+    assert mine in op.battlefield, "Stifle contrarresta la habilidad que apuntaba a su criatura"
+    assert stifle in op.graveyard
