@@ -7,6 +7,7 @@ import { listDecks, bumpGamesPlayed, type SavedDeck } from "../localDecks";
 import { download, fileStamp } from "../download";
 import { Icon } from "../icons";
 import { Help } from "../Help";
+import { loadGlossary, keywordsIn, supportLabel, type GlossaryEntry } from "../reglas/Glossary";
 
 // etiquetas cortas de keywords (mismo criterio que el tablero)
 const KW_SHORT: Record<string, string> = {
@@ -171,6 +172,11 @@ export default function Play() {
   const [art, setArt] = useState<Record<string, string>>({});
   const [info, setInfo] = useState<Record<string, CardInfo>>({});
   const [inspect, setInspect] = useState<Inspect | null>(null);
+  // glosario de habilidades: se baja la primera vez que se inspecciona una carta
+  const [gloss, setGloss] = useState<GlossaryEntry[] | null>(null);
+  useEffect(() => {
+    if (inspect && !gloss) loadGlossary().then(setGloss);
+  }, [inspect, gloss]);
   const [zoneView, setZoneView] = useState<{ title: string; names: string[] } | null>(null);
   const infoReq = useRef<Set<string>>(new Set());  // nombres ya pedidos
   const [assign, setAssign] = useState<Record<number, number>>({});  // bloqueador -> atacante
@@ -1528,6 +1534,27 @@ export default function Play() {
                 Carta de ejemplo (casera): se muestran sus habilidades del motor.
               </p>
             )}
+            {(() => {
+              if (!gloss) return null;
+              const found = keywordsIn(gloss,
+                [oracle || "", ...(inspect.abilities || [])].join("\n"),
+                inspect.keywords || []).slice(0, 8);
+              if (!found.length) return null;
+              return (
+                <div className="kw-help">
+                  {found.map((e) => {
+                    const sup = supportLabel(e.s);
+                    return (
+                      <div key={e.n}>
+                        <b>{e.n}</b>: {e.d}
+                        {e.s !== null && e.s < 0.75 && <span className={`sup ${sup.cls}`} style={{ marginLeft: 6, fontSize: ".7rem" }}>{sup.txt}</span>}
+                      </div>
+                    );
+                  })}
+                  <a href="/reglas#glosario" target="_blank" rel="noreferrer" className="muted" style={{ fontSize: ".72rem" }}>Ver glosario completo</a>
+                </div>
+              );
+            })()}
           </div>
         </div>
         );

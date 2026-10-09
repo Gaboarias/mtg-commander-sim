@@ -16,6 +16,7 @@ _MODULES = [
     "decklist.py", "mdparse.py", "policy.py", "decks.py", "run.py",
     "interactive.py",
     "data/preset_cards.json",      # datos reales de las cartas de los presets
+    "data/keyword_reminders.json", # recordatorios de habilidades sin implementación
 ]
 
 

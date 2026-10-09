@@ -1534,3 +1534,31 @@ def test_db_free_spell_with_commander_on_battlefield():
     assert g.cast(me, rollick, targets=[target])
     run(g)
     assert not on_bf(ops[0], target)
+
+
+# ── consulta de reglas: recordatorio de habilidades sin implementación propia ──
+
+def _rem_card(oracle, kws, tl="Creature — Spirit", no_rem=False):
+    d = {"name": "Rem Probe", "type_line": tl, "mana_cost": "{3}", "power": "2",
+         "toughness": "2", "oracle_text": oracle, "keywords": kws}
+    if no_rem:
+        d["_no_reminder"] = True
+    return cardsdb._card_sig(cardsdb.build_card_from_data(d))
+
+
+def test_reminder_fallback_reads_unknown_keyword():
+    txt = ("Soulshift 3 (When this creature dies, you may return target Spirit card "
+           "with mana value 3 or less from your graveyard to your hand.)")
+    assert _rem_card(txt, ["Soulshift"]) != _rem_card(txt, ["Soulshift"], no_rem=True)
+
+
+def test_reminder_fallback_skips_native_keywords():
+    txt = "Equip {2} ({2}: Attach to target creature you control. Equip only as a sorcery.)"
+    tl = "Artifact — Equipment"
+    assert _rem_card(txt, ["Equip"], tl) == _rem_card(txt, ["Equip"], tl, no_rem=True)
+    assert _rem_card("Flying", ["Flying"]) == _rem_card("Flying", ["Flying"], no_rem=True)
+
+
+def test_reminder_fallback_uses_db_reminder_when_card_omits_it():
+    rem = cardsdb.keyword_reminders()
+    assert "Prowess" in rem and "noncreature spell" in rem["Prowess"]

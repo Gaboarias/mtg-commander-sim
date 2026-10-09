@@ -36,8 +36,11 @@ _STRUCTURAL = re.compile(
     r"|level \d|\d+/\d+$|\(|flavor)", re.I)
 
 
-def load_db():
-    with gzip.open(DB, "rt", encoding="utf-8") as f:
+FULL = os.path.join(ROOT, "data", "cards_full.json.gz")
+
+
+def load_db(full=False):
+    with gzip.open(FULL if full else DB, "rt", encoding="utf-8") as f:
         return json.load(f)["cards"]
 
 
@@ -172,8 +175,9 @@ def write_report(res, path=REPORT, top=150):
 
 
 def main(argv):
-    res = audit(load_db())
-    write_report(res)
+    full = "--full" in argv
+    res = audit(load_db(full))
+    write_report(res, path=REPORT.replace(".md", "_full.md") if full else REPORT)
     n = len(res["vanilla"]) + len(res["partial"]) + len(res["full"])
     print(f"cartas={n} completas={len(res['full'])} parciales={len(res['partial'])} "
           f"vainilla={len(res['vanilla'])} lineas_sin_efecto={res['lines_bad']}/{res['lines_total']}")

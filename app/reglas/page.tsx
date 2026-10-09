@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Icon, type IconName } from "../icons";
+import Glossary from "./Glossary";
 
 export const metadata = {
   title: "Cómo jugar Commander — Reglas para principiantes",
@@ -53,7 +54,8 @@ export default function ReglasPage() {
             ["zonas", "Las zonas"], ["turno", "El turno"],
             ["mana", "El maná"], ["tipos", "Tipos de carta"],
             ["combate", "El combate"], ["mulligan", "El mulligan"],
-            ["keywords", "Palabras clave"], ["ganar", "Cómo se gana"],
+            ["keywords", "Palabras clave"], ["glosario", "Glosario completo"],
+            ["ganar", "Cómo se gana"],
           ].map(([id, label]) => (
             <a key={id} href={`#${id}`} className="chip" style={{ textDecoration: "none" }}>{label}</a>
           ))}
@@ -179,7 +181,7 @@ export default function ReglasPage() {
         </ol>
         <p className="muted" style={{ fontSize: ".85rem" }}>
           Palabras como <b>volar</b>, <b>arrollar</b> o <b>dañar primero</b> cambian cómo
-          funciona el combate — mirá el glosario más abajo.
+          funciona el combate — mirá el <a href="#glosario">glosario completo</a> más abajo.
         </p>
       </Section>
 
@@ -204,6 +206,15 @@ export default function ReglasPage() {
             </div>
           ))}
         </div>
+      </Section>
+
+      <Section id="glosario" icon="book" title="Glosario: todas las habilidades">
+        <p>
+          Todas las habilidades, acciones y palabras clave que aparecen en las cartas de
+          Magic, explicadas en castellano. Cada una muestra la regla oficial y si el
+          simulador ya la aplica en las partidas.
+        </p>
+        <Glossary />
       </Section>
 
       <Section id="ganar" icon="trophy" title="Cómo se gana (resumen)">

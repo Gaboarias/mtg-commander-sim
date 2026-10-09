@@ -884,3 +884,18 @@ h3 svg { color: currentColor; }
 .zone-name { font-size: .72rem; color: var(--muted); line-height: 1.15;
   overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
   -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+/* glosario de habilidades (/reglas) */
+.gloss { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.gloss-item { display: flex; flex-direction: column; gap: 6px; }
+.gloss-head { all: unset; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.gloss-head:focus-visible { outline: 2px solid var(--accent, #d8b23a); outline-offset: 2px; }
+.gloss-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: .75rem; }
+.gloss-rule { border-top: 1px solid var(--border, #2a2f3a); padding-top: 6px; font-size: .78rem; }
+.gloss-rule p { margin: 4px 0; }
+.sup { padding: 1px 8px; border-radius: 999px; border: 1px solid; }
+.sup-ok { color: #7bc67b; border-color: #3f6b3f; }
+.sup-mid { color: #d8b23a; border-color: #7a6420; }
+.sup-no { color: #d07a7a; border-color: #6b3f3f; }
+.sup-na { color: #8a8f99; border-color: #3a3f4a; }
+.kw-help { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,.04); border: 1px solid var(--border, #2a2f3a); font-size: .8rem; display: flex; flex-direction: column; gap: 5px; text-align: left; }

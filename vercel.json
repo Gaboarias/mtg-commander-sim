@@ -3,7 +3,7 @@
   "framework": "nextjs",
   "functions": {
     "api/*.py": {
-      "includeFiles": "{*.py,presets/**,data/preset_cards.json,data/cards_db.json.gz}",
+      "includeFiles": "{*.py,presets/**,data/preset_cards.json,data/cards_db.json.gz,data/cards_full.json.gz,data/keyword_reminders.json}",
       "memory": 1024,
       "maxDuration": 60
     }

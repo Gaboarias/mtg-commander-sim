@@ -11,6 +11,8 @@ es puro y testeable sin red.
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 
 from engine import Card, Cost, parse_cost, W, U, B, R, G, C, KEYWORDS
@@ -5787,8 +5789,113 @@ def build_card_from_data(data: dict) -> Card:
         _build_depth -= 1
 
 
+# ── Consulta de reglas: habilidades sin implementación propia ───────────────
+# Si el motor no entiende una habilidad clave (Riot, Prowess, Exalted…), lee su
+# TEXTO RECORDATORIO como una habilidad más: el de la propia carta o, si la carta
+# no lo imprime, el más común en la base completa (data/keyword_reminders.json).
+
+_KW_REMINDERS = None
+_KW_NATIVE = {}
+
+
+def keyword_reminders() -> dict:
+    global _KW_REMINDERS
+    if _KW_REMINDERS is None:
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data",
+                                   "keyword_reminders.json"), encoding="utf-8") as f:
+                _KW_REMINDERS = json.load(f)
+        except (OSError, ValueError):
+            _KW_REMINDERS = {}
+    return _KW_REMINDERS
+
+
+def _card_sig(card):
+    out = {}
+    for k, v in vars(card).items():
+        if k == "name":
+            continue
+        if callable(v):
+            out[k] = "fn"
+        elif isinstance(v, dict):
+            out[k] = tuple(sorted(map(str, v.keys())))
+        elif isinstance(v, (set, frozenset, list, tuple)):
+            out[k] = tuple(sorted(map(str, v)))
+        else:
+            out[k] = repr(v)
+    return out
+
+
+# habilidades que el motor arma por el TIPO de la carta (Equipo, Aura, Vehículo):
+# la sonda de una línea sola no las ve porque el tipo ya las trae
+_KW_BY_TYPE = {"equip", "enchant", "crew", "living weapon"}
+
+
+def _kw_native(part, kw, type_line="Creature — Human"):
+    """¿El motor ya entiende esta habilidad clave tal como está escrita
+    ('Equip {2}', 'Annihilator 2', 'Prowess') sin su recordatorio?"""
+    if kw.lower() in _KW_BY_TYPE:
+        return True
+    tl = (type_line or "Creature").split("//")[0].strip()
+    key = (re.sub(r"\d+", "N", part.lower()), kw, tl)
+    if key not in _KW_NATIVE:
+        _KW_NATIVE[key] = True  # evita recursión mientras se prueba
+        base = {"name": "Kw Probe", "type_line": tl, "mana_cost": "{2}",
+                "power": "2", "toughness": "2", "_no_reminder": True}
+        try:
+            a = _card_sig(build_card_from_data(dict(base, oracle_text="", keywords=[])))
+            b = _card_sig(build_card_from_data(dict(base, oracle_text=part, keywords=[kw])))
+            _KW_NATIVE[key] = a != b
+        except Exception:  # noqa: BLE001
+            _KW_NATIVE[key] = True
+    return _KW_NATIVE[key]
+
+
+_KW_PARAM = re.compile(r"^(.+?)(?:\s+(?:\d+|x|\{.*)|—.*)?$", re.I)
+
+
+def _expand_reminders(text, keywords, name, type_line="Creature"):
+    """Agrega como líneas propias los recordatorios de habilidades clave que el
+    motor no implementa. No toca el resto del texto."""
+    if not text or not keywords:
+        return text
+    kwmap = {k.lower(): k for k in keywords}
+    extra = []
+    for ln in text.split("\n"):
+        head, _, rest = ln.partition("(")
+        parts = [x.strip() for x in re.split(r",|;", head) if x.strip()]
+        if not parts:
+            continue
+        found = []
+        for part in parts:
+            m = _KW_PARAM.match(part)
+            kw = kwmap.get((m.group(1) if m else part).strip().lower())
+            if not kw:
+                found = []
+                break
+            found.append((part, kw))
+        own = rest.rsplit(")", 1)[0].strip() if rest else ""
+        for part, kw in found:
+            if _kw_native(part, kw, type_line):
+                continue
+            rem = own if len(found) == 1 and own else ""
+            if not rem:
+                if re.search(r"\d|\{|—", part):
+                    continue  # parámetro propio sin recordatorio: no adivinar
+                rem = keyword_reminders().get(kw, "")
+            if rem:
+                extra.append(rem.replace("~", name))
+    return text + ("\n" + "\n".join(extra) if extra else "")
+
+
 def _build_card_from_data_impl(data: dict) -> Card:
     data = _prefer_front_face(data)
+    if not data.get("_no_reminder"):
+        data = dict(data)
+        data["oracle_text"] = _expand_reminders(data.get("oracle_text", ""),
+                                                data.get("keywords") or [],
+                                                data.get("name", "?"),
+                                                data.get("type_line") or "Creature")
     # sin texto recordatorio: el "(It's an artifact with '{T}, Sacrifice…: Add one
     # mana…')" de Treasure/Food/etc. se parseaba como efecto propio de la carta
     data = dict(data)
@@ -7176,11 +7283,45 @@ def local_db() -> dict:
     return _LOCAL_DB
 
 
+_FULL_DB = None
+
+
+def full_db() -> dict:
+    """Base COMPLETA (data/cards_full.json.gz, ~31k cartas de Scryfall). Se carga
+    solo si una carta no está en la base de precons. Vacía si no está el archivo."""
+    global _FULL_DB
+    if _FULL_DB is None:
+        import gzip
+        import json
+        import os
+        _FULL_DB = {}
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data",
+                            "cards_full.json.gz")
+        try:
+            with gzip.open(path, "rt", encoding="utf-8") as f:
+                for nm, row in json.load(f).get("cards", {}).items():
+                    _FULL_DB[_norm(nm)] = row
+                    for face in row.get("card_faces") or []:
+                        if face.get("name"):
+                            _FULL_DB.setdefault(_norm(face["name"]), row)
+        except (OSError, ValueError):
+            pass
+    return _FULL_DB
+
+
 def local_card(name: str):
-    """Datos reales de la carta desde la base local, o None."""
+    """Datos reales de la carta desde la base local (precons) o la completa, o None."""
     if not name:
         return None
-    return local_db().get(_norm(name)) or local_db().get(_norm(name.split(" // ")[0]))
+    for n in (name, name.split(" // ")[0]):
+        row = local_db().get(_norm(n))
+        if row is not None:
+            return row
+    for n in (name, name.split(" // ")[0]):
+        row = full_db().get(_norm(n))
+        if row is not None:
+            return row
+    return None
 
 
 def _basic_land(name: str):
