@@ -1,0 +1,30 @@
+name: Base local de cartas
+
+# Baja de Scryfall el oráculo real de todas las cartas de los precons y presets
+# (scripts/snapshot_card_db.py -> data/cards_db.json.gz) y lo empuja a la rama
+# data/card-db. Solo manual.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Bajar la base de cartas
+        run: python3 scripts/snapshot_card_db.py
+      - name: Empujar a data/card-db
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B data/card-db
+          git add -f data/cards_db.json.gz
+          git commit -m "Base local de cartas (Scryfall)" || true
+          git push --force origin data/card-db
