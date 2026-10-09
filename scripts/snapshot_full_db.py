@@ -118,7 +118,7 @@ def rules():
                    "kind": "action" if m.group(1) == "701" else "ability", "text": []}
             out[cur["name"].lower()] = cur
             continue
-        m2 = re.match(r"^(70[12])\.(\d+)[a-z]+\. (.+)$", ln)
+        m2 = re.match(r"^(70[12])\.(\d+)[a-z]+\.? (.+)$", ln)
         if m2 and cur is not None and f"{m2.group(1)}.{m2.group(2)}" == cur["rule"]:
             cur["text"].append(m2.group(3).strip())
             continue
