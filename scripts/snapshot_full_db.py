@@ -46,6 +46,13 @@ def cards():
     if ent is None:
         raise RuntimeError(f"bulk sin oracle_cards: {[b.get('type') for b in entries]}")
     uri = ent.get("download_uri")
+    jsonl = ent.get("jsonl_download_uri")
+    if not uri and jsonl:
+        raw = _get(jsonl, raw=True)
+        if raw[:2] == b"\x1f\x8b":
+            raw = gzip.decompress(raw)
+        data = [json.loads(ln) for ln in raw.decode("utf-8").splitlines() if ln.strip()]
+        return _write_cards(data)
     if not uri:
         print("claves del bulk:", sorted(ent.keys()))
         detail = _get(ent["uri"]) if ent.get("uri") else {}
@@ -58,6 +65,10 @@ def cards():
     if raw[:2] == b"\x1f\x8b":                  # vino comprimido
         raw = gzip.decompress(raw)
     data = json.loads(raw.decode("utf-8"))
+    return _write_cards(data)
+
+
+def _write_cards(data):
     out = {}
     for c in data:
         if c.get("layout") in SKIP_LAYOUTS or "paper" not in (c.get("games") or []):
