@@ -32,10 +32,14 @@ def creature(name, cost, power, toughness, kw=(), legendary=False,
 def land(name, colors, tapped=False, basic=False):
     """`colors` es una lista de opciones: [R, W] produce 1 mana rojo O blanco."""
     opts = {c: 1 for c in colors}
+    # las básicas tienen su tipo de tierra (Mountain, Island…): lo miran las
+    # checklands ("unless you control a Mountain"), landwalk, etc.
+    sub = {name} if basic and name in ("Plains", "Island", "Swamp", "Mountain", "Forest") else set()
     return Card(
         name=name,
         types={"land"},
         cost=None,
+        subtypes=sub,
         supertypes={"basic"} if basic else set(),
         enters_tapped=tapped,
         color_id=set(colors) - {C},
@@ -75,6 +79,19 @@ def planeswalker(name, cost, loyalty, abilities, color_id, tags=("engine",)):
     )
 
 
+MAX_PERMANENTS = 300     # tope de seguridad: un bucle de fichas no cuelga la partida
+
+
+def _token_cap(game, player) -> bool:
+    if len(player.battlefield) < MAX_PERMANENTS:
+        return False
+    if not getattr(game, "_token_cap_warned", False):
+        game._token_cap_warned = True
+        game.log(f"aviso: {player.name} llegó a {MAX_PERMANENTS} permanentes; "
+                 "no se crean más fichas (posible bucle)")
+    return True
+
+
 def make_token(game, player, name, power, toughness, kw=(), subtypes=(), counters=0):
     tok = Card(
         name=name,
@@ -89,6 +106,8 @@ def make_token(game, player, name, power, toughness, kw=(), subtypes=(), counter
     last = None
     made = 0
     for _ in range(game.token_multiplier(player)):     # dobladores de fichas
+        if _token_cap(game, player):
+            break
         last = game.move_to_battlefield(_copy.deepcopy(tok), player, is_token=True)
         if last is not None:
             made += 1
@@ -110,6 +129,8 @@ def make_copy_token(game, player, src_card):
     # una copia no es la carta comandante ni conserva historial de zona
     last = None
     for _ in range(game.token_multiplier(player)):     # dobladores de fichas
+        if _token_cap(game, player):
+            break
         last = game.move_to_battlefield(_copy.deepcopy(src_card), player, is_token=True)
     return last
 
@@ -196,6 +217,8 @@ def remove_targets(mode="destroy"):
     (lista `targets` de Permanent). Usado por remociones importadas dirigidas."""
     def eff(game, ctrl, targets):
         for perm in list(targets or []):
+            if not hasattr(perm, "controller") or not hasattr(perm, "card"):
+                continue                       # un jugador/objeto de pila no es permanente
             if perm not in perm.controller.battlefield:
                 continue
             if not game.can_target(ctrl, perm):

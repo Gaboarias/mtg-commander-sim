@@ -243,10 +243,21 @@ class Permanent:
         self.temp_subtypes = set()       # subtipos "hasta el fin del turno" (tierras animadas)
         self.goaded = False              # goad: debe atacar en su próximo turno
         self.must_attack = False
-        self.cant_block = False
+        self._cant_block = False
         self.game = None                 # backref, lo pone move_to_battlefield
         self.activated_this_turn = False  # planeswalker: una activacion por turno
         self.enchanting = None           # si es un aura: el permanente al que anexó
+
+    @property
+    def cant_block(self) -> bool:
+        """No puede bloquear: marca propia, 'this creature can't block' de la carta
+        o 'can't block this turn' (keyword temporal)."""
+        return (self._cant_block or getattr(self.card, "cant_block_static", False)
+                or "cant_block" in self.temp_keywords)
+
+    @cant_block.setter
+    def cant_block(self, v):
+        self._cant_block = bool(v)
 
     def _mutation(self):
         """Auras de 'cambio de características' anexadas a este permanente
@@ -1172,13 +1183,15 @@ class Game:
         observa) y el SUJETO del evento, para efectos que dicen '~' / 'that
         creature' / 'equipped creature' sin recibirlos como argumento."""
         prev = (getattr(self, "_trigger_source", None),
-                getattr(self, "_trigger_subject", None))
+                getattr(self, "_trigger_subject", None),
+                getattr(self, "_trigger_kw", None))
         self._trigger_source = perm
         self._trigger_subject = subject if subject is not None else kw.get("subject")
+        self._trigger_kw = kw
         try:
             return cb(self, perm, **kw)
         finally:
-            self._trigger_source, self._trigger_subject = prev
+            self._trigger_source, self._trigger_subject, self._trigger_kw = prev
 
     def move_to_battlefield(self, card: Card, player: "Player",
                             is_token: bool = False) -> Permanent:
@@ -1195,6 +1208,14 @@ class Game:
         perm.game = self
         if card.enters_tapped:
             perm.tapped = True
+        # "entra girada A MENOS QUE …" (checklands, fastlands, shocks…): condición
+        # evaluada al entrar (antes de sumarse al campo: 'other lands')
+        cond = getattr(card, "etb_untapped_if", None)
+        if cond is not None:
+            try:
+                perm.tapped = not cond(self, player)
+            except Exception:  # noqa: BLE001
+                perm.tapped = True
         # planeswalker: entra con su lealtad inicial
         if "planeswalker" in card.types and card.loyalty:
             perm.counters["loyalty"] = card.loyalty
@@ -1428,6 +1449,10 @@ class Game:
                 target.cmdr_damage[key] = target.cmdr_damage.get(key, 0) + amount
             # Cipher: al pegar daño de combate a un jugador, lanzar una copia GRATIS
             # de cada hechizo cifrado en esta criatura.
+            # monarca: el daño de combate le roba la corona
+            if (combat and src_perm and getattr(self, "monarch", None) is target
+                    and source.controller is not target):
+                self.set_monarch(source.controller)
             if combat and src_perm and getattr(source, "_ciphered", None):
                 for ceff in list(source._ciphered):
                     self.stack.append(StackObject(
@@ -1519,6 +1544,13 @@ class Game:
             for p in self.players:
                 if not p.lost and self._return_commander(p):
                     changed = True
+            # el monarca que deja el juego: la corona pasa al jugador activo
+            mon = getattr(self, "monarch", None)
+            if mon is not None and mon.lost:
+                ap = self.players[self.active_index]
+                self.monarch = None
+                if not ap.lost:
+                    self.set_monarch(ap)
             # un jugador ELIMINADO deja el juego: todos sus objetos se van (regla
             # 800.4a). Así ninguna habilidad puede apuntar a sus cartas (campo,
             # cementerio, exilio) ni siguen activos sus efectos estáticos/disparos.
@@ -1830,13 +1862,14 @@ class Game:
             elif {"instant", "sorcery"} & card.types:
                 if card.modes:
                     picks = chosen_modes if chosen_modes else [0]
+                    per_mode = g.split_mode_targets(card.modes, picks, targets or [])
                     for mi in picks:
                         if 0 <= mi < len(card.modes):
                             m = card.modes[mi]
                             g.note_ability(card, f"modo «{m.get('label', '')}»", controller=player)
                             eff = m.get("effect")
                             if eff:
-                                eff(g, player, targets or [])
+                                eff(g, player, per_mode.get(mi, []))
                 elif card.on_cast_resolve:
                     g.note_ability(card, "resuelve su efecto", controller=player)
                     reps = 1 + storm_copies      # storm: repetir el efecto por copia
@@ -2100,8 +2133,13 @@ class Game:
         def _resolve(g, _eff=eff, _c=ctrl, _p=perm, _tg=_t, _ab=ab, _is_copy=is_copy, _x=xv):
             if _eff:
                 g._ability_x = _x            # valor de X para habilidades {X}
-                _eff(g, _c, _p, _tg)
-                g._ability_x = 0
+                prev = getattr(g, "_trigger_source", None)
+                g._trigger_source = _p       # '~' / 'this creature' = la fuente
+                try:
+                    _eff(g, _c, _p, _tg)
+                finally:
+                    g._trigger_source = prev
+                    g._ability_x = 0
             # recordar esta habilidad para "copiá la última habilidad" (Strionic).
             # La propia habilidad de copia NO se registra (evita copiarse a sí misma).
             if not _is_copy:
@@ -2118,6 +2156,45 @@ class Game:
             label=f"ability:{perm.name}:{ab.get('label', '')}", kind="ability",
             perm=perm, is_copy_ability=is_copy))
         return self._after_stack_push(ctrl, self.stack[-1])
+
+    _SPEC_OK = {
+        "opp_creature": lambda o: isinstance(o, Permanent) and o.is_creature(),
+        "own_creature": lambda o: isinstance(o, Permanent) and o.is_creature(),
+        "any_creature": lambda o: isinstance(o, Permanent) and o.is_creature(),
+        "opp_player": lambda o: isinstance(o, Player),
+        "any_artifact": lambda o: isinstance(o, Permanent) and "artifact" in o.card.types,
+        "any_enchantment": lambda o: isinstance(o, Permanent) and "enchantment" in o.card.types,
+        "any_art_ench": lambda o: isinstance(o, Permanent)
+        and bool({"artifact", "enchantment"} & o.card.types),
+        "any_planeswalker": lambda o: isinstance(o, Permanent)
+        and "planeswalker" in o.card.types,
+        "any_nonland": lambda o: isinstance(o, Permanent) and not o.card.is_land(),
+        "any_perm": lambda o: isinstance(o, Permanent),
+        "own_perm": lambda o: isinstance(o, Permanent),
+        "stack_spell": lambda o: isinstance(o, StackObject),
+        "stack_ability": lambda o: isinstance(o, StackObject),
+    }
+
+    def split_mode_targets(self, modes, picks, targets) -> dict:
+        """Reparte los objetivos de un hechizo MODAL entre los modos elegidos según
+        el tipo que pide cada uno (antes cada modo recibía TODOS: 'destruí un
+        artefacto' destruía también la criatura y apuntaba al jugador)."""
+        rest = list(targets or [])
+        out = {}
+        for mi in picks:
+            if not (0 <= mi < len(modes)):
+                continue
+            spec = modes[mi].get("target_spec")
+            if not spec:
+                out[mi] = []
+                continue
+            ok = self._SPEC_OK.get(spec, lambda o: True)
+            n = max(1, modes[mi].get("target_count", 1) or 1)
+            mine = [o for o in rest if ok(o)][:n]
+            for o in mine:
+                rest.remove(o)
+            out[mi] = mine
+        return out
 
     def copy_spell_on_stack(self, obj, controller=None):
         """Pone en la pila una COPIA del hechizo `obj` (StackObject). La copia se
@@ -2143,11 +2220,12 @@ class Game:
             if getattr(_src, "modes", None):
                 # la copia reproduce los MISMOS modos que eligió el original
                 idxs = _picks if _picks else [0]
+                per_mode = g.split_mode_targets(_src.modes, idxs, _tgts)
                 for mi in idxs:
                     if 0 <= mi < len(_src.modes):
                         e = _src.modes[mi].get("effect")
                         if e:
-                            e(g, _ctrl, _tgts)
+                            e(g, _ctrl, per_mode.get(mi, []))
             elif _src.on_cast_resolve:
                 _src.on_cast_resolve(g, _ctrl, _tgts)
             else:
@@ -2817,6 +2895,8 @@ class Game:
                 continue
             if blocker.tapped or not blocker.is_creature() or blocker.attacking:
                 continue
+            if blocker.cant_block:              # "can't block" (propia o este turno)
+                continue
             # evasión: un atacante con volar solo puede bloquearse con volar o alcance
             if attacker.has("flying") and not (blocker.has("flying") or blocker.has("reach")):
                 continue
@@ -3024,8 +3104,20 @@ class Game:
             self.resolve_stack()
         self.sba()
 
+    def set_monarch(self, player):
+        """Monarca (regla de Commander Legends): roba una carta extra al final de su
+        turno; quien le hace daño de combate pasa a ser el monarca."""
+        if player is None or player.lost or getattr(self, "monarch", None) is player:
+            return
+        self.monarch = player
+        self.log(f"{player.name} es ahora el monarca")
+        self.emit("become_monarch", player=player)
+
     def end_turn(self, p: "Player"):
         """END STEP + CLEANUP + SBA. Compartido por run_turn y el turno manual."""
+        if getattr(self, "monarch", None) is p and not p.lost:
+            p.draw(1, self)                     # el monarca roba al final de su turno
+            self.log(f"{p.name} roba una carta (monarca)")
         self.emit("end_step", player=p)
         self.emit("each_end_step", active=p)
         self.resolve_stack()

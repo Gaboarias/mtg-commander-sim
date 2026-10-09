@@ -5,7 +5,6 @@ Angel of Vitality
 Anger
 Arcane Signet
 Archfiend of Depravity
-Ash Barrens Marauder
 Ash Zealot
 Attended Knight
 Augusta, Order Returned
@@ -37,7 +36,6 @@ Branching Evolution
 Breeding Pool
 Cackling Fiend
 Carrion Feeder
-Cave Scavenger
 Chandra's Phoenix
 Charging Monstrosaur
 Chasm Skulker
@@ -205,7 +203,6 @@ Spire Owl
 Spirit Mascot
 Sun Titan
 Sundown Pass
-Sunlance Cleric
 Swords to Plowshares
 Sylvan Advocate
 Tablet of Discovery

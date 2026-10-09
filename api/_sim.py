@@ -106,9 +106,14 @@ def coverage_report():
 # Import / edicion de decks (Scryfall en Vercel)
 # --------------------------------------------------------------------------- #
 
-def _make_fetch(names):
+def _make_fetch(names, local_first=False):
+    """fetch(nombre)->datos de Scryfall. Con local_first, los nombres que ya están en
+    la base local (data/cards_db.json.gz) no se piden a Scryfall (cardsdb.resolve
+    los toma de ahí): simular un precon no gasta red."""
     if _scry is None:
         return None
+    if local_first:
+        names = [n for n in names if n and cardsdb.local_card(n) is None]
     return _scry.make_fetch([n for n in names if n])
 
 
@@ -261,7 +266,7 @@ def _build_deck_defs(specs):
             custom_names += list(parsed.get("commanders") or
                                  ([parsed["commander"]] if parsed.get("commander") else []))
             custom_names += [nm for _, nm in parsed["cards"]]
-    fetch = _make_fetch(custom_names) if custom_names else None
+    fetch = _make_fetch(custom_names, local_first=True) if custom_names else None
 
     deck_defs = []
     unresolved = {}
@@ -450,10 +455,18 @@ def resolve_decks(texts):
             names.add(c)
         for _q, n in parsed["cards"]:
             names.add(n)
-    if _scry is None or not names:
-        return {}
     names = [n for n in names if n]
-    data = _scry.resolve_many(names)
+    # primero la base local (sin red); a Scryfall solo lo que falte
+    local = {}
+    for n in names:
+        row = cardsdb.local_card(n)
+        if row is not None:
+            local[_scry._norm(n) if _scry else n.lower()] = row
+    if _scry is None or not names:
+        return local
+    names = [n for n in names if cardsdb.local_card(n) is None]
+    data = _scry.resolve_many(names) if names else {}
+    data.update(local)
     # Fallback difuso: para los nombres que no matchearon exacto (typos, acentos,
     # nombre parcial en una lista pegada) intentamos la mejor coincidencia de
     # Scryfall y la guardamos bajo el nombre original. Cap para no abusar de la API.
@@ -535,7 +548,7 @@ def simulate_custom(cards_list, commander_name, opponent, n):
                for c in (cards_list or []) if isinstance(c, dict) and c.get("name")]
     parsed = _check_parsed({"commander": commander_name, "cards": entries})
     names = [commander_name] + [name for _, name in entries]
-    fetch = _make_fetch(names)
+    fetch = _make_fetch(names, local_first=True)
     deck, cmd, report = decklist.build_deck(parsed, fetch=fetch)
 
     odeck, ocmd = decks.build(opponent)

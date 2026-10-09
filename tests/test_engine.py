@@ -7165,7 +7165,14 @@ def test_landfall_self_plus_counter():
         "name": "Y", "type_line": "Enchantment", "mana_cost": "{2}",
         "oracle_text": "Whenever a land you control enters, put a +1/+1 counter "
                        "on target creature."})
-    assert "landfall" not in c2.triggers
+    # ahora es un disparo CON objetivo: el contador va a una criatura (la mejor
+    # propia para el bot), nunca al encantamiento mismo
+    assert "landfall" in c2.triggers
+    y = g.move_to_battlefield(c2, me); g.resolve_stack()
+    before = k.counters.get("+1/+1", 0)
+    g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me); g.resolve_stack()
+    assert not y.counters
+    assert k.counters.get("+1/+1", 0) >= before + 1
 
 
 def test_enters_with_x_counters_and_bracket_loyalty():
@@ -7947,7 +7954,7 @@ def test_sim_endpoints_bound_cost_and_report_unresolved():
             "Island": {"name": "Island", "type_line": "Basic Land — Island",
                        "mana_cost": "", "color_identity": []}}
     orig_fetch = _sim._make_fetch
-    _sim._make_fetch = lambda names: data.get
+    _sim._make_fetch = lambda names, **_k: data.get
     try:
         ok = "Commander\n1 Kang\n\nDeck\n1 Island\n1 Island\n1 Typo Card"
         defs, _mt, unresolved = _sim._build_deck_defs(

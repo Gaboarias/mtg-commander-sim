@@ -1367,3 +1367,100 @@ def test_corpus_myriad_copies_attack_other_opponents():
     run(g)
     assert [o.life for o in ops] == [x - 4 for x in lifes], "cada rival recibe 4"
     assert not tokens(me), "las copias se exilian al final del combate"
+
+
+def test_corpus_modal_choose_one_or_more_splits_targets():
+    """Kill! Maim! Burn!: cada modo recibe SOLO su objetivo (antes 'destruí un
+    artefacto' destruía también la criatura y apuntaba al jugador)."""
+    import cardsdb as _db
+    from engine import R
+    row = _db.local_card("Kill! Maim! Burn!")
+    if row is None:
+        pytest.skip("sin base local")
+    c = _db.build_card_from_data(row)
+    g, me, ops = new_game()
+    art = put(g, artifact("Relic"), ops[0])
+    bear = put(g, creature("Bear", "1G", 2, 2), ops[0])
+    mine = put(g, creature("Mine", "1G", 2, 2), me)
+    give_lands(g, me, 4, colors=(R,))
+    give_lands(g, me, 4, colors=(B,))
+    me.hand.append(c)
+    life = ops[0].life
+    assert g.cast(me, c, targets=[art, ops[0]], chosen_modes=[0, 2])
+    run(g)
+    assert not on_bf(ops[0], art) and on_bf(ops[0], bear) and on_bf(me, mine)
+    assert ops[0].life == life - 3
+
+
+# --------------------------------------------------------------------------- #
+# Base local de cartas: reglas encontradas por la auditoría / el verificador
+# --------------------------------------------------------------------------- #
+
+def _real(name):
+    import cardsdb as _db
+    row = _db.local_card(name)
+    if row is None:
+        pytest.skip(f"{name} no está en la base local")
+    return _db.build_card_from_data(row)
+
+
+def test_db_tapped_lands_enter_tapped():
+    g, me, ops = new_game()
+    pm = put(g, _real("Dismal Backwater"), me)
+    assert pm.tapped, "'This land enters tapped' se ignoraba"
+    assert me.life == 41
+
+
+def test_db_checkland_and_fastland_conditions():
+    g, me, ops = new_game()
+    a = put(g, _real("Glacial Fortress"), me)            # sin Plains/Island -> girada
+    assert a.tapped
+    put(g, land("Island", [U], basic=True), me)
+    b = put(g, _real("Glacial Fortress"), me)
+    assert not b.tapped, "con una Island entra sin girar"
+    g2, me2, _ = new_game()
+    c = put(g2, _real("Blackcleave Cliffs"), me2)        # 0 otras tierras -> sin girar
+    assert not c.tapped
+
+
+def test_db_bounceland_returns_a_land_and_taps_for_two():
+    g, me, ops = new_game()
+    give_lands(g, me, 2)
+    pm = put(g, _real("Azorius Chancery"), me)
+    assert len(me.lands()) == 2 and len(me.hand) == 1
+    assert max(pm.card.produces(pm, me).values()) == 2
+
+
+def test_db_monarch_draws_and_moves_on_combat_damage():
+    g, me, ops = new_game()
+    put(g, _real("Palace Jailer") if False else creature("Bear", "1G", 2, 2), me)
+    g.set_monarch(me)
+    h = len(me.hand)
+    g.end_turn(me)
+    assert len(me.hand) == h + 1, "el monarca roba al final de su turno"
+    atk = put(g, creature("Orc", "1B", 2, 2), ops[0])
+    g.deal_damage(atk, me, 2, combat=True)
+    assert g.monarch is ops[0]
+
+
+def test_db_class_level_two_ability_needs_level():
+    g, me, ops = new_game()
+    t = put(g, _real("Gourmand's Talent"), me)
+    g.gain_life(me, 1)
+    run(g)
+    assert not tokens(me), "en nivel 1 no crea Raccoons"
+    t.counters["level"] = 2
+    g.turn += 1
+    g.gain_life(me, 1); run(g)
+    g.gain_life(me, 1); run(g)
+    assert len(tokens(me)) == 1, "nivel 2: una sola vez por turno"
+
+
+def test_db_if_you_do_requires_the_first_part():
+    g, me, ops = new_game()
+    u = put(g, _real("Uchuulon"), me)
+    g.emit("end_step", player=me); run(g)
+    assert not tokens(me), "sin criatura en el cementerio rival no hay copia"
+    ops[0].graveyard.append(creature("Dead", "1B", 2, 2))
+    g.emit("end_step", player=me); run(g)
+    assert len(tokens(me)) == 1 and ops[0].exile
