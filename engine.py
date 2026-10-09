@@ -103,6 +103,14 @@ class Cost:
         return {p for p in self.pips if p in COLORS}
 
 
+def _cost_txt(c) -> str:
+    """'{2}{R}' legible a partir de un Cost."""
+    if c is None:
+        return "{0}"
+    out = f"{{{c.generic}}}" if c.generic or not c.pips else ""
+    return out + "".join(f"{{{x}}}" for x in c.pips)
+
+
 def parse_cost(s: str) -> Cost:
     """Lee TODOS los digitos como un solo numero generico y cada letra como
     un simbolo de color. No soporta hibridos, Phyrexianos ni X.
@@ -728,6 +736,10 @@ class Game:
         self.spells_this_turn = 0   # hechizos lanzados este turno (storm)
         self.damaged_players: set = set()   # jugadores dañados este turno (bloodthirst)
         self.suspended: list = []   # cartas suspendidas: {card, player, n}
+        # cartas "sustitutas" en juego: criaturas boca abajo (morph, disguise,
+        # manifest, cloak) y criaturas lanzadas con bestow como Aura. Cada una
+        # guarda la carta real en `_real`; si sale del campo vuelve la real.
+        self._proxies: list = []
         self.dash_return: list = [] # criaturas jugadas por dash a devolver al fin de turno
         self.blitz_sac: list = []   # criaturas jugadas por blitz a sacrificar al fin de turno
         self.no_prevention_turn = False   # "el daño no se puede prevenir este turno"
@@ -1324,11 +1336,15 @@ class Game:
         # contador de finalidad (finality counter): se exilia en vez de ir al GY.
         if perm.card.is_creature() and (self._dies_to_exile(perm)
                                         or perm.counters.get("finality")):
-            ctrl.exile.append(perm.card)
+            ctrl.exile.append(getattr(perm.card, "_real", None) or perm.card)
             self.log(f"{perm.name} es exiliada en vez de ir al cementerio")
             return
-        ctrl.graveyard.append(perm.card)
-        self.emit("to_graveyard", player=ctrl, card=perm.card)
+        card = perm.card
+        if getattr(card, "_real", None) is not None:   # boca abajo / bestow
+            self._drop_proxy(card)
+            card = card._real
+        ctrl.graveyard.append(card)
+        self.emit("to_graveyard", player=ctrl, card=card)
 
     def _sacrifice_candidates(self, ctrl, typ, n, exclude=None):
         """Permanentes propios que sirven para pagar un coste 'Sacrifice a <tipo>'.
@@ -1359,21 +1375,67 @@ class Game:
         return pool[:n]
 
     def discard_card(self, ctrl, card):
-        """Descarta una carta ya quitada de la mano. Madness: si la carta tiene
-        coste de madness y el jugador puede pagarlo, la lanza en vez de mandarla al
-        cementerio (auto)."""
+        """Descarta una carta ya quitada de la mano. Madness (regla 702.35): la
+        carta se descarta AL EXILIO y su dueño puede lanzarla por el coste de
+        madness; si no lo hace, va al cementerio. El humano elige; los bots la
+        lanzan si pueden pagarla."""
         mad = getattr(card, "madness", None)
-        if mad is not None and ctrl.can_pay(mad):
+        if mad is None:
+            ctrl.graveyard.append(card)
+            self.emit("to_graveyard", player=ctrl, card=card)
+            return
+        ctrl.exile.append(card)
+        self.log(f"{ctrl.name} descarta {card.name} al exilio (madness)")
+
+        def _decline(g=self, c=ctrl):
+            if card in c.exile:
+                c.exile.remove(card)
+                c.graveyard.append(card)
+                g.emit("to_graveyard", player=c, card=card)
+
+        def _cast(g=self, c=ctrl):
+            if card not in c.exile or not c.can_pay(mad):
+                _decline()
+                return
+            c.exile.remove(card)
+            targets = None
+            pol = c.policy
+            if getattr(card, "target_spec", None) and pol is not None \
+                    and hasattr(pol, "choose_targets"):
+                try:
+                    targets = pol.choose_targets(g, c, card)
+                except Exception:  # noqa: BLE001
+                    targets = None
             orig = card.cost
+            ok = False
             try:
                 card.cost = mad
-                self.log(f"{ctrl.name} lanza {card.name} por madness")
-                self.cast(ctrl, card)
+                g.log(f"{c.name} lanza {card.name} por madness")
+                ok = g.cast(c, card, targets=targets)
+            except ReactionPause:
+                ok = True
+                raise
             finally:
                 card.cost = orig
+                if ok is False and card not in c.graveyard:
+                    c.graveyard.append(card)
+                    g.emit("to_graveyard", player=c, card=card)
+
+        if not ctrl.can_pay(mad):
+            _decline()
             return
-        ctrl.graveyard.append(card)
-        self.emit("to_graveyard", player=ctrl, card=card)
+        if ctrl is getattr(self, "interactive_human", None):
+            self.pending_choice = {
+                "kind": "may", "card": card.name,
+                "prompt": f"Madness: ¿lanzar {card.name} por {_cost_txt(mad)}? "
+                          f"(si no, va al cementerio)",
+                "options": [{"i": 0, "name": "Lanzarla"},
+                            {"i": 1, "name": "Al cementerio"}],
+                "allow_none": False,
+                "_apply": lambda idx: _cast() if idx == 0 else _decline(),
+            }
+            return
+        _cast()
 
     def _pay_discard(self, ctrl, n):
         """Descarta `n` cartas (o toda la mano si n<0) como coste. Usa la política
@@ -1530,6 +1592,8 @@ class Game:
         changed = True
         while changed:
             changed = False
+            if self._normalize_proxies():
+                changed = True
             # perdida por vida / veneno / dano de comandante
             for p in self.players:
                 if p.lost:
@@ -1623,11 +1687,17 @@ class Game:
                             self.log(f"{p.name} crea {tok['name']} "
                                      f"{tok['power']}/{tok['toughness']}")
                         changed = True
-            # aura sin huésped válido -> al cementerio
+            # aura sin huésped válido -> al cementerio (bestow: vuelve a ser criatura)
             for p in self.players:
                 for perm in list(p.battlefield):
                     subs = {s.lower() for s in perm.card.subtypes}
                     host = perm.enchanting
+                    if "aura" in subs and getattr(perm.card, "_bestow", False):
+                        if (host is None or host not in host.controller.battlefield
+                                or not host.is_creature()):
+                            self._unbestow(perm, "su huésped dejó el campo")
+                            changed = True
+                        continue
                     if "aura" in subs:
                         if host is None or host not in host.controller.battlefield:
                             self.to_graveyard(perm, "aura sin objetivo")
@@ -1656,6 +1726,7 @@ class Game:
                             if perm is not keep:
                                 self.to_graveyard(perm, "legend rule")
                                 changed = True
+        self._normalize_proxies()
 
     def _legend_choice(self, p: "Player", dupes: list):
         """El humano elige cuál copia legendaria conserva; el resto va al cementerio."""
@@ -2657,9 +2728,8 @@ class Game:
         """Lanza una criatura por un coste alternativo con PRISA. `mode`:
         - 'dash': vuelve a la mano al fin del turno.
         - 'blitz': se sacrifica al fin del turno; su muerte roba una carta.
-        - 'ninjutsu': entra con prisa (aprox: sin el intercambio con un atacante)."""
-        attr = {"dash": "dash_cost", "blitz": "blitz_cost",
-                "ninjutsu": "ninjutsu_cost"}.get(mode)
+        (Ninjutsu es aparte: Game.ninjutsu, después de declarar bloqueos.)"""
+        attr = {"dash": "dash_cost", "blitz": "blitz_cost"}.get(mode)
         cost = getattr(card, attr, None) if attr else None
         if cost is None or card not in p.hand or not p.can_pay(cost):
             return False
@@ -2727,6 +2797,299 @@ class Game:
         self.log(f"{p.name} predice una carta (foretell)")
         self.sba()
         return True
+
+    # -- caras boca abajo: morph / megamorph / disguise / manifest / cloak -- #
+    FACE_DOWN_NAME = "Criatura boca abajo"
+
+    def _drop_proxy(self, px):
+        """Quita una sustituta de la lista POR IDENTIDAD (Card es un dataclass:
+        dos criaturas boca abajo son 'iguales' campo a campo)."""
+        self._proxies = [x for x in self._proxies if x is not px]
+
+    def _face_down_proxy(self, card: Card, owner: "Player", kind: str) -> Card:
+        """Carta sustituta de una criatura boca abajo: 2/2 incolora, sin nombre,
+        sin habilidades ni tipos de criatura (regla 708). Disguise y cloak además
+        tienen ward {2}. La carta real queda en `_real`."""
+        px = Card(name=self.FACE_DOWN_NAME, types={"creature"}, cost=Cost(3, ()),
+                  power=2, toughness=2, tags={"face_down", f"_px{_next_uid()}"})
+        if kind in ("disguise", "cloak"):
+            px.keywords = {"ward"}
+            px.ward = {"mana": Cost(2, ())}
+        px._real = card
+        px._fd_kind = kind
+        px._owner = owner
+        self._proxies.append(px)
+        return px
+
+    def face_up_cost(self, perm: Permanent):
+        """Coste para dar vuelta un permanente boca abajo, o None si no se puede:
+        morph/megamorph/disguise, o su coste de maná si es una carta de criatura
+        manifestada/encubierta (manifest/cloak)."""
+        px = perm.card
+        real = getattr(px, "_real", None)
+        if real is None or getattr(px, "_bestow", False):
+            return None
+        opts = [c for c in (getattr(real, "morph_cost", None),
+                            getattr(real, "disguise_cost", None)) if c is not None]
+        if (getattr(px, "_fd_kind", "") in ("manifest", "cloak") and real.is_creature()
+                and real.cost is not None):
+            opts.append(real.cost)
+        return min(opts, key=lambda c: c.cmc) if opts else None
+
+    def cast_face_down(self, p: "Player", card: Card) -> bool:
+        """Lanza una carta con morph/megamorph/disguise BOCA ABAJO por {3} como una
+        criatura 2/2 sin nombre (regla 702.37 / 702.168)."""
+        if card not in p.hand:
+            return False
+        if getattr(card, "disguise_cost", None) is not None:
+            kind = "disguise"
+        elif getattr(card, "morph_cost", None) is not None:
+            kind = "morph"
+        else:
+            return False
+        px = self._face_down_proxy(card, p, kind)
+        if not p.can_pay(self.effective_cost(p, px)):
+            self._drop_proxy(px)
+            return False
+        p.hand.remove(card)
+        ok = False
+        try:
+            ok = self.cast(p, px)
+        except ReactionPause:
+            ok = True
+            raise
+        finally:
+            if ok is False:
+                self._drop_proxy(px)
+                p.hand.append(card)
+        return ok is not False
+
+    def turn_face_up(self, p: "Player", perm: Permanent) -> bool:
+        """Acción especial (no usa la pila): pagar el coste y dar vuelta la
+        criatura. No 'entra' al campo (sin ETB) pero dispara 'cuando se da vuelta'.
+        Megamorph: además recibe un contador +1/+1."""
+        if perm.controller is not p or perm not in p.battlefield:
+            return False
+        cost = self.face_up_cost(perm)
+        if cost is None or not p.can_pay(cost):
+            return False
+        p.pay(cost)
+        px = perm.card
+        real = px._real
+        perm.card = real
+        self._drop_proxy(px)
+        self.log(f"{p.name} da vuelta {real.name}")
+        self.note_ability(real, "se da vuelta", controller=p)
+        if getattr(real, "megamorph", False):
+            self.add_counters(perm, "+1/+1", 1)
+        cb = getattr(real, "on_turn_face_up", None)
+        if cb is not None:
+            self._run_fx(f"face up {real.name}",
+                         lambda: self._run_trigger(lambda g, pm, **kw: cb(g, p, pm),
+                                                   perm, {}))
+        self.emit("turned_face_up", player=p, perm=perm)
+        self.sba()
+        return True
+
+    def manifest(self, p: "Player", n: int = 1, kind: str = "manifest",
+                 dread: bool = False) -> list:
+        """Manifest / cloak: pone la primera carta de tu biblioteca en el campo boca
+        abajo como 2/2 (cloak: con ward {2}). Manifest dread: mirá dos, manifestá
+        una y la otra va al cementerio. Devuelve los permanentes creados."""
+        out = []
+        for _ in range(n):
+            if not p.library:
+                break
+            if dread:
+                look = p.library[:2]
+                del p.library[:2]
+                pick = max(look, key=lambda c: (c.is_creature(), c.power + c.toughness))
+                for c in look:
+                    if c is not pick:
+                        p.graveyard.append(c)
+                        self.emit("to_graveyard", player=p, card=c)
+                card = pick
+            else:
+                card = p.library.pop(0)
+            px = self._face_down_proxy(card, p, kind)
+            perm = self.move_to_battlefield(px, p)
+            if perm is not None:
+                out.append(perm)
+            self.log(f"{p.name} {'encubre' if kind == 'cloak' else 'manifiesta'} "
+                     f"la carta de arriba de su biblioteca")
+        self.sba()
+        return out
+
+    # -- bestow: criatura lanzada como Aura ------------------------------- #
+    def cast_bestow(self, p: "Player", card: Card, host: Permanent) -> bool:
+        """Lanza una criatura con bestow por su coste de bestow como Aura sobre
+        `host` (regla 702.103). Mientras está anexada no es criatura: el huésped
+        recibe su bono. Si el huésped deja el campo, vuelve a ser criatura."""
+        bc = getattr(card, "bestow_cost", None)
+        if bc is None or card not in p.hand or host is None:
+            return False
+        if not (host.is_creature() and host in host.controller.battlefield):
+            return False
+        if not self.can_target(p, host):
+            return False
+        px = copy.copy(card)
+        px.types = {"enchantment"}
+        px.subtypes = {"Aura"}
+        px.power = px.toughness = 0
+        px.keywords = set()
+        px.cost = bc
+        px.on_death = None              # una Aura no "muere"
+        dp, dt, kws = getattr(card, "bestow_mod", (0, 0, ()))
+        px.aura_keywords = set(kws)
+        px.static_mod = (lambda src, target, _d=(dp, dt):
+                         _d if target is getattr(src, "enchanting", None) else (0, 0))
+        px.tags = set(px.tags) | {"bestowed", f"_px{_next_uid()}"}
+        px._real = card
+        px._bestow = True
+        px._owner = p
+        real_etb = card.on_etb
+
+        def _attach(game, ctrl, perm, _h=host, _etb=real_etb):
+            if _h.is_creature() and _h in _h.controller.battlefield:
+                perm.enchanting = _h
+                game.log(f"{ctrl.name}: {card.name} se anexa a {_h.name} (bestow)")
+            else:
+                game._unbestow(perm, "su objetivo ya no está")
+            if _etb is not None:
+                _etb(game, ctrl, perm)
+
+        px.on_etb = _attach
+        self._proxies.append(px)
+        p.hand.remove(card)
+        ok = False
+        try:
+            ok = self.cast(p, px, targets=[host])
+        except ReactionPause:
+            ok = True
+            raise
+        finally:
+            if ok is False:
+                self._drop_proxy(px)
+                p.hand.append(card)
+        return ok is not False
+
+    def _unbestow(self, perm: Permanent, why: str = ""):
+        """El Aura de bestow queda sin huésped: deja de ser Aura y es la criatura
+        (no entra de nuevo: sin ETB)."""
+        px = perm.card
+        real = getattr(px, "_real", None)
+        if real is None:
+            return
+        perm.card = real
+        perm.enchanting = None
+        self._drop_proxy(px)
+        self.log(f"{real.name} vuelve a ser una criatura"
+                 + (f" ({why})" if why else ""))
+
+    def _normalize_proxies(self) -> bool:
+        """Una sustituta (boca abajo / bestow) que salió del campo vuelve a ser la
+        carta real en la zona a la que fue (mano, cementerio, exilio, biblioteca)."""
+        if not self._proxies:
+            return False
+        on_bf = {id(pm.card) for pl in self.players for pm in pl.battlefield}
+        on_stack = {id(getattr(o, "source", None)) for o in self.stack}
+        changed = False
+        for px in list(self._proxies):
+            if id(px) in on_bf or id(px) in on_stack:
+                continue
+            real = px._real
+            found = False
+            for pl in self.players:
+                for zname in ("hand", "graveyard", "exile", "library", "command",
+                              "exile_play", "impulse"):
+                    zone = getattr(pl, zname, None)
+                    if not zone:
+                        continue
+                    for k, c in enumerate(zone):
+                        if c is px:
+                            zone[k] = real
+                            found = changed = True
+            # si todavía no llegó a ninguna zona (está "en tránsito": un SBA corrió
+            # en medio del movimiento), se conserva para normalizarla después
+            if found:
+                self._drop_proxy(px)
+        return changed
+
+    # -- ninjutsu (después de declarar bloqueos) -------------------------- #
+    def ninjutsu_options(self, p: "Player", declared: list) -> list:
+        """(carta, zona) con ninjutsu que `p` puede usar ahora y los atacantes
+        suyos sin bloquear que puede devolver."""
+        cards = [(c, "hand") for c in p.hand
+                 if getattr(c, "ninjutsu_cost", None) is not None]
+        cards += [(c, "command") for c in p.command
+                  if getattr(c, "commander_ninjutsu", False)
+                  and getattr(c, "ninjutsu_cost", None) is not None]
+        return [(c, z) for c, z in cards if p.can_pay(c.ninjutsu_cost)]
+
+    def unblocked_attackers(self, p: "Player", declared: list) -> list:
+        return [a for a in declared if a.controller is p and a.attacking is not None
+                and not a.blocked_by and a in p.battlefield]
+
+    def ninjutsu(self, p: "Player", card: Card, attacker: Permanent,
+                 declared: Optional[list] = None) -> Optional[Permanent]:
+        """Ninjutsu (regla 702.49): pagá el coste y devolvé a la mano un atacante
+        tuyo NO bloqueado; la carta entra girada y atacando al mismo defensor (no
+        fue 'declarada' como atacante: no dispara 'cuando ataca')."""
+        cost = getattr(card, "ninjutsu_cost", None)
+        from_cmd = card in p.command and getattr(card, "commander_ninjutsu", False)
+        if cost is None or not (card in p.hand or from_cmd):
+            return None
+        if (attacker.controller is not p or attacker.attacking is None
+                or attacker.blocked_by or attacker not in p.battlefield):
+            return None
+        if not p.can_pay(cost):
+            return None
+        p.pay(cost)
+        defender = attacker.attacking
+        # el atacante vuelve a la mano de su dueño
+        p.battlefield.remove(attacker)
+        attacker.attacking = None
+        if attacker.card.on_leave:
+            self._run_fx(f"on_leave {attacker.name}",
+                         lambda: attacker.card.on_leave(self, p, attacker))
+        if declared is not None and attacker in declared:
+            declared.remove(attacker)
+        if not attacker.is_token:
+            back = getattr(attacker.card, "_real", None) or attacker.card
+            if getattr(attacker.card, "_real", None) is not None:
+                self._drop_proxy(attacker.card)
+            owner = self.commander_owner(back)
+            (owner.command if owner is not None else p.hand).append(back)
+        if from_cmd:
+            p.command.remove(card)
+        else:
+            p.hand.remove(card)
+        self.log(f"{p.name} usa ninjutsu: {attacker.name} vuelve y entra {card.name} atacando")
+        perm = self.move_to_battlefield(card, p)
+        if perm is None:
+            return None
+        perm.tapped = True
+        perm.attacking = defender
+        if declared is not None:
+            declared.append(perm)
+        self.sba()
+        return perm
+
+    def _after_blocks(self, declared: list):
+        """Ventana tras declarar bloqueos: los bots usan ninjutsu y dan vuelta
+        criaturas boca abajo (el humano lo hace desde su ventana de combate)."""
+        human = getattr(self, "interactive_human", None)
+        ap = self.players[self.active_index] if self.players else None
+        order = ([ap] if ap else []) + [pl for pl in self.players if pl is not ap]
+        for pl in order:
+            if pl is None or pl.lost or pl is human:
+                continue
+            pol = pl.policy
+            if pol is not None and hasattr(pol, "after_blocks"):
+                try:
+                    pol.after_blocks(self, pl, declared)
+                except Exception:  # noqa: BLE001
+                    pass
 
     def activate_gy_ability(self, p: "Player", card: Card, index: int = 0) -> bool:
         """Activa una habilidad de una carta EN EL CEMENTERIO (`gy_abilities`)."""
@@ -3012,6 +3375,7 @@ class Game:
                 for b in a.blocked_by:
                     b.blocking.remove(a)
                 a.blocked_by = []
+        self._after_blocks(declared)
         self._combat_block_triggers(declared)
         self._combat_damage(declared, first_strike=True)
         self.sba()

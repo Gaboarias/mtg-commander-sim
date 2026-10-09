@@ -38,6 +38,8 @@ def _act(g, kind, a):
     elif kind == 'cast': g.cast(a.get('i'), a.get('zone', 'hand'), a.get('target_uids'), a.get('mode'))
     elif kind == 'attack': g.attack(a.get('uids', []), a.get('target'), a.get('assign'), a.get('target_pw'))
     elif kind == 'foretell': g.foretell(a.get('i'))
+    elif kind == 'face_up': g.face_up(a.get('uid'))
+    elif kind == 'ninjutsu': g.ninjutsu(a.get('i'), a.get('zone', 'hand'), a.get('attacker'))
     elif kind == 'activate_gy': g.activate_gy(a.get('i'), a.get('index', 0), a.get('target_uids'))
     elif kind == 'end': g.end_turn()
     elif kind == 'activate': g.activate(a.get('uid'), a.get('index', 0))

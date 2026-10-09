@@ -392,8 +392,13 @@ class InteractiveGame:
             return True
         return self._has_counter_response(hu)
 
-    def _has_instant_response(self, hu):
-        """¿El humano tiene en mano un instantáneo/destello que pueda pagar?"""
+    def _has_instant_response(self, hu, declared=None):
+        """¿El humano tiene en mano un instantáneo/destello que pueda pagar (o un
+        ninjutsu / una criatura boca abajo para dar vuelta)?"""
+        if self._face_up_opts(only_playable=True):
+            return True
+        if declared is not None and self._ninjutsu_opts(declared):
+            return True
         return any((("instant" in c.types) or ("flash" in c.keywords))
                    and c.cost is not None and hu.can_pay(self.g.effective_cost(hu, c)) for c in hu.hand)
 
@@ -572,7 +577,7 @@ class InteractiveGame:
         # la ventana "combat" o resolvemos el daño de una.
         self.mode = None
         self._declared = []
-        if not self._has_instant_response(self.human()):
+        if not self._has_instant_response(self.human(), declared):
             self.g._finish_combat([a for a in declared if a in a.controller.battlefield])
             self.g.sba()
             if len(self.g.alive()) <= 1:
@@ -868,7 +873,24 @@ class InteractiveGame:
             if i is not None and 0 <= i < len(p.hand):
                 self.g.suspend_card(p, p.hand[i])
             return self.state()
-        if zone in ("dash", "blitz", "ninjutsu"):   # cast alternativo con prisa
+        if zone == "face_down":   # morph/disguise: boca abajo por {3}
+            if i is not None and 0 <= i < len(p.hand):
+                self.g.cast_face_down(p, p.hand[i])
+                self.g.sba()
+            return self.state()
+        if zone == "bestow":      # bestow: como Aura sobre una criatura propia
+            if i is not None and 0 <= i < len(p.hand):
+                c = p.hand[i]
+                tg = self._chosen_targets(c, target_uids, spec="own_creature") or []
+                if not tg:
+                    mine = sorted(p.creatures(), key=lambda x: (x.power, x.toughness),
+                                  reverse=True)
+                    tg = mine[:1]
+                if tg:
+                    self.g.cast_bestow(p, c, tg[0])
+                    self.g.sba()
+            return self.state()
+        if zone in ("dash", "blitz"):   # cast alternativo con prisa
             if i is not None and 0 <= i < len(p.hand):
                 self.g.cast_alt_haste(p, p.hand[i], zone)
             return self.state()
@@ -1245,15 +1267,32 @@ class InteractiveGame:
                         "i": i, "name": f"{c.name} (evoke)", "zone": "evoke",
                         "cost": _cost_str_cost(ev), "target_spec": None,
                         "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
-                # Dash / Blitz / Ninjutsu: cast alternativo con prisa.
-                for _kw, _attr in (("dash", "dash_cost"), ("blitz", "blitz_cost"),
-                                   ("ninjutsu", "ninjutsu_cost")):
+                # Dash / Blitz: cast alternativo con prisa.
+                for _kw, _attr in (("dash", "dash_cost"), ("blitz", "blitz_cost")):
                     _co = getattr(c, _attr, None)
                     if _co and p.can_pay(_co):
                         casts.append({
                             "i": i, "name": f"{c.name} ({_kw})", "zone": _kw,
                             "cost": _cost_str_cost(_co), "target_spec": None,
                             "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
+                # Morph / Megamorph / Disguise: lanzarla boca abajo por {3}.
+                _fk = ("disguise" if getattr(c, "disguise_cost", None) is not None
+                       else "morph" if getattr(c, "morph_cost", None) is not None else None)
+                if _fk and p.can_pay(Cost(3, ())):
+                    casts.append({
+                        "i": i, "name": f"{c.name} (boca abajo, {_fk})", "zone": "face_down",
+                        "cost": "{3}", "target_spec": None,
+                        "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
+                # Bestow: lanzarla como Aura sobre una criatura tuya.
+                _bc = getattr(c, "bestow_cost", None)
+                if _bc is not None and p.can_pay(_bc):
+                    _bt = self._targets_for_spec("own_creature")
+                    casts.append({
+                        "i": i, "name": f"{c.name} (bestow, como Aura)", "zone": "bestow",
+                        "cost": _cost_str_cost(_bc), "target_spec": "own_creature",
+                        "target_count": 1, "targets": _bt, "modes": [], "mode_pick": 1,
+                        **({} if _bt else {"castable": False,
+                                           "reason": "Sin criaturas para encantar"})})
                 # Cycling: descartar por robar una carta.
                 _cy = getattr(c, "cycling", None)
                 if _cy and p.can_pay(_cy):
@@ -1363,6 +1402,7 @@ class InteractiveGame:
                             "name": f"{pm.name} (PW de {f.name})",
                             "life": pm.counters.get("loyalty", 0)})
         return {"lands": lands, "casts": casts, "attackers": attackers,
+                "face_up": self._face_up_opts(),
                 "activatables": activatables, "abilities": abilities,
                 "impulse": impulse,
                 "graveyard": graveyard,
@@ -1420,6 +1460,78 @@ class InteractiveGame:
             "log": list(self.g.log_lines),
         }
 
+    # -- boca abajo / ninjutsu (humano) ----------------------------------- #
+    def _face_up_opts(self, only_playable=False):
+        """Criaturas boca abajo del humano que puede dar vuelta (acción especial:
+        en cualquier momento en que tenga prioridad)."""
+        hu = self.human()
+        out = []
+        for pm in hu.battlefield:
+            real = getattr(pm.card, "_real", None)
+            if real is None or getattr(pm.card, "_bestow", False):
+                continue
+            cost = self.g.face_up_cost(pm)
+            if cost is None:
+                continue
+            ok = hu.can_pay(cost)
+            if only_playable and not ok:
+                continue
+            out.append({"uid": pm.uid, "name": real.name,
+                        "cost": _cost_str_cost(cost), "playable": ok})
+        return out
+
+    def face_up(self, uid):
+        """Dar vuelta una criatura boca abajo propia (en tu turno o en una ventana
+        de combate)."""
+        if not (self._my_turn() or self.mode in ("defense", "combat")):
+            return self.state()
+        pm = self._find_perm(uid)
+        if pm is not None:
+            self.g.turn_face_up(self.human(), pm)
+            self.g.sba()
+            if len(self.g.alive()) <= 1:
+                self.mode = None
+                self._finish()
+        return self.state()
+
+    def _ninjutsu_opts(self, declared=None):
+        """Ninjutsu disponible en el paso de daño de TU ataque: cartas con ninjutsu
+        pagables y atacantes tuyos sin bloquear que pueden volver a la mano."""
+        if declared is None:
+            if self.mode != "combat":
+                return []
+            declared = getattr(self, "_combat_declared", [])
+        hu = self.human()
+        declared = [a for a in declared if a in a.controller.battlefield]
+        unb = self.g.unblocked_attackers(hu, declared)
+        if not unb:
+            return []
+        out = []
+        for c, zone in self.g.ninjutsu_options(hu, declared):
+            src = hu.hand if zone == "hand" else hu.command
+            out.append({"i": src.index(c), "zone": zone, "name": c.name,
+                        "cost": _cost_str_cost(c.ninjutsu_cost),
+                        "attackers": [{"uid": a.uid, "name": a.name,
+                                       "power": a.power, "toughness": a.toughness}
+                                      for a in unb]})
+        return out
+
+    def ninjutsu(self, i, zone="hand", attacker_uid=None):
+        """Usa ninjutsu en el paso de daño de tu ataque."""
+        if self.mode != "combat":
+            return self.state()
+        hu = self.human()
+        src = hu.hand if zone == "hand" else hu.command
+        if i is None or not (0 <= i < len(src)):
+            return self.state()
+        atk = self._find_perm(attacker_uid)
+        if atk is None:
+            return self.state()
+        perm = self.g.ninjutsu(hu, src[i], atk, self._combat_declared)
+        if perm is not None:
+            self.g.sba()
+        return self.state()
+
     def _defense_state(self):
         """Datos de la ventana de defensa: quién me ataca, con qué puedo bloquear
         y qué instantáneos puedo lanzar en respuesta."""
@@ -1450,6 +1562,7 @@ class InteractiveGame:
             and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
         return {
             "stage": "declare",
+            "face_up": self._face_up_opts(),
             "from": self._attacker.name if self._attacker else "",
             "attackers": attackers,
             "blockers": blockers,
@@ -1547,6 +1660,8 @@ class InteractiveGame:
             and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
         return {
             "stage": "damage",
+            "ninjutsu": self._ninjutsu_opts(),
+            "face_up": self._face_up_opts(),
             "attacking": attacking,
             "from": "Vos" if attacking else (self._attacker.name if self._attacker else ""),
             "attackers": atk,
@@ -1616,6 +1731,19 @@ class InteractiveGame:
         for i, pl in enumerate(self.players):
             s = self.g._player_state(pl)
             if i == self.human_index:
+                for pm, ps in zip(pl.battlefield, s["battlefield"]):
+                    real = getattr(pm.card, "_real", None)
+                    if real is None:
+                        continue
+                    if getattr(pm.card, "_bestow", False):
+                        ps["name"] = real.name
+                        ps["abilities"] = ([f"Aura (bestow) sobre {pm.enchanting.name}"]
+                                           if pm.enchanting else []) + list(ps["abilities"] or [])
+                    else:
+                        cost = self.g.face_up_cost(pm)
+                        ps["face_down"] = real.name
+                        ps["abilities"] = [f"Boca abajo: es {real.name}"] + (
+                            [f"Darla vuelta: {_cost_str_cost(cost)}"] if cost else [])
                 s["hand_cards"] = [{
                     "i": j, "name": c.name, "is_land": c.is_land(),
                     "is_creature": c.is_creature(), "cost": _cost_str(c),

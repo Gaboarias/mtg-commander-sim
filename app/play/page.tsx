@@ -66,6 +66,7 @@ type Legal = {
   graveyard?: { i: number; name: string; cost: string; mode: string; playable: boolean }[];
   exile_play?: { i: number; name: string; cost: string; is_land: boolean; playable: boolean }[];
   foretell_hand?: { i: number; name: string; playable: boolean }[];
+  face_up?: FaceUpOpt[];
   gy_abilities?: { i: number; index: number; name: string; label: string; cost: string; playable: boolean }[];
   attack_targets: { index: number; name: string; life: number; pw_uid?: number }[];
   can_attack: boolean; can_end: boolean; can_undo?: boolean;
@@ -77,6 +78,8 @@ type Inspect = {
   toughness?: number | null; keywords?: string[]; abilities?: string[];
   is_token?: boolean; subtypes?: string[];
 };
+type FaceUpOpt = { uid: number; name: string; cost: string; playable: boolean };
+type NinjaOpt = { i: number; zone: string; name: string; cost: string; attackers: { uid: number; name: string; power: number; toughness: number }[] };
 type CombatAtk = { uid: number; name: string; power: number; toughness: number; commander?: boolean; from: string; vs_pw?: string | null; flying?: boolean; blocked_by?: { uid: number; name: string; power: number; toughness: number }[] };
 type Combat = {
   stage?: "declare" | "damage";
@@ -88,6 +91,8 @@ type Combat = {
   responses: { i: number; name: string; cost: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number }[];
   abilities?: { uid: number; name: string; index: number; label: string; cost: string; target_spec?: string | null }[];
   gy_abilities?: { i: number; index: number; name: string; label: string; cost: string }[];
+  face_up?: FaceUpOpt[];
+  ninjutsu?: NinjaOpt[];
 };
 type Mulligan = { mulls: number; to_bottom: number; lands: number };
 type ChoiceOpt = { i: number; name: string; is_land?: boolean; ok?: boolean };
@@ -756,6 +761,18 @@ export default function Play() {
                   ))}
                 </div>
               )}
+              {(state.combat.face_up?.length ?? 0) > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Dar vuelta:</span>
+                  {(state.combat.face_up ?? []).map((f) => (
+                    <button key={"dfu" + f.uid} className="ghost" disabled={!f.playable}
+                      onClick={() => doAct("face_up", { uid: f.uid })}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Icon name="refresh" size={13} /> {f.name} <span className="muted">{f.cost}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {(state.combat.blockers?.length ?? 0) > 0 ? (
                 <div className="def-blockers">
@@ -847,6 +864,31 @@ export default function Play() {
                   {(state.combat.gy_abilities ?? []).map((ab) => (
                     <button key={"gy" + ab.i + "-" + ab.index} className="ghost" onClick={() => doAct("combat_gy_ability", { i: ab.i, index: ab.index })} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                       <Icon name="grave" size={13} /> {ab.name}: {ab.label} <span className="muted">{ab.cost}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {(state.combat.ninjutsu?.length ?? 0) > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Ninjutsu (devolvé un atacante sin bloquear):</span>
+                  {(state.combat.ninjutsu ?? []).flatMap((n) => n.attackers.map((a) => (
+                    <button key={"nj" + n.zone + n.i + "-" + a.uid} className="ghost"
+                      onClick={() => doAct("ninjutsu", { i: n.i, zone: n.zone, attacker: a.uid })}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Icon name="swords" size={13} /> {n.name} <span className="muted">{n.cost}</span> ⇄ {a.name} ({a.power}/{a.toughness})
+                    </button>
+                  )))}
+                </div>
+              )}
+              {(state.combat.face_up?.length ?? 0) > 0 && (
+                <div className="act-block">
+                  <span className="act-label">Dar vuelta:</span>
+                  {(state.combat.face_up ?? []).map((f) => (
+                    <button key={"cfu" + f.uid} className="ghost" disabled={!f.playable}
+                      onClick={() => doAct("face_up", { uid: f.uid })}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Icon name="refresh" size={13} /> {f.name} <span className="muted">{f.cost}</span>
                     </button>
                   ))}
                 </div>
@@ -1128,6 +1170,22 @@ export default function Play() {
                         style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                         <Icon name="cards" size={12} />
                         <b>{f.name}</b>
+                        {!f.playable ? <em className="pw-txt">sin maná</em> : null}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {legal && (legal.face_up?.length || 0) > 0 && (
+                  <div className="act-block">
+                    <span className="act-label">Dar vuelta (boca abajo):</span>
+                    {legal.face_up!.map((f) => (
+                      <button key={"fu" + f.uid} className="ghost pw-ab"
+                        disabled={!f.playable}
+                        onClick={() => doAct("face_up", { uid: f.uid })}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        <Icon name="refresh" size={12} />
+                        <b>{f.name}</b> <span className="muted">{f.cost}</span>
                         {!f.playable ? <em className="pw-txt">sin maná</em> : null}
                       </button>
                     ))}

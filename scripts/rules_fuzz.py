@@ -48,8 +48,15 @@ class Checker:
                           "impulse", "exile_play"):
                 for c in getattr(p, zname, []):
                     seen.setdefault(id(c), []).append(f"{p.name}.{zname}:{c.name}")
+                for c in getattr(p, zname, []):
+                    if getattr(c, "_real", None) is not None:
+                        self.bad("sustituta", f"{c.name} (boca abajo/bestow) quedó en "
+                                              f"{p.name}.{zname} en vez de la carta real")
             for pm in p.battlefield:
                 seen.setdefault(id(pm.card), []).append(f"{p.name}.battlefield:{pm.name}")
+                real = getattr(pm.card, "_real", None)
+                if real is not None:
+                    seen.setdefault(id(real), []).append(f"{p.name}.battlefield:{real.name}*")
                 if pm.controller is not p:
                     self.bad("control", f"{pm.name} en el campo de {p.name} pero controlador "
                                         f"{pm.controller.name}")
@@ -91,7 +98,48 @@ class Checker:
         self.board()
 
 
-def run_one(seed, n_players=None, log=False):
+# --mech: cada mazo recibe cartas con mecánicas de lanzamiento alternativo /
+# boca abajo (morph, disguise, manifest, cloak, bestow, ninjutsu, madness,
+# suspend) de su identidad, para estresar esas reglas.
+MECH_KWS = {"Morph", "Megamorph", "Disguise", "Manifest", "Manifest dread", "Cloak",
+            "Bestow", "Ninjutsu", "Commander ninjutsu", "Madness", "Suspend"}
+_MECH_POOL = None
+
+
+def _mech_pool():
+    global _MECH_POOL
+    if _MECH_POOL is None:
+        import cardsdb
+        seen, pool = set(), []
+        for row in cardsdb.full_db().values():
+            if row["name"] in seen or not (set(row.get("keywords") or []) & MECH_KWS):
+                continue
+            if "Land" in (row.get("type_line") or ""):
+                continue
+            seen.add(row["name"])
+            pool.append(row)
+        pool.sort(key=lambda r: r["name"])
+        _MECH_POOL = pool
+    return _MECH_POOL
+
+
+def _inject_mech(deck, cmd, rng, n=14):
+    import cardsdb
+    ident = set()
+    for c in ([cmd] if not isinstance(cmd, list) else cmd):
+        ident |= {str(x).upper() for x in (c.identity() if hasattr(c, "identity") else [])}
+    pool = [r for r in _mech_pool()
+            if set(r.get("color_identity") or []) <= ident]
+    slots = [i for i, c in enumerate(deck) if not c.is_land()]
+    rng.shuffle(slots)
+    for i in slots[:n]:
+        if not pool:
+            break
+        deck[i] = cardsdb.build_card_from_data(rng.choice(pool))
+    return deck
+
+
+def run_one(seed, n_players=None, log=False, mech=False):
     rng = random.Random(seed)
     files = precon_files()
     n = n_players or rng.choice([2, 3, 4])
@@ -99,6 +147,8 @@ def run_one(seed, n_players=None, log=False):
     players = []
     for i, fn in enumerate(picks):
         deck, cmd = build_precon(fn)
+        if mech:
+            deck = _inject_mech(deck, cmd, rng)
         players.append(Player(f"P{i}:{fn[:-4]}", deck, cmd, policy=Policy()))
     g = Game(players, seed=seed, log=log, max_turns=40)
     chk = Checker(g)
@@ -141,7 +191,8 @@ def run_one(seed, n_players=None, log=False):
 def main(argv):
     n = int(argv[argv.index("-n") + 1]) if "-n" in argv else 100
     if "--seed" in argv:
-        r = run_one(int(argv[argv.index("--seed") + 1]), log="--log" in argv)
+        r = run_one(int(argv[argv.index("--seed") + 1]), log="--log" in argv,
+                    mech="--mech" in argv)
         print(r["decks"], r["winner"], r["turns"])
         for pr in r["problems"]:
             print("  ", pr)
@@ -156,7 +207,9 @@ def main(argv):
     err_ex = {}
     import multiprocessing as mp
     with mp.Pool(jobs) as pool:
-        results = pool.map(run_one, range(start, start + n))
+        import functools
+        results = pool.map(functools.partial(run_one, mech="--mech" in argv),
+                           range(start, start + n))
     for r in results:
         seed = r["seed"]
         for t, kind, msg in r["problems"]:

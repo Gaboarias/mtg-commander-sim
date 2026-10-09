@@ -2262,7 +2262,8 @@ def _event_trigger_effect_impl(oracle: str):
     mc = None
     for _ln in _ability_lines(oracle):
         mc = re.search(r"whenever you cast (?:or copy )?(?:your first |an? )"
-                       r"([\w ]*?) ?spells?(?: each turn)?,?\s*(.{0,160})", _ln, re.I)
+                       r"([\w ]*?) ?spells?(?: from your hand)?(?: each turn)?,?\s*(.{0,160})",
+                       _ln, re.I)
         if mc:
             break
     _cfilt = _spell_filter(mc.group(1)) if mc else None
@@ -2304,6 +2305,28 @@ def _event_trigger_effect_impl(oracle: str):
                        r"[^,]*?enters?(?: the battlefield)?[^,]*,\s*(.{0,160})", _ln, re.I)
         if me:
             break
+    if me and "creature_enters" not in out and re.search(
+            r"causes an? (?:triggered )?abilit", me.group(0), re.I):
+        # Aboleth Spawn / Elesh Norn-like: "whenever a creature entering under an
+        # opponent's control causes a triggered ability of that creature to trigger,
+        # you may copy that ability" -> copia el disparo de ENTRADA de esa criatura
+        # (si no tiene, no hay nada que copiar). Antes copiaba la última habilidad
+        # resuelta en cada entrada: bucle de fichas.
+        _opp_only = "opponent" in me.group(0).lower()
+
+        def cb_copy_etb(game, watcher, entered=None, _o=_opp_only, **_kw):
+            if entered is None or entered.card.on_etb is None:
+                return
+            if _o and entered.controller is watcher.controller:
+                return
+            game.note_ability(watcher.card, "copia un disparo de entrada",
+                              controller=watcher.controller)
+            game.log(f"{watcher.controller.name} copia el disparo de entrada de "
+                     f"{entered.name}")
+            game._run_fx(f"copy etb {entered.name}",
+                         lambda: entered.card.on_etb(game, watcher.controller, entered))
+        out["creature_enters"] = cb_copy_etb
+        me = None
     if me and "creature_enters" not in out:
         lim = int(me.group(1)) if me.group(1) else None
         eff = _effect_any(me.group(2))
@@ -2316,10 +2339,29 @@ def _event_trigger_effect_impl(oracle: str):
         another = "another" in head
         nontoken = "nontoken" in head
         once = "only once each turn" in t.lower()
+        # "… creature … WITH <keyword> / with power N or greater enters": filtro. Antes
+        # se ignoraba y Wingmantle Chaplain ("another creature with defender") creaba
+        # un Pájaro por cada Pájaro que entraba (bucle hasta el tope de fichas).
+        with_kw = with_pow = None
+        _mw = re.search(r"\bwith ([a-z ]+?)(?: you control)?(?: enters|,|$)", head)
+        if _mw and not re.match(r"mana value", _mw.group(1)):
+            _q = _mw.group(1).strip()
+            _mp = re.match(r"power (\d+) or greater", _q)
+            if _mp:
+                with_pow = int(_mp.group(1))
+            elif _q.replace(" ", "_") in KEYWORDS:
+                with_kw = _q.replace(" ", "_")
+            else:
+                with_kw = "__unknown__"      # calificador no modelado: no dispara
 
         def cb(game, watcher, entered=None, _e=eff, _lim=lim,
-               _yours=yours, _opp=opp, _another=another, _once=once, _nt=nontoken):
+               _yours=yours, _opp=opp, _another=another, _once=once, _nt=nontoken,
+               _wk=with_kw, _wp=with_pow):
             if entered is None:
+                return
+            if _wk is not None and not entered.has(_wk):
+                return
+            if _wp is not None and entered.power < _wp:
                 return
             if _yours and entered.controller is not watcher.controller:
                 return
@@ -2351,9 +2393,10 @@ def _recurring_trigger_effects(oracle: str):
     de efectos. Antes esto se cableaba mal como un ETB de una sola vez."""
     t = re.sub(r"\s+", " ", (oracle or "")).strip()
     out = {}
-    for m in re.finditer(r"at the beginning of (your|each(?: player'?s?)?) "
+    for m in re.finditer(r"at the beginning of (your|each(?: player'?s?| opponent'?s?)?) "
                          r"(upkeep|end step|draw step)[,.]?\s*(.{0,160})", t, re.I):
         ev = "end_step" if "end" in m.group(2).lower() else "upkeep"
+        opp_only = "opponent" in m.group(1).lower()
         if m.group(1).lower().startswith("each"):
             ev = "each_" + ev          # cada jugador: no solo en tu propio turno
         if ev in out:
@@ -2389,7 +2432,9 @@ def _recurring_trigger_effects(oracle: str):
         if eff is None:
             continue
 
-        def cb(game, perm, _e=eff, _c=cond, **_kw):
+        def cb(game, perm, _e=eff, _c=cond, _o=opp_only, active=None, **_kw):
+            if _o and (active is None or active is perm.controller):
+                return                   # "each opponent's": solo turnos rivales
             if _c is not None and not _c(perm):
                 return
             _e(game, perm.controller)
@@ -3812,6 +3857,17 @@ def _each_count_fn(phrase: str):
         return lambda g, c: len(g.opponents(c))
     if re.match(r"cards? in your hand", p):
         return lambda g, c: len(c.hand)
+    mk = re.match(r"creatures? with ([a-z ]+?) (on the battlefield|you control|"
+                  r"your opponents control)$", p)
+    if mk and mk.group(1).replace(" ", "_") in KEYWORDS:
+        _kw = mk.group(1).replace(" ", "_")
+
+        def _cnt_kw(g, c, _k=_kw, _w=mk.group(2)):
+            pls = ([c] if _w == "you control" else
+                   g.opponents(c) if "opponents" in _w else g.players)
+            return sum(1 for pl in pls for pm in pl.battlefield
+                       if pm.is_creature() and pm.has(_k))
+        return _cnt_kw
     m = re.match(r"(creature|artifact|enchantment|land|planeswalker|permanent)s? "
                  r"(on the battlefield|you control|your opponents control)$", p)
     if not m:
@@ -3962,6 +4018,33 @@ def _atomic_effect(text):
     """Efectos atómicos que el parser genérico no cubría. Devuelve eff o None."""
     t = re.sub(r"\s+", " ", _strip_reminder(text or "")).strip().rstrip(".").lower()
     t = re.sub(r"^(?:then |and )", "", t)
+
+    # manifest / manifest dread / cloak: criatura 2/2 boca abajo desde la biblioteca
+    m = re.fullmatch(r"(?:you may )?(?:(manifest dread)( twice)?|(manifest|cloak) the top "
+                     r"(?:(two|three|four|\d+) )?cards? of your library)"
+                     r"(?:,? (?:then|and) put (a|an|one|two|three|\d+) \+1/\+1 counters? on "
+                     r"(?:it|that creature|each of them))?"
+                     r"(?:,? (?:then|and) attach this (?:equipment|enchantment) to "
+                     r"(?:it|that creature))?", t)
+    if m:
+        dread = bool(m.group(1))
+        kind = "cloak" if m.group(3) == "cloak" else "manifest"
+        n = 2 if m.group(2) else (_count_word(m.group(4)) or 1 if m.group(4) else 1)
+        ctr = (_count_word(m.group(5)) or 1) if m.group(5) else 0
+        attach = "attach this" in t
+
+        def eff_manifest(game, ctrl, *a, _n=n, _k=kind, _d=dread, _c=ctr, _at=attach,
+                         **_kw):
+            made = game.manifest(ctrl, _n, kind=_k, dread=_d)
+            for pm in made:
+                if _c:
+                    game.add_counters(pm, "+1/+1", _c)
+            if _at and made:
+                src = _src_perm(game, a)
+                if src is not None and src in src.controller.battlefield:
+                    src.enchanting = made[-1]
+                    game.log(f"{src.name} se anexa a la criatura boca abajo")
+        return eff_manifest
 
     # contadores sobre la PROPIA carta: "put a +1/+1 counter on this creature / ~ / it"
     m = re.fullmatch(r"put (a|an|one|two|three|four|five|\d+) ([+-]\d+/[+-]\d+|[a-z]+) "
@@ -4894,13 +4977,17 @@ def _generic_amount_single(oracle: str):
         # keywords de la ficha: sólo las de ESTA oración (tras "token ...") para no
         # arrastrar keywords de otras cláusulas del texto.
         _tail = re.split(r"[.;]", t[m.end():])[0]
+        # "… with flying for each creature with defender you control": lo que sigue a
+        # "for each" describe qué se cuenta, no las keywords de la ficha
+        _tail = re.split(r"\bfor each\b|\bwhere x\b|\bequal to\b", _tail)[0]
         kw = tuple(v for pat, v in _TOKEN_KEYWORDS if re.search(pat, _tail))
         # cantidad VARIABLE: "X ... where X is the number of …" / "for each …"
         cnt_fn = None
         mvar = re.search(r"(?:for each|equal to the number of|where x is the number of) "
                          r"([\w' ]+)", t)
         if mvar and (m.group(1).lower() == "x" or "for each" in t):
-            cnt_fn = _count_fn("number of " + mvar.group(1)) or _count_fn(mvar.group(1))
+            cnt_fn = (_count_fn("number of " + mvar.group(1)) or _count_fn(mvar.group(1))
+                      or _each_count_fn(mvar.group(1)))
         # X del hechizo ("Create X ... tokens"): usa el X elegido al lanzar (spell_x).
         if cnt_fn is None and m.group(1).lower() == "x":
             cnt_fn = lambda game, ctrl: int(getattr(game, "spell_x", 0) or 0)  # noqa: E731
@@ -5748,7 +5835,13 @@ def _vanilla_from_data(data: dict) -> Card:
     color_id = {_COLOR_MAP[c] for c in data.get("color_identity", []) if c in _COLOR_MAP}
     kws = {k.lower().replace(" ", "_") for k in data.get("keywords", [])} & KEYWORDS
     cost = None
-    if "land" not in types:
+    # sin coste de maná impreso (Ancestral Vision, Living End, Lotus Bloom): NO se
+    # puede lanzar normalmente (solo suspend / "sin pagar su coste"). Antes el
+    # coste vacío se leía como {0} y se lanzaba gratis.
+    _no_mc = (("mana_cost" in data or "cmc" in data)
+              and not (data.get("mana_cost") or "").strip()
+              and not data.get("card_faces"))
+    if "land" not in types and not _no_mc:
         cost = parse_cost(mana_cost_to_str(data.get("mana_cost", "")))
     if "land" in types:                       # una tierra vainilla debe producir maná
         prod = [_COLOR_MAP[c] for c in (data.get("produced_mana") or [])
@@ -5913,7 +6006,13 @@ def _build_card_from_data_impl(data: dict) -> Card:
     kws &= KEYWORDS
 
     cost = None
-    if "land" not in types:
+    # sin coste de maná impreso (Ancestral Vision, Living End, Lotus Bloom): NO se
+    # puede lanzar normalmente (solo suspend / "sin pagar su coste"). Antes el
+    # coste vacío se leía como {0} y se lanzaba gratis.
+    _no_mc = (("mana_cost" in data or "cmc" in data)
+              and not (data.get("mana_cost") or "").strip()
+              and not data.get("card_faces"))
+    if "land" not in types and not _no_mc:
         cost = parse_cost(mana_cost_to_str(data.get("mana_cost", "")))
 
     card = Card(
@@ -6931,6 +7030,48 @@ def _build_card_from_data_impl(data: dict) -> Card:
     if mmad:
         card.madness = parse_cost(mana_cost_to_str(
             "".join(re.findall(r"\{[wubrgc0-9/x]+\}", mmad.group(1)))))
+
+    # Morph / Megamorph / Disguise {coste}: se puede lanzar boca abajo por {3} como
+    # 2/2 sin nombre y darla vuelta pagando este coste (ver Game.cast_face_down).
+    _mana_re = r"((?:\{[wubrgc0-9/x]+\})+)"
+    for _kw, _attr in (("megamorph", "morph_cost"), ("morph", "morph_cost"),
+                       ("disguise", "disguise_cost")):
+        _m = re.search(r"(?:^|\n|\. )" + _kw + r"[ —]*" + _mana_re,
+                       "\n" + (data.get("oracle_text", "") or "").lower())
+        if _m and "creature" in types and getattr(card, _attr, None) is None:
+            setattr(card, _attr, parse_cost(mana_cost_to_str(
+                "".join(re.findall(r"\{[wubrgc0-9/x]+\}", _m.group(1))))))
+            if _kw == "megamorph":
+                card.megamorph = True
+    # "When ~ is turned face up, <efecto>"
+    for _ln in _ability_lines(data.get("oracle_text", "") or ""):
+        _mf = re.match(r"(?i)when (?:~|this creature|this permanent|"
+                       + re.escape(name) + r"|" + re.escape(name.split(",")[0])
+                       + r") is turned face up, (.+)$", _ln.strip())
+        if _mf:
+            _eff = _effect_any(_mf.group(1))
+            if _eff is not None:
+                card.on_turn_face_up = (lambda g, ctrl, perm, _e=_eff: _e(g, ctrl, perm))
+    # Bestow {coste}: se lanza como Aura; el huésped recibe +X/+Y y sus keywords.
+    mbe = re.search(r"bestow[ —]*" + _mana_re, _lt)
+    if mbe and "creature" in types:
+        card.bestow_cost = parse_cost(mana_cost_to_str(
+            "".join(re.findall(r"\{[wubrgc0-9/x]+\}", mbe.group(1)))))
+        _mb = re.search(r"enchanted creature gets ([+-]\d+)/([+-]\d+)", _lt)
+        _bkw = set()
+        _hm = re.search(r"enchanted creature (?:gets [+-]\d+/[+-]\d+ and )?has ([a-z ,]+?)"
+                        r"(?:\.|$| and gets)", _lt)
+        if _hm:
+            for _w in re.split(r",\s*(?:and\s+)?|\s+and\s+", _hm.group(1)):
+                _k = _w.strip().replace(" ", "_")
+                if _k in KEYWORDS:
+                    _bkw.add(_k)
+        card.bestow_mod = ((int(_mb.group(1)), int(_mb.group(2))) if _mb else (0, 0)) \
+            + (tuple(sorted(_bkw)),)
+        card.tags = card.tags | {"bestow"}
+    # Commander ninjutsu: también desde la zona de mando
+    if re.search(r"commander ninjutsu", _lt):
+        card.commander_ninjutsu = True
 
     # Replicate <coste>: coste que se paga varias veces; cada pago copia el hechizo.
     # Aprox: coste convertido a CMV entero; el motor paga cuanto se pueda.

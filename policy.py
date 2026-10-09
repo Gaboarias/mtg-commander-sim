@@ -151,6 +151,10 @@ class Policy:
                 continue
             if card.is_land():
                 continue
+            # Bestow: si puedo pagar el bestow y tengo una criatura buena, la lanzo
+            # como Aura sobre ella (si el huésped muere, queda la criatura igual).
+            if not nov and self._maybe_bestow(game, me, card):
+                continue
             # Suspend: si puedo pagar el coste de suspend pero no el cuerpo completo,
             # la suspendo (se lanzará gratis en unos turnos).
             sus = getattr(card, "suspend", None)
@@ -158,10 +162,9 @@ class Policy:
                     and not (card.cost and me.can_pay(card.cost))):
                 game.suspend_card(me, card)
                 continue
-            # Dash / Ninjutsu / Blitz: si no puedo pagar el cuerpo completo pero sí un
+            # Dash / Blitz: si no puedo pagar el cuerpo completo pero sí un
             # coste alternativo, entro con prisa para presionar.
-            for _mode, _at in (("dash", "dash_cost"), ("ninjutsu", "ninjutsu_cost"),
-                               ("blitz", "blitz_cost")):
+            for _mode, _at in (("dash", "dash_cost"), ("blitz", "blitz_cost")):
                 _co = getattr(card, _at, None)
                 if (not nov and _co and me.can_pay(_co)
                         and not (card.cost and me.can_pay(card.cost))):
@@ -224,6 +227,10 @@ class Policy:
             if me.can_pay(eff):
                 game.cast(me, card, targets=targets, chosen_modes=chosen_modes)
 
+        # 4b) morph/disguise: lo que no pude pagar entero lo juego boca abajo por {3}
+        if not (nov and game.rng.random() < 0.5):
+            self._face_down_plays(game, me)
+
         # 5) las MISMAS jugadas fuera del campo que puede hacer el humano:
         # cementerio (flashback/unearth/embalm/recur), exilio (foretell), y las
         # habilidades activadas de permanentes en juego.
@@ -231,6 +238,68 @@ class Policy:
 
         # planeswalkers
         self._activate_planeswalkers(game, me)
+
+    # -- bestow / boca abajo / ninjutsu (bots) --------------------------- #
+    def _maybe_bestow(self, game, me, card) -> bool:
+        bc = getattr(card, "bestow_cost", None)
+        if bc is None or card not in me.hand or not me.can_pay(bc):
+            return False
+        hosts = [pm for pm in me.creatures()
+                 if game.can_target(me, pm) and not getattr(pm.card, "_real", None)]
+        if not hosts:
+            return False
+        host = max(hosts, key=lambda pm: (pm.has("flying") or pm.has("unblockable"),
+                                          pm.has("hexproof") or pm.has("indestructible"),
+                                          pm.power + pm.toughness))
+        return bool(game.cast_bestow(me, card, host))
+
+    def _face_down_plays(self, game, me):
+        """Lanza boca abajo (morph/disguise) lo que no puedo pagar entero y da
+        vuelta lo que ya puedo pagar."""
+        for card in list(me.hand):
+            if card not in me.hand:
+                continue
+            if (getattr(card, "morph_cost", None) is None
+                    and getattr(card, "disguise_cost", None) is None):
+                continue
+            if card.cost is not None and me.can_pay(game.effective_cost(me, card)):
+                continue          # se lanza normal (ya lo intentó el bucle)
+            if me.available_mana() >= 3:
+                game.cast_face_down(me, card)
+        self._flip_face_down(game, me)
+
+    def _flip_face_down(self, game, me, only=None):
+        for pm in list(me.battlefield):
+            if only is not None and pm not in only:
+                continue
+            if getattr(pm.card, "_real", None) is None or getattr(pm.card, "_bestow", False):
+                continue
+            cost = game.face_up_cost(pm)
+            if cost is not None and me.can_pay(cost):
+                game.turn_face_up(me, pm)
+
+    def after_blocks(self, game, me, declared):
+        """Tras los bloqueos: ninjutsu sobre un atacante sin bloquear y dar vuelta
+        criaturas boca abajo que están en combate."""
+        if self.level == "novato" and game.rng.random() < 0.5:
+            return
+        if declared and declared[0].controller is me:
+            for card, _zone in sorted(game.ninjutsu_options(me, declared),
+                                      key=lambda cz: -(cz[0].power + cz[0].toughness)):
+                unb = game.unblocked_attackers(me, declared)
+                if not unb:
+                    break
+                atk = min(unb, key=lambda pm: (not pm.is_token,
+                                               -(card.power - pm.power),
+                                               pm.power + pm.toughness))
+                if atk.is_token and atk.power >= card.power:
+                    continue
+                if card.power + 1 < atk.power:
+                    continue          # no cambio un atacante mucho más grande
+                game.ninjutsu(me, card, atk, declared)
+        in_combat = [pm for pm in me.battlefield
+                     if pm.attacking is not None or pm.blocking]
+        self._flip_face_down(game, me, only=in_combat)
 
     # -- habilidades fuera del campo / activadas (bots) ------------------- #
     def _use_extra_abilities(self, game, me, second):
