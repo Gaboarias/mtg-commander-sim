@@ -302,6 +302,12 @@ class Permanent:
             return pt
         if self.set_base_pt is not None:         # "es un 1/1 …" fija la P/T base
             return self.set_base_pt
+        cda = getattr(self.card, "cda_pt", None)  # P/T variable ("… equal to the number of")
+        if cda is not None and self.game is not None:
+            try:
+                return cda(self.game, self.controller)
+            except Exception:  # noqa: BLE001
+                pass
         return (self.card.power, self.card.toughness)
 
     @property
@@ -1679,6 +1685,10 @@ class Game:
         cost = card.cost
         if cost is None:
             return None
+        # "si controlás un comandante, podés lanzarlo sin pagar su coste de maná"
+        if getattr(card, "free_with_commander", False) and any(
+                player.is_commander(pm.card) for pm in player.battlefield):
+            return Cost(generic=0, pips=())
         extra = player.tax_for(card) if from_command else 0
         red = (getattr(card, "cost_reduction", 0) or 0) + self._static_cost_reduction(player, card)
         fn = getattr(card, "cost_reduction_fn", None)
@@ -1934,6 +1944,16 @@ class Game:
         self._run_priority_and_resolve()
         return True
 
+    def _uncounterable(self, obj, card) -> bool:
+        if getattr(card, "uncounterable", False):
+            return True
+        ctrl = getattr(obj, "controller", None)
+        for pm in (ctrl.battlefield if ctrl is not None else []):
+            g = getattr(pm.card, "grants_uncounterable", None)
+            if g == "any" or (g == "creature" and card.is_creature()):
+                return True
+        return False
+
     def counter_spell(self, obj) -> bool:
         """Contrarresta el objeto `obj` de la pila y manda su carta a donde
         corresponde: nada si es una COPIA (la carta original sigue en la pila o ya
@@ -1941,8 +1961,12 @@ class Game:
         comandante, cementerio en otro caso. Devuelve False si ya no estaba."""
         if obj not in self.stack:
             return False
-        self.stack.remove(obj)
         card = getattr(obj, "source", None)
+        # "can't be countered" (la carta o un permanente de su controlador)
+        if card is not None and hasattr(card, "types") and self._uncounterable(obj, card):
+            self.log(f"{card.name} no puede ser contrarrestado")
+            return False
+        self.stack.remove(obj)
         if card is None or card.is_land() or str(getattr(obj, "label", "")).startswith("copy:"):
             return True
         ctrl = obj.controller

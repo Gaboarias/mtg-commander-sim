@@ -614,7 +614,11 @@ class Policy:
         # habilidades: lanzados contra un hechizo, la carta se perdía de la pila)
         counter = next((c for c in me.hand
                         if "counter" in c.tags and me.can_pay(c.cost)
-                        and getattr(c, "target_spec", None) == "stack_spell"), None)
+                        and getattr(c, "target_spec", None) == "stack_spell"
+                        and (getattr(c, "counter_filter", None) is None
+                             or c.counter_filter(card))), None)
+        if counter is not None and game._uncounterable(top, card):
+            return False
         if counter is None:
             return False
         game.cast(me, counter, targets=[top])

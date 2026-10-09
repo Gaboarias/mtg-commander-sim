@@ -490,14 +490,50 @@ def _counter_ability_effect():
     return eff
 
 
-def _counter_spell_effect():
+def _counter_filter(qual):
+    """'noncreature' / 'creature' / 'instant or sorcery' / 'artifact or enchantment'…
+    -> predicado sobre la carta del hechizo, o None si no hay calificador."""
+    q = (qual or "").strip().lower()
+    if not q:
+        return None
+    neg = q.startswith("non")
+    words = [w for w in re.split(r"\s+or\s+|,\s*|\s+", q.replace("non", "", 1) if neg else q)
+             if w]
+    known = {"creature", "instant", "sorcery", "artifact", "enchantment", "planeswalker",
+             "land", "permanent", "legendary"}
+    if not words or not all(w in known for w in words):
+        return "?"
+
+    def ok(card, _w=tuple(words), _neg=neg):
+        types = set(getattr(card, "types", set()))
+        hit = any((w == "permanent" and types & {"creature", "artifact", "enchantment",
+                                                 "planeswalker", "land", "battle"})
+                  or (w == "legendary" and "legendary" in getattr(card, "supertypes", set()))
+                  or w in types for w in _w)
+        return not hit if _neg else hit
+    return ok
+
+
+def _counter_spell_effect(filt=None, unless=None):
     """Contrarresta el hechizo objetivo (StackObject): lo saca de la pila y su
-    carta va al cementerio. Cubre Counterspell y variantes importadas de Scryfall."""
-    def eff(game, ctrl, targets):
+    carta va al cementerio. Cubre Counterspell y variantes importadas de Scryfall.
+    `filt`: solo hechizos de ese tipo. `unless`: N genérico que el controlador del
+    hechizo puede pagar para evitarlo (Mana Leak)."""
+    def eff(game, ctrl, targets, _f=filt, _u=unless):
         obj = (list(targets or []) or [None])[0]
         if obj is None:
             return
-        name = getattr(getattr(obj, "source", None), "name", "?")
+        src = getattr(obj, "source", None)
+        name = getattr(src, "name", "?")
+        if _f is not None and src is not None and not _f(src):
+            game.log(f"{name} no es un objetivo legal para el contrahechizo")
+            return
+        if _u:
+            payer = getattr(obj, "controller", None)
+            if payer is not None and payer.can_pay(Cost(generic=_u, pips=())):
+                payer.pay(Cost(generic=_u, pips=()))
+                game.log(f"{payer.name} paga {{{_u}}} y {name} no se contrarresta")
+                return
         if game.counter_spell(obj):
             game.log(f"{ctrl.name} contrarresta {name}")
     return eff
@@ -3793,7 +3829,43 @@ def _count_fn(phrase: str):
     """Devuelve una función f(game, ctrl) -> int para expresiones de cantidad
     variable comunes ('the number of creatures you control', 'cards in your hand',
     'Elves you control', 'Swamps you control'…) o None si no se reconoce."""
-    p = (phrase or "").lower()
+    p = (phrase or "").lower().strip()
+    m2 = re.match(r"twice (.+)$", p)
+    if m2 and (f2 := _count_fn(m2.group(1))) is not None:
+        return lambda g, c, _f=f2: 2 * _f(g, c)
+    if p in ("your life total", "your life"):
+        return lambda g, c: max(0, c.life)
+    # cartas en cementerios: "(the number of) [creature|land|instant and sorcery|
+    # artifact] cards in your/all/your opponents' graveyard(s)"
+    mg = re.match(r"(?:the number of )?(?:(other )?([a-z]+(?: and [a-z]+)?) )?cards? in "
+                  r"(your|all|your opponents'|each opponent's) graveyards?$", p)
+    if mg:
+        kinds = [k for k in re.split(r" and ", mg.group(2) or "") if k]
+        whose = mg.group(3)
+
+        def _gy(g, c, _k=tuple(kinds), _w=whose):
+            pls = ([c] if _w == "your" else g.players if _w == "all" else g.opponents(c))
+            return sum(1 for pl in pls for x in pl.graveyard
+                       if not _k or any(k in x.types or (k == "permanent" and
+                                        x.types & {"creature", "artifact", "enchantment",
+                                                   "land", "planeswalker"}) for k in _k))
+        return _gy
+    if re.match(r"(?:the number of )?card types among cards in all graveyards$", p):
+        _CT = ("artifact", "battle", "creature", "enchantment", "instant", "land",
+               "planeswalker", "sorcery", "kindred")
+        return lambda g, c: len({t for pl in g.players for x in pl.graveyard
+                                 for t in x.types if t in _CT})
+    mo = re.match(r"(?:the number of )?(nonbasic )?([a-z]+?)s? your opponents control$", p)
+    if mo:
+        nb, kind = bool(mo.group(1)), mo.group(2)
+        return (lambda g, c, _k=kind, _nb=nb: sum(
+            1 for o in g.opponents(c) for pm in o.battlefield
+            if (_k in pm.card.types or (_k == "creature" and pm.is_creature()))
+            and (not _nb or "basic" not in pm.card.supertypes)))
+    mcol = re.match(r"(?:the number of )?(white|blue|black|red|green) permanents you control$", p)
+    if mcol:
+        col = {"white": W, "blue": U, "black": B, "red": R, "green": G}[mcol.group(1)]
+        return lambda g, c, _c=col: sum(1 for pm in c.battlefield if _c in pm.card.identity())
     if "cards in your hand" in p or "in your hand" in p:
         return lambda g, c: len(c.hand)
     if "lands you control" in p:
@@ -4063,6 +4135,100 @@ def _atomic_effect(text):
                 game.emit("leaves_graveyard", player=o, card=c)
                 game.log(f"{ctrl.name} exilia {c.name} del cementerio de {o.name}")
         return eff_gy_hate
+
+    m = re.fullmatch(r"each (other player|opponent|player) sacrifices (?:a|an|one) "
+                     r"(creature|artifact|enchantment|land|permanent|nonland permanent)"
+                     r"(?: of their choice)?", t)
+    if m:
+        def eff_each_sac(game, ctrl, *a, _w=m.group(1), _k=m.group(2), **_kw):
+            pls = (game.players if _w == "player" else game.opponents(ctrl))
+            for pl in list(pls):
+                if pl.lost:
+                    continue
+                k = "permanent" if _k == "nonland permanent" else _k
+                pool = game._sacrifice_candidates(pl, k, 5)
+                if _k == "nonland permanent":
+                    pool = [pm for pm in pool if not pm.card.is_land()]
+                if pool:
+                    game.to_graveyard(pool[0], "sacrificio")
+                    game.log(f"{pl.name} sacrifica {pool[0].name}")
+            game.sba()
+        return eff_each_sac
+    m = re.fullmatch(r"return all (nonland permanents|creatures|other creatures|"
+                     r"artifacts|enchantments|attacking creatures) to their owners'? hands?", t)
+    if m:
+        def eff_mass_bounce(game, ctrl, *a, _k=m.group(1), **_kw):
+            src = _src_perm(game, a)
+            for pl in game.players:
+                for pm in list(pl.battlefield):
+                    hit = ((_k == "nonland permanents" and not pm.card.is_land())
+                           or (_k in ("creatures", "other creatures") and pm.is_creature()
+                               and not (_k == "other creatures" and pm is src))
+                           or (_k == "attacking creatures" and pm.attacking is not None)
+                           or (_k == "artifacts" and "artifact" in pm.card.types)
+                           or (_k == "enchantments" and "enchantment" in pm.card.types))
+                    if not hit:
+                        continue
+                    pl.battlefield.remove(pm)
+                    if pm.is_token:
+                        continue
+                    owner = game.commander_owner(pm.card)
+                    (owner.command if owner is not None else pl.hand).append(pm.card)
+            game.log(f"{ctrl.name} devuelve {_k} a la mano")
+            game.sba()
+        return eff_mass_bounce
+    m = re.fullmatch(r"exile all (creatures|nonland permanents|artifacts|enchantments|"
+                     r"creatures you don't control|graveyards)", t)
+    if m:
+        def eff_mass_exile(game, ctrl, *a, _k=m.group(1), **_kw):
+            if _k == "graveyards":
+                for pl in game.players:
+                    for c in list(pl.graveyard):
+                        pl.graveyard.remove(c)
+                        pl.exile.append(c)
+                        game.emit("leaves_graveyard", player=pl, card=c)
+                return
+            for pl in game.players:
+                for pm in list(pl.battlefield):
+                    hit = ((_k.startswith("creatures") and pm.is_creature()
+                            and not (_k.endswith("control") and pl is ctrl))
+                           or (_k == "nonland permanents" and not pm.card.is_land())
+                           or (_k == "artifacts" and "artifact" in pm.card.types)
+                           or (_k == "enchantments" and "enchantment" in pm.card.types))
+                    if not hit:
+                        continue
+                    pl.battlefield.remove(pm)
+                    if pm.card.on_leave:
+                        pm.card.on_leave(game, pl, pm)
+                    if pm.is_token:
+                        continue
+                    owner = game.commander_owner(pm.card)
+                    (owner.command if owner is not None else pl.exile).append(pm.card)
+            game.log(f"{ctrl.name} exilia {_k}")
+            game.sba()
+        return eff_mass_exile
+    if re.fullmatch(r"shuffle your graveyard into your library", t):
+        def eff_gy_shuffle(game, ctrl, *a, **_kw):
+            for c in list(ctrl.graveyard):
+                ctrl.graveyard.remove(c)
+                ctrl.library.append(c)
+                game.emit("leaves_graveyard", player=ctrl, card=c)
+            game.rng.shuffle(ctrl.library)
+        return eff_gy_shuffle
+
+    m = re.fullmatch(r"(?:you may )?put a land card from your hand onto the battlefield( tapped)?", t)
+    if m:
+        def eff_land_from_hand(game, ctrl, *a, _tap=bool(m.group(1)), **_kw):
+            lands = [c for c in ctrl.hand if c.is_land()]
+            if not lands:
+                return
+            c = lands[0]
+            ctrl.hand.remove(c)
+            pm = game.move_to_battlefield(c, ctrl)
+            if pm is not None and _tap:
+                pm.tapped = True
+            game.log(f"{ctrl.name} pone {c.name} en el campo desde la mano")
+        return eff_land_from_hand
 
     # "that player" del disparo (defensor / quien lanzó / quien robó)
     m = re.fullmatch(r"that player (discards|loses|draws|mills) (a|an|one|two|three|\d+) ?"
@@ -5748,6 +5914,39 @@ def _build_card_from_data_impl(data: dict) -> Card:
     _etc = _parse_etb_counters(data.get("oracle_text", ""))
     if _etc:
         card.etb_counters = _etc
+    # P/T variable (característica definida): "~'s power and toughness are each
+    # equal to the number of …" / "~'s power is equal to … and its toughness is …"
+    _ot_cda = re.sub(r"\s+", " ", _strip_reminder(data.get("oracle_text", "") or ""))
+    _selfalt = "|".join(re.escape(x) for x in sorted(_self_names(name) | {name.lower()},
+                                                       key=len, reverse=True) if x)
+    _mc = re.search(r"(?:~|this creature|" + _selfalt + r")'s power and toughness are "
+                    r"each equal to ([^.]+)\.", _ot_cda, re.I)
+    if _mc and (_f := _count_fn(_mc.group(1))) is not None:
+        card.cda_pt = (lambda g, c, _f=_f: (_f(g, c), _f(g, c)))
+    else:
+        _mc = re.search(r"(?:~|this creature|" + _selfalt + r")'s power is equal to "
+                        r"([^.]+?)(?:,? and its toughness is equal to (?:that number )?"
+                        r"(?:plus (\d+)|([^.]+)))?\.", _ot_cda, re.I)
+        if _mc and (_f := _count_fn(_mc.group(1))) is not None:
+            if _mc.group(2):
+                card.cda_pt = (lambda g, c, _f=_f, _k=int(_mc.group(2)): (_f(g, c), _f(g, c) + _k))
+            elif _mc.group(3) and (_ft := _count_fn(_mc.group(3))) is not None:
+                card.cda_pt = (lambda g, c, _f=_f, _t=_ft: (_f(g, c), _t(g, c)))
+            elif not _mc.group(3):
+                card.cda_pt = (lambda g, c, _f=_f, _bt=card.toughness: (_f(g, c), _bt))
+    # "If you control a commander, you may cast this spell without paying its mana
+    # cost" (Deadly Rollick, Fierce Guardianship, Flawless Maneuver…)
+    if re.search(r"if you control a commander, you may cast this spell without paying "
+                 r"its mana cost", (data.get("oracle_text", "") or ""), re.I):
+        card.free_with_commander = True
+    # "This spell can't be countered." / "Spells you control can't be countered."
+    _otu = (data.get("oracle_text", "") or "").lower()
+    if re.search(r"(?:this spell|~) can't be countered", _otu) or \
+            re.search(re.escape(name.lower()) + r" can't be countered", _otu):
+        card.uncounterable = True
+    if re.search(r"(?:spells you control|creature spells you control) can't be countered", _otu):
+        card.grants_uncounterable = ("creature" if "creature spells you control" in _otu
+                                     else "any")
     # "This creature can't block." (estática propia)
     if any(re.fullmatch(r"(?:~|this creature|" + re.escape(name.lower()) + r") can't block\.?",
                         l.strip().lower()) for l in _ability_lines(data.get("oracle_text", ""))):
@@ -5951,13 +6150,18 @@ def _build_card_from_data_impl(data: dict) -> Card:
 
     # counterspells (Scryfall no trae el gancho): "counter target spell". Se cablea
     # primero para que la capa de remoción no lo malinterprete.
+    _mcs = re.search(r"counter target ((?:[\w\-]+ )*?)spell(?: unless its controller pays "
+                     r"\{(\d+)\})?", (data.get("oracle_text", "") or ""), re.I)
     if ({"instant", "sorcery"} & types and not card.modes and not card.on_cast_resolve
-            and re.search(r"counter target (?:[\w\- ]+ )?spell",
-                          (data.get("oracle_text", "") or ""), re.I)):
-        card.on_cast_resolve = _counter_spell_effect()
-        card.target_spec = "stack_spell"
-        card.target_count = 1
-        card.tags = card.tags | {"counter"}
+            and _mcs):
+        _cf = _counter_filter(_mcs.group(1))
+        if _cf != "?":
+            card.on_cast_resolve = _counter_spell_effect(
+                _cf, int(_mcs.group(2)) if _mcs.group(2) else None)
+            card.counter_filter = _cf
+            card.target_spec = "stack_spell"
+            card.target_count = 1
+            card.tags = card.tags | {"counter"}
 
     # "puedes jugar/lanzar desde tu cementerio este turno" (Yawgmoth's Will…).
     if ({"instant", "sorcery"} & types and not card.on_cast_resolve

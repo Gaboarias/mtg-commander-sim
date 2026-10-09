@@ -1464,3 +1464,73 @@ def test_db_if_you_do_requires_the_first_part():
     ops[0].graveyard.append(creature("Dead", "1B", 2, 2))
     g.emit("end_step", player=me); run(g)
     assert len(tokens(me)) == 1 and ops[0].exile
+
+
+def _stack_spell(g, pl, card):
+    """Pone `card` en la pila como hechizo (sin resolver) y devuelve el StackObject."""
+    from engine import StackObject
+    obj = StackObject(pl, lambda gg: None, source=card, label=f"spell:{card.name}")
+    g.stack.append(obj)
+    return obj
+
+
+def test_db_counter_filters_and_unless():
+    from engine import U
+    g, me, ops = new_game()
+    negate = build("Negate", "{1}{U}", "Instant", "Counter target noncreature spell.")
+    leak = build("Mana Leak", "{1}{U}", "Instant",
+                 "Counter target spell unless its controller pays {3}.")
+    assert negate.counter_filter is not None
+    bear = creature("Bear", "1G", 2, 2)
+    give_lands(g, ops[0], 3)                  # (antes de apilar: give_lands resuelve la pila)
+    obj = _stack_spell(g, ops[0], bear)
+    negate.on_cast_resolve(g, me, [obj])
+    assert obj in g.stack, "Negate no contrarresta criaturas"
+    leak.on_cast_resolve(g, me, [obj])
+    assert obj in g.stack and all(pm.tapped for pm in ops[0].lands()), "pagó {3}"
+    leak.on_cast_resolve(g, me, [obj])
+    assert obj not in g.stack, "sin maná para pagar: se contrarresta"
+
+
+def test_db_cant_be_countered():
+    g, me, ops = new_game()
+    sp = build("Big Spell", "{2}{G}", "Sorcery", "This spell can't be countered.\nDraw a card.")
+    obj = _stack_spell(g, ops[0], sp)
+    cs = build("Counterspell", "{U}{U}", "Instant", "Counter target spell.")
+    cs.on_cast_resolve(g, me, [obj])
+    assert obj in g.stack
+
+
+def test_db_grave_pact_each_other_player_sacrifices():
+    g, me, ops = new_game(n_opp=2)
+    put(g, build("Grave Pact", "{1}{B}{B}{B}", "Enchantment",
+                 "Whenever a creature you control dies, each other player sacrifices a creature of their choice."), me)
+    mine = put(g, creature("Mine", "1B", 1, 1), me)
+    a = put(g, creature("A", "1G", 2, 2), ops[0])
+    b = put(g, creature("B", "1G", 2, 2), ops[1])
+    g.to_graveyard(mine, "test"); run(g)
+    assert not on_bf(ops[0], a) and not on_bf(ops[1], b)
+
+
+def test_db_cda_power_toughness():
+    g, me, ops = new_game()
+    me.hand = [creature(f"x{i}", "1", 1, 1) for i in range(4)]
+    pm = put(g, _real("Body of Knowledge"), me)
+    assert (pm.power, pm.toughness) == (4, 4)
+    me.hand.pop()
+    assert pm.power == 3, "se recalcula con la mano"
+
+
+def test_db_free_spell_with_commander_on_battlefield():
+    g, me, ops = new_game()
+    rollick = _real("Deadly Rollick")
+    target = put(g, creature("Big", "4G", 5, 5), ops[0])
+    me.hand.append(rollick)
+    assert not me.can_pay(g.effective_cost(me, rollick)), "sin comandante cuesta {3}{B}"
+    cmd = g.move_to_battlefield(me.commander_card, me)
+    me.command = []
+    run(g)
+    assert g.effective_cost(me, rollick).cmc == 0
+    assert g.cast(me, rollick, targets=[target])
+    run(g)
+    assert not on_bf(ops[0], target)
