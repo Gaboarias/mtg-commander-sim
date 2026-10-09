@@ -41,8 +41,23 @@ def _get(url, raw=False, tries=4):
 
 def cards():
     bulk = _get("https://api.scryfall.com/bulk-data")
-    uri = next(b["download_uri"] for b in bulk["data"] if b["type"] == "oracle_cards")
-    data = json.loads(_get(uri, raw=True).decode("utf-8"))
+    entries = bulk.get("data") or []
+    ent = next((b for b in entries if b.get("type") == "oracle_cards"), None)
+    if ent is None:
+        raise RuntimeError(f"bulk sin oracle_cards: {[b.get('type') for b in entries]}")
+    uri = ent.get("download_uri")
+    if not uri:
+        print("claves del bulk:", sorted(ent.keys()))
+        detail = _get(ent["uri"]) if ent.get("uri") else {}
+        uri = detail.get("download_uri") or next(
+            (v for v in list(ent.values()) + list(detail.values())
+             if isinstance(v, str) and re.search(r"\.json(?:\.gz)?$", v)), None)
+    if not uri:
+        raise RuntimeError(f"no encontré el link de descarga: {ent}")
+    raw = _get(uri, raw=True)
+    if raw[:2] == b"\x1f\x8b":                  # vino comprimido
+        raw = gzip.decompress(raw)
+    data = json.loads(raw.decode("utf-8"))
     out = {}
     for c in data:
         if c.get("layout") in SKIP_LAYOUTS or "paper" not in (c.get("games") or []):
