@@ -1,0 +1,29 @@
+name: Base completa de cartas y reglas
+
+# Baja de Scryfall TODAS las cartas (bulk oracle_cards) y las Reglas Completas de
+# Wizards (habilidades/acciones clave) y las empuja a la rama data/full-db.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Bajar cartas y reglas
+        run: python3 scripts/snapshot_full_db.py
+      - name: Empujar a data/full-db
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B data/full-db
+          git add -f data/cards_full.json.gz data/rules_keywords.json || true
+          git commit -m "Base completa de cartas y reglas" || true
+          git push --force origin data/full-db
