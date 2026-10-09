@@ -151,6 +151,9 @@ class Policy:
                 continue
             if card.is_land():
                 continue
+            # Overload / Plot / Warp / Prototype / Emerge (batch 2)
+            if not nov and self._alt_cast(game, me, card):
+                continue
             # Bestow: si puedo pagar el bestow y tengo una criatura buena, la lanzo
             # como Aura sobre ella (si el huésped muere, queda la criatura igual).
             if not nov and self._maybe_bestow(game, me, card):
@@ -239,6 +242,34 @@ class Policy:
         # planeswalkers
         self._activate_planeswalkers(game, me)
 
+    # -- lanzamientos alternativos (bots) --------------------------------- #
+    def _alt_cast(self, game, me, card) -> bool:
+        if card not in me.hand:
+            return False
+        full = card.cost is not None and me.can_pay(game.effective_cost(me, card))
+        # overload: si el rival tiene 2+ cosas que el hechizo alcanzaría
+        oc = getattr(card, "overload_cost", None)
+        if oc is not None and me.can_pay(oc):
+            tg = game.overload_targets(me, card)
+            if sum(1 for t in tg if getattr(t, "controller", None) is not me) >= 2 and \
+                    sum(1 for t in tg if getattr(t, "controller", None) is me) <= 1:
+                return bool(game.cast_overload(me, card))
+        if full:
+            return False
+        # no puedo pagarla entera: prototype / emerge / warp / plot
+        if getattr(card, "prototype", None) and me.can_pay(card.prototype["cost"]):
+            return bool(game.cast_prototype(me, card))
+        if getattr(card, "emerge_cost", None) is not None and game.emerge_option(me, card):
+            return bool(game.cast_emerge(me, card))
+        wc = getattr(card, "warp_cost", None)
+        if wc is not None and me.can_pay(wc) and card.on_etb is not None:
+            return bool(game.cast_warp(me, card, targets=self.choose_targets(game, me, card)
+                                       if card.target_spec else None))
+        pc = getattr(card, "plot_cost", None)
+        if pc is not None and me.can_pay(pc):
+            return bool(game.plot_card(me, card))
+        return False
+
     # -- bestow / boca abajo / ninjutsu (bots) --------------------------- #
     def _maybe_bestow(self, game, me, card) -> bool:
         bc = getattr(card, "bestow_cost", None)
@@ -313,7 +344,13 @@ class Policy:
         for c in list(me.graveyard):
             if used >= 3:
                 break
-            if getattr(c, "gy_play", None) and game.play_from_graveyard(me, c):
+            gp = getattr(c, "gy_play", None)
+            if gp and gp.get("discard") == "land" and not (
+                    me.lands_played > 0 or sum(1 for x in me.hand if x.is_land()) >= 2):
+                continue                 # retrace: no tirar la tierra del turno
+            if gp and gp.get("discard") == "any" and len(me.hand) < 2:
+                continue
+            if gp and game.play_from_graveyard(me, c):
                 used += 1
         # jugar lo predicho/exiliado jugable
         for c in list(me.exile_play):

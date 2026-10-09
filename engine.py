@@ -48,7 +48,13 @@ KEYWORDS = {
     "shroud", "protection", "prowess", "infect", "toxic", "wither",
     "unblockable", "ward",
     "fear", "intimidate", "shadow", "skulk", "horsemanship", "flanking",
+    # landwalk: no puede ser bloqueada si el defensor controla una tierra así
+    "islandwalk", "swampwalk", "forestwalk", "mountainwalk", "plainswalk",
+    "desertwalk", "nonbasic_landwalk", "legendary_landwalk", "split_second",
 }
+
+_LANDWALK = {"islandwalk": "island", "swampwalk": "swamp", "forestwalk": "forest",
+             "mountainwalk": "mountain", "plainswalk": "plains", "desertwalk": "desert"}
 
 
 class ReactionPause(Exception):
@@ -101,6 +107,10 @@ class Cost:
 
     def color_identity(self) -> set:
         return {p for p in self.pips if p in COLORS}
+
+
+def _cmc_card(card) -> int:
+    return card.cost.cmc if getattr(card, "cost", None) is not None else 0
 
 
 def _cost_txt(c) -> str:
@@ -261,7 +271,9 @@ class Permanent:
         """No puede bloquear: marca propia, 'this creature can't block' de la carta
         o 'can't block this turn' (keyword temporal)."""
         return (self._cant_block or getattr(self.card, "cant_block_static", False)
-                or "cant_block" in self.temp_keywords)
+                or "cant_block" in self.temp_keywords
+                or (getattr(self.card, "unleash", False)
+                    and self.counters.get("+1/+1", 0) > 0))
 
     @cant_block.setter
     def cant_block(self, v):
@@ -334,7 +346,10 @@ class Permanent:
     def keywords(self) -> set:
         if self.abilities_off():
             return set()
-        return set(self.card.keywords) | self.temp_keywords | self.perma_keywords
+        ks = set(self.card.keywords) | self.temp_keywords | self.perma_keywords
+        if getattr(self.card, "cond_keywords", None):
+            ks |= self._cond_kws()
+        return ks
 
     def is_creature(self) -> bool:
         return self.card.is_creature() or self.temp_creature
@@ -356,10 +371,22 @@ class Permanent:
             return True
         return False
 
+    def _cond_kws(self) -> set:
+        out = set()
+        for k, cond in (getattr(self.card, "cond_keywords", None) or ()):
+            try:
+                if self.game is not None and cond(self):
+                    out.add(k)
+            except Exception:  # noqa: BLE001
+                pass
+        return out
+
     def has(self, kw: str) -> bool:
         if self.abilities_off():
             return False                 # perdió todas sus habilidades (mutación)
         if kw in self.card.keywords or kw in self.temp_keywords or kw in self.perma_keywords:
+            return True
+        if getattr(self.card, "cond_keywords", None) and kw in self._cond_kws():
             return True
         # keywords otorgadas por efectos estáticos (p. ej. Anger desde el cementerio)
         return self.game is not None and self.game.grants_keyword(self, kw)
@@ -432,8 +459,14 @@ class Player:
             if not self.library:
                 self.lost = True     # perder por deckout
                 return
-            self.hand.append(self.library.pop())
+            drawn = self.library.pop()
+            self.hand.append(drawn)
             self.draws_this_turn += 1
+            # Miracle: la PRIMERA carta que robás en el turno (de cualquiera)
+            if getattr(self, "_first_draw_turn", None) != game.turn:
+                self._first_draw_turn = game.turn
+                if getattr(drawn, "miracle_cost", None) is not None:
+                    game.try_miracle(self, drawn)
             # `count` = cuantas cartas van robadas este turno (para efectos como
             # el drenaje de Kang, que mira la SEGUNDA carta robada del turno).
             game.emit("draw", player=self, count=self.draws_this_turn)
@@ -740,6 +773,8 @@ class Game:
         # manifest, cloak) y criaturas lanzadas con bestow como Aura. Cada una
         # guarda la carta real en `_real`; si sale del campo vuelve la real.
         self._proxies: list = []
+        self.rebound: list = []          # (jugador, carta) a relanzar en su mantenimiento
+        self.warp_eot: list = []         # (jugador, carta) lanzadas por warp este turno
         self.dash_return: list = [] # criaturas jugadas por dash a devolver al fin de turno
         self.blitz_sac: list = []   # criaturas jugadas por blitz a sacrificar al fin de turno
         self.no_prevention_turn = False   # "el daño no se puede prevenir este turno"
@@ -1245,6 +1280,10 @@ class Game:
             if n:
                 perm.counters[kind] = perm.counters.get(kind, 0) + n
         player.battlefield.append(perm)
+        if not card.is_land():                # celebration: permanentes no tierra que entraron
+            if getattr(player, "_entered_turn", None) != self.turn:
+                player._entered_turn, player.entered_nonland = self.turn, 0
+            player.entered_nonland += 1
         if card.on_etb:
             self.note_ability(card, "entra al campo", controller=player)
             prev = self._fx_source
@@ -1258,6 +1297,22 @@ class Game:
                 self._fx_source = prev
                 self._fx_controller = prev_c
         self.emit("etb", player=player, perm=perm)
+        # Offspring (1 copia 1/1) / Squad (una copia por pago), si se pagaron
+        if not is_token and (getattr(card, "_offspring_paid", False)
+                             or getattr(card, "_squad_n", 0)):
+            import cards as _cards
+            n_off = 1 if card._offspring_paid else 0
+            n_sq = card._squad_n
+            card._offspring_paid, card._squad_n = False, 0
+            for _ in range(n_off):
+                c2 = copy.deepcopy(card)
+                c2.power = c2.toughness = 1
+                _cards.make_copy_token(self, player, c2)
+                self.log(f"{player.name} crea una copia 1/1 de {card.name} (offspring)")
+            for _ in range(n_sq):
+                _cards.make_copy_token(self, player, copy.deepcopy(card))
+            if n_sq:
+                self.log(f"{player.name} crea {n_sq} copia(s) de {card.name} (squad)")
         # daybound/nightbound: si entra una carta así y no es ni de día ni de noche,
         # se vuelve de día (regla 502/711).
         if self.day_night is None and (getattr(card, "daybound", False)
@@ -1281,10 +1336,23 @@ class Game:
         return perm
 
     def destroy(self, perm: Permanent, reason: str = ""):
-        """Respeta indestructible."""
+        """Respeta indestructible y umbra armor."""
         if perm.has("indestructible"):
             return
+        if self._umbra_save(perm):
+            return
         self.to_graveyard(perm, reason)
+
+    def _umbra_save(self, perm: Permanent) -> bool:
+        """Umbra armor / totem armor: si la criatura encantada sería destruida, en
+        su lugar se le quita todo el daño y se destruye el Aura."""
+        for src in self.all_permanents():
+            if src.enchanting is perm and getattr(src.card, "umbra_armor", False):
+                perm.damage = 0
+                self.log(f"{src.name} se destruye en lugar de {perm.name} (umbra armor)")
+                self.to_graveyard(src, "umbra armor")
+                return True
+        return False
 
     def to_graveyard(self, perm: Permanent, reason: str = ""):
         """Ignora indestructible. El comandante vuelve a la zona de mando.
@@ -1311,7 +1379,11 @@ class Game:
         exiled_instead = perm.card.is_creature() and (
             self._dies_to_exile(perm) or perm.counters.get("finality"))
         dies = perm.is_creature() and not exiled_instead
+        ctrl.left_turn = self.turn            # revolt: un permanente tuyo dejó el campo
+        if not perm.card.is_land():
+            self.nonland_left_turn = self.turn   # void
         if dies:
+            self.death_turn = self.turn       # morbid: murió una criatura este turno
             self.emit("death", player=ctrl, perm=perm)
         # disparo de muerte PROPIA: emit() escanea el campo y la carta ya no está,
         # así que su propio triggers["death"] (aristócratas "this creature or ...",
@@ -1501,6 +1573,12 @@ class Game:
         if isinstance(target, Player):
             if amount > 0:
                 self.damaged_players.add(target)   # bloodthirst: rival dañado este turno
+                if combat and src_perm:            # prowl: daño de combate con <tipo>
+                    sc = source.controller
+                    if getattr(sc, "_prowl_turn", None) != self.turn:
+                        sc._prowl_turn, sc.prowl_types = self.turn, set()
+                    sc.prowl_types |= {x.lower() for x in source.card.subtypes}
+                    sc.prowl_types.add("*")
             if src_perm and source.has("infect"):
                 target.poison += amount            # infect: veneno en vez de vida
             elif src_perm and source.has("toxic"):
@@ -1658,7 +1736,8 @@ class Game:
                         self.to_graveyard(perm, "resistencia 0")
                         changed = True
                     elif perm.damage >= perm.toughness and not perm.has("indestructible"):
-                        self.to_graveyard(perm, "daño letal")
+                        if not self._umbra_save(perm):
+                            self.to_graveyard(perm, "daño letal")
                         changed = True
             # planeswalkers sin lealtad
             for p in self.players:
@@ -1756,6 +1835,15 @@ class Game:
         cost = card.cost
         if cost is None:
             return None
+        # surge / spectacle / prowl: coste alternativo si se cumple la condición
+        # (solo sobre el coste impreso: no cuando ya se lanza por otro coste)
+        for _kind, alt, cond in (getattr(card, "alt_costs", None) or ()):
+            if card.cost is getattr(card, "_printed_cost", None) and alt.cmc < cost.cmc:
+                try:
+                    if cond(self, player, card):
+                        cost = alt
+                except Exception:  # noqa: BLE001
+                    pass
         # "si controlás un comandante, podés lanzarlo sin pagar su coste de maná"
         if getattr(card, "free_with_commander", False) and any(
                 player.is_commander(pm.card) for pm in player.battlefield):
@@ -1845,6 +1933,24 @@ class Game:
             if player.can_pay(bb_cost):
                 pay_cost = bb_cost
                 card._buyback_used = True
+        # Offspring {N} / Squad {N}: costes adicionales opcionales (auto si alcanza):
+        # al entrar crea 1 copia 1/1 (offspring) o una copia por pago (squad).
+        card._offspring_paid = False
+        card._squad_n = 0
+        for _attr in ("offspring_cost", "squad_cost"):
+            oc = getattr(card, _attr, None)
+            if oc is None or pay_cost is None:
+                continue
+            reps_ = 1 if _attr == "offspring_cost" else 3
+            for _ in range(reps_):
+                trial = Cost(generic=pay_cost.generic + oc.generic, pips=pay_cost.pips + oc.pips)
+                if not player.can_pay(trial):
+                    break
+                pay_cost = trial
+                if _attr == "offspring_cost":
+                    card._offspring_paid = True
+                else:
+                    card._squad_n += 1
         # Replicate {N}: se paga cuantas veces se pueda (auto); cada pago copia el
         # hechizo. Se suma al genérico y se anota el número de copias.
         card._replicate_copies = 0
@@ -1859,6 +1965,28 @@ class Game:
         excl = set(convoke_tap)
         if not player.can_pay(pay_cost, exclude=excl):
             return False
+        # Casualty N / Bargain: sacrificios OPCIONALES (auto: solo fichas o lo de
+        # menor valor que no sea el comandante).
+        card._casualty_copy = False
+        card._bargained = False
+        cas_victim = barg_victim = None
+        if getattr(card, "casualty", 0):
+            cands = [pm for pm in player.creatures() if pm.power >= card.casualty
+                     and not player.is_commander(pm.card) and pm.card is not card]
+            cands = [pm for pm in cands if pm.is_token or pm.power + pm.toughness <= 4]
+            if cands:
+                cas_victim = min(cands, key=lambda pm: (not pm.is_token,
+                                                        pm.power + pm.toughness))
+        if getattr(card, "bargain", False):
+            cands = [pm for pm in player.battlefield if pm.is_token or (
+                not pm.is_creature() and not pm.card.is_land()
+                and ({"artifact", "enchantment"} & pm.card.types)
+                and not player.is_commander(pm.card))]
+            cands = [pm for pm in cands if pm is not cas_victim
+                     and (pm.is_token or pm.card.produces is None)]
+            if cands:
+                barg_victim = min(cands, key=lambda pm: (not pm.is_token,
+                                                         _cmc_card(pm.card)))
         # coste adicional al lanzar (pagar vida / descartar / sacrificar): se
         # VALIDA todo antes de pagar nada; si falta algo, el hechizo no se lanza
         # (antes se lanzaba igual sin víctima, o el sacrificio se llevaba la fuente
@@ -1880,6 +2008,14 @@ class Game:
         # maná primero: una fuente girada (p. ej. un elfo) igual puede sacrificarse
         if not player.pay(pay_cost, exclude=excl):
             return False
+        if cas_victim is not None and cas_victim in player.battlefield:
+            self.to_graveyard(cas_victim, "casualty")
+            card._casualty_copy = True
+            self.log(f"{player.name} sacrifica {cas_victim.name} (casualty): copia el hechizo")
+        if barg_victim is not None and barg_victim in player.battlefield:
+            self.to_graveyard(barg_victim, "bargain")
+            card._bargained = True
+            self.log(f"{player.name} sacrifica {barg_victim.name} (bargain)")
         # consumir recursos de las reducciones dinámicas
         for pm in convoke_tap:
             pm.tapped = True
@@ -1897,6 +2033,7 @@ class Game:
                 player.command.remove(card)
             player.add_tax(card)
         else:
+            card._cast_from_hand = card in player.hand
             if card in player.hand:
                 player.hand.remove(card)
 
@@ -1924,7 +2061,9 @@ class Game:
         storm_copies = self.spells_this_turn if (getattr(card, "tags", set())
                                                  and "storm" in card.tags) else 0
         storm_copies += getattr(card, "_replicate_copies", 0) or 0
+        storm_copies += 1 if getattr(card, "_casualty_copy", False) else 0
         self.spells_this_turn += 1
+        player.spells_cast_turn = getattr(player, "spells_cast_turn", 0) + 1
         # Buyback: si se pagó el coste adicional de buyback, la carta vuelve a la mano.
         buyback_used = bool(getattr(card, "_buyback_used", False))
         card._cast_x = cast_x            # las copias del hechizo conservan su X
@@ -1956,8 +2095,18 @@ class Game:
                     reps = 1 + storm_copies      # storm: repetir el efecto por copia
                     if storm_copies:
                         g.log(f"Storm: {card.name} se copia {storm_copies} vez(ces)")
+                    eff = card.on_cast_resolve
+                    if getattr(card, "_overloaded", False) and \
+                            getattr(card, "overload_effect", None) is not None:
+                        eff = card.overload_effect
+                        g.log(f"{card.name} con sobrecarga (overload)")
+                    if getattr(card, "_bargained", False) and \
+                            getattr(card, "bargain_effect", None) is not None:
+                        be = card.bargain_effect
+                        eff = be if getattr(card, "bargain_instead", False) else (
+                            lambda gg, pp, tt, _a=eff, _b=be: (_a(gg, pp, tt), _b(gg, pp, tt)))
                     for _ in range(reps):
-                        card.on_cast_resolve(g, player, targets or [])
+                        eff(g, player, targets or [])
                 else:
                     # carta sin efecto modelado (mecánica compleja): que al menos se
                     # vea que se resolvió, en vez de "no pasó nada".
@@ -1967,9 +2116,18 @@ class Game:
                 if getattr(card, "_kicked", False) and getattr(card, "_kicked_effect", None):
                     g.log(f"{card.name} fue kickeado: bono")
                     card._kicked_effect(g, player)
+                card._overloaded = False
+                # Rebound: lanzada desde la mano -> al exilio y en tu próximo
+                # mantenimiento se lanza gratis.
+                if (getattr(card, "rebound", False) and getattr(card, "_cast_from_hand", False)
+                        and not getattr(card, "_exile_after_cast", False)):
+                    card._cast_from_hand = False
+                    player.exile.append(card)
+                    g.rebound.append((player, card))
+                    g.log(f"{card.name} se exilia (rebound): se relanza en el próximo mantenimiento")
                 # Flashback/escape: al dejar la pila va al exilio (aunque la
                 # resolución ocurra después de una pausa de reacción del humano).
-                if getattr(card, "_exile_after_cast", False):
+                elif getattr(card, "_exile_after_cast", False):
                     card._exile_after_cast = False
                     player.exile.append(card)
                     g.log(f"{card.name} se exilia tras lanzarse desde el cementerio")
@@ -2014,6 +2172,40 @@ class Game:
             raise ReactionPause(obj if obj is not None else self.stack[-1])
         self._run_priority_and_resolve()
         return True
+
+    def ability_allowed(self, perm: Permanent, index: int, ab: dict) -> bool:
+        """Exhaust / Power-up: una sola vez. Boast: solo si atacó este turno y una
+        vez por turno. 'Activate only if …': la condición."""
+        used = getattr(perm, "_abil_used", None) or {}
+        if ab.get("once") and used.get(index):
+            return False
+        if ab.get("boast"):
+            if getattr(perm, "attacked_turn", None) != self.turn:
+                return False
+            if used.get(index) == self.turn:
+                return False
+        if ab.get("once_turn") and used.get(index) == self.turn:
+            return False
+        cond = ab.get("only_if")
+        if cond is not None:
+            try:
+                if not cond(self, perm.controller):
+                    return False
+            except Exception:  # noqa: BLE001
+                return False
+        return True
+
+    def _mark_ability_used(self, perm: Permanent, index: int, ab: dict):
+        if ab.get("once") or ab.get("boast") or ab.get("once_turn"):
+            if getattr(perm, "_abil_used", None) is None:
+                perm._abil_used = {}
+            perm._abil_used[index] = True if ab.get("once") else self.turn
+
+    def split_second_on_stack(self) -> bool:
+        return any(str(getattr(o, "label", "")).startswith("spell:")
+                   and "split_second" in (getattr(getattr(o, "source", None), "keywords",
+                                                  None) or ())
+                   for o in self.stack)
 
     def _uncounterable(self, obj, card) -> bool:
         if getattr(card, "uncounterable", False):
@@ -2078,6 +2270,13 @@ class Game:
                     self.stack.clear()
                     break
                 responded = False
+                # split second: mientras esté en la pila, nadie puede responder
+                if self.split_second_on_stack():
+                    top = self.stack.pop()
+                    if not top.controller.lost:
+                        top.resolve(self)
+                    self.sba()
+                    continue
                 # el controlador del tope puede copiar su PROPIO hechizo (Fork/Twincast)
                 top = self.stack[-1]
                 ctrl = getattr(top, "controller", None)
@@ -2170,6 +2369,8 @@ class Game:
         lr = ab.get("level_req")
         if lr is not None and perm.counters.get("level", 1) != lr - 1:
             return False
+        if not self.ability_allowed(perm, index, ab):
+            return False
         # habilidad con {X}: el coste efectivo suma X maná genérico.
         base_cost = ab.get("cost")
         xv = max(0, int(x)) if ab.get("x_cost") else 0
@@ -2194,6 +2395,9 @@ class Game:
         if rmc and perm.counters.get(rmc["name"], 0) < rmc["n"]:
             return False   # sin contadores suficientes para pagar el coste
         ctrl.pay(pay_cost, exclude=excl)
+        self._mark_ability_used(perm, index, ab)
+        if ab.get("exert_self"):
+            perm.exerted = True          # no se endereza en tu próximo enderezar
         if rmc:
             perm.counters[rmc["name"]] = perm.counters.get(rmc["name"], 0) - rmc["n"]
             self.log(f"{ctrl.name} quita {rmc['n']} contador(es) {rmc['name']} "
@@ -2513,7 +2717,30 @@ class Game:
             return False
         if cost is not None and not p.can_pay(cost):
             return False
+        # retrace (descartar una tierra) / jump-start (descartar una carta)
+        disc_kind = gp.get("discard")
+        disc_pool = []
+        if disc_kind:
+            disc_pool = [c for c in p.hand if disc_kind == "any" or c.is_land()]
+            if not disc_pool:
+                return False
         m, after = gp.get("mode"), gp.get("after")
+        def _discard_for_play():
+            if not disc_pool:
+                return
+            pol = p.policy
+            pick = None
+            if disc_kind == "any" and pol is not None and hasattr(pol, "choose_discard"):
+                try:
+                    pick = pol.choose_discard(self, p)
+                except Exception:  # noqa: BLE001
+                    pick = None
+                if pick not in disc_pool:
+                    pick = None
+            pick = pick or min(disc_pool, key=lambda c: (not c.is_land(), _cmc_card(c)))
+            p.hand.remove(pick)
+            self.log(f"{p.name} descarta {pick.name} ({m})")
+            self.discard_card(p, pick)
         if m == "aftermath":
             # secuela: se lanza SÓLO desde el cementerio, resuelve su efecto y exilia.
             if cost is not None:
@@ -2551,6 +2778,7 @@ class Game:
         if not is_spell and after != "hand":
             if cost is not None:
                 p.pay(cost)
+            _discard_for_play()
             p.graveyard.remove(card)
             perm = self.move_to_battlefield(card, p)
             if perm is None:
@@ -2576,9 +2804,10 @@ class Game:
         # La carta queda marcada para ir al exilio cuando deje la pila: si cast()
         # pausa por una reacción del humano (ReactionPause), el código de abajo no
         # corre, y antes la carta volvía al cementerio y se relanzaba.
+        _discard_for_play()
         p.graveyard.remove(card)
         orig = card.cost
-        card._exile_after_cast = True
+        card._exile_after_cast = after != "graveyard"
         ok = False
         try:
             if cost is not None:
@@ -2604,6 +2833,8 @@ class Game:
         acotado) pagando su coste alternativo `_play_cost`."""
         if card not in p.exile_play:
             return False
+        if getattr(card, "_plot_turn", None) == self.turn:
+            return False                 # plot: en un turno POSTERIOR
         cost = getattr(card, "_play_cost", None) or card.cost
         if cost is not None and not p.can_pay(cost):
             return False
@@ -3091,6 +3322,208 @@ class Game:
                 except Exception:  # noqa: BLE001
                     pass
 
+    # -- lanzamientos alternativos (batch 2) ------------------------------ #
+    def _cast_with(self, p: "Player", card: Card, cost, targets=None, chosen_modes=None,
+                   remove_from=None):
+        """Lanza `card` pagando `cost` en vez de su coste (restaura el coste
+        impreso). `remove_from`: zona de la que sale (si no es la mano)."""
+        if remove_from is not None and card in remove_from:
+            remove_from.remove(card)
+        orig = card.cost
+        ok = False
+        try:
+            card.cost = cost
+            ok = self.cast(p, card, targets=targets, chosen_modes=chosen_modes)
+        except ReactionPause:
+            ok = True
+            raise
+        finally:
+            card.cost = orig
+            if ok is False and remove_from is not None and card not in remove_from:
+                remove_from.append(card)
+        return ok is not False
+
+    def _auto_targets(self, p, card):
+        pol = p.policy
+        if getattr(card, "target_spec", None) and pol is not None \
+                and hasattr(pol, "choose_targets"):
+            try:
+                return pol.choose_targets(self, p, card)
+            except Exception:  # noqa: BLE001
+                return None
+        return None
+
+    def _tick_rebound(self, p: "Player"):
+        for entry in list(self.rebound):
+            owner, card = entry
+            if owner is not p:
+                continue
+            self.rebound.remove(entry)
+            if card not in p.exile:
+                continue
+            p.exile.remove(card)
+            self.log(f"{p.name} relanza {card.name} (rebound, gratis)")
+            card._cast_from_hand = False
+            card._exile_after_cast = False
+            ok = self._cast_with(p, card, None, targets=self._auto_targets(p, card))
+            if not ok and card not in p.graveyard:
+                p.graveyard.append(card)
+
+    def overload_targets(self, p: "Player", card: Card) -> list:
+        """Todo lo que podría ser objetivo del hechizo (overload no apunta)."""
+        pred = self._SPEC_OK.get(getattr(card, "target_spec", None) or "")
+        if pred is None:
+            return []
+        if card.target_spec == "opp_player":
+            return [o for o in self.opponents(p)]
+        pls = self.opponents(p) if getattr(card, "overload_opp", False) else self.players
+        return [pm for pl in pls for pm in pl.battlefield if pred(pm)]
+
+    def cast_overload(self, p: "Player", card: Card) -> bool:
+        """Overload: pagá el coste de sobrecarga; 'target' pasa a ser 'each' (el
+        efecto se aplica a todo lo que podría ser objetivo)."""
+        oc = getattr(card, "overload_cost", None)
+        if oc is None or card not in p.hand or not p.can_pay(oc):
+            return False
+        tgs = self.overload_targets(p, card)
+        card._overloaded = True
+        self.log(f"{p.name} lanza {card.name} con sobrecarga")
+        ok = self._cast_with(p, card, oc, targets=tgs)
+        card._overloaded = False
+        return ok
+
+    def try_miracle(self, p: "Player", card: Card):
+        """Miracle: si es la primera carta que robás en el turno, podés lanzarla
+        por su coste de milagro (humano elige; bots si pueden pagarla)."""
+        mc = getattr(card, "miracle_cost", None)
+        if mc is None or card not in p.hand or not p.can_pay(mc):
+            return
+
+        def _do(g=self, c=p):
+            if card in c.hand and c.can_pay(mc):
+                g.log(f"{c.name} revela {card.name}: ¡milagro!")
+                g._cast_with(c, card, mc, targets=g._auto_targets(c, card))
+        if p is getattr(self, "interactive_human", None):
+            self.may(p, f"Milagro: ¿lanzar {card.name} por {_cost_txt(mc)}?",
+                     lambda g, c: _do())
+            return
+        _do()
+
+    def plot_card(self, p: "Player", card: Card) -> bool:
+        """Plot: pagá el coste de plot y exiliala; en un turno POSTERIOR la podés
+        lanzar gratis (a velocidad de conjuro)."""
+        pc = getattr(card, "plot_cost", None)
+        if pc is None or card not in p.hand or not p.can_pay(pc):
+            return False
+        p.pay(pc)
+        p.hand.remove(card)
+        card._play_cost = Cost(0, ())
+        card._plot_turn = self.turn
+        p.exile_play.append(card)
+        self.log(f"{p.name} planea (plot) {card.name}")
+        return True
+
+    def cast_warp(self, p: "Player", card: Card, targets=None) -> bool:
+        """Warp: lanzala por su coste de warp; al final del turno se exilia y la
+        podés volver a lanzar después desde el exilio."""
+        wc = getattr(card, "warp_cost", None)
+        if wc is None or card not in p.hand or not p.can_pay(wc):
+            return False
+        ok = self._cast_with(p, card, wc, targets=targets)
+        if ok:
+            self.warped_turn = self.turn
+            if card.is_creature() or {"artifact", "enchantment"} & card.types:
+                self.warp_eot.append((p, card))
+        return ok
+
+    def cast_prototype(self, p: "Player", card: Card) -> bool:
+        """Prototype: lanzala con el coste y la F/R menores (sustituta)."""
+        pr = getattr(card, "prototype", None)
+        if not pr or card not in p.hand or not p.can_pay(pr["cost"]):
+            return False
+        px = copy.copy(card)
+        px.cost = pr["cost"]
+        px.power, px.toughness = pr["p"], pr["t"]
+        px.tags = set(px.tags) | {"prototype", f"_px{_next_uid()}"}
+        px._real = card
+        px._owner = p
+        self._proxies.append(px)
+        p.hand.remove(card)
+        ok = False
+        try:
+            ok = self.cast(p, px)
+        except ReactionPause:
+            ok = True
+            raise
+        finally:
+            if ok is False:
+                self._drop_proxy(px)
+                p.hand.append(card)
+        return ok is not False
+
+    def emerge_option(self, p: "Player", card: Card):
+        """(víctima, coste) para Emerge: sacrificar una criatura y restar su valor de
+        maná del coste de emerge. La IA elige la de mejor descuento entre las de
+        menor valor (nunca el comandante)."""
+        ec = getattr(card, "emerge_cost", None)
+        if ec is None or card not in p.hand:
+            return None
+        best = None
+        for pm in p.creatures():
+            if p.is_commander(pm.card) or pm.is_token:
+                continue
+            red = _cmc_card(getattr(pm.card, "_real", None) or pm.card)
+            cost = Cost(generic=max(0, ec.generic - red), pips=ec.pips)
+            if not p.can_pay(cost):
+                continue
+            key = (pm.power + pm.toughness - red, cost.cmc)
+            if best is None or key < best[0]:
+                best = (key, pm, cost)
+        return (best[1], best[2]) if best else None
+
+    def cast_emerge(self, p: "Player", card: Card, victim=None) -> bool:
+        opt = self.emerge_option(p, card)
+        if opt is None:
+            return False
+        vic, cost = opt
+        if victim is not None and victim in p.battlefield:
+            red = _cmc_card(getattr(victim.card, "_real", None) or victim.card)
+            vic, cost = victim, Cost(generic=max(0, card.emerge_cost.generic - red),
+                                     pips=card.emerge_cost.pips)
+        self.to_graveyard(vic, "emerge")
+        self.log(f"{p.name} sacrifica {vic.name} (emerge)")
+        return self._cast_with(p, card, cost)
+
+    def exploit(self, ctrl: "Player", perm: Permanent, effect):
+        """Exploit: al entrar, podés sacrificar una criatura; si lo hacés, su
+        efecto. Bots: una ficha o una criatura chica (o ella misma si no hay
+        otra y el efecto vale más). Humano: elige."""
+        pool = [pm for pm in ctrl.creatures() if not ctrl.is_commander(pm.card)]
+
+        def _sac(victim, g=self):
+            if victim is None or victim not in victim.controller.battlefield:
+                return
+            g.to_graveyard(victim, "exploit")
+            g.log(f"{ctrl.name} explota (exploit) {victim.name}")
+            if effect is not None:
+                g._run_trigger(lambda gg, pm, **kw: effect(gg, ctrl, pm), perm, {},
+                               subject=victim)
+            g.sba()
+        if ctrl is getattr(self, "interactive_human", None):
+            opts = [{"i": 0, "name": "No sacrificar"}] + [
+                {"i": k + 1, "name": f"{pm.name} {pm.power}/{pm.toughness}"}
+                for k, pm in enumerate(pool)]
+            self.pending_choice = {
+                "kind": "may", "prompt": "Exploit: ¿sacrificar una criatura?",
+                "options": opts, "allow_none": False,
+                "_apply": lambda idx, _p=pool: _sac(_p[idx - 1]) if idx else None,
+            }
+            return
+        cheap = [pm for pm in pool if pm is not perm
+                 and (pm.is_token or pm.power + pm.toughness <= 3)]
+        if cheap:
+            _sac(min(cheap, key=lambda pm: (not pm.is_token, pm.power + pm.toughness)))
+
     def activate_gy_ability(self, p: "Player", card: Card, index: int = 0) -> bool:
         """Activa una habilidad de una carta EN EL CEMENTERIO (`gy_abilities`)."""
         abs_ = getattr(card, "gy_abilities", ()) or ()
@@ -3149,6 +3582,18 @@ class Game:
             if not perm.has("vigilance"):
                 perm.tapped = True
             declared.append(perm)
+            p.attacked_turn = self.turn          # raid: atacaste este turno
+            perm.attacked_turn = self.turn       # boast: esta criatura atacó
+            # Exert: "podés agotarla al atacar" -> no se endereza en tu próximo
+            # enderezar y dispara su bono. Bots y humano la agotan (auto).
+            if getattr(perm.card, "exert_effect", None) is not None and \
+                    not getattr(perm, "exerted", False):
+                perm.exerted = True
+                self.log(f"{p.name} agota (exert) a {perm.name}")
+                ex = perm.card.exert_effect
+                self._run_fx(f"exert {perm.name}",
+                             lambda _e=ex, _pm=perm: self._run_trigger(
+                                 lambda g, pm, **kw: _e(g, p, pm), _pm, {}, subject=_pm))
             # registrar el ataque para que se vea en el relato/resumen (antes no
             # quedaba nada, y los ataques a un planeswalker parecían daño de la nada)
             if isinstance(defender, Player):
@@ -3308,6 +3753,19 @@ class Game:
             return False
         if attacker.has("skulk") and blocker.power > attacker.power:
             return False
+        # landwalk: si el DEFENSOR controla una tierra de ese tipo, no se bloquea
+        dfn = blocker.controller
+        lands = [pm for pm in dfn.battlefield if pm.card.is_land()]
+        for kw, sub in _LANDWALK.items():
+            if attacker.has(kw) and any(pm.has_subtype(sub) or pm.name.lower() == sub
+                                        for pm in lands):
+                return False
+        if attacker.has("nonbasic_landwalk") and any(
+                "basic" not in pm.card.supertypes for pm in lands):
+            return False
+        if attacker.has("legendary_landwalk") and any(
+                "legendary" in pm.card.supertypes for pm in lands):
+            return False
         return True
 
     def _ai_block(self, defender: "Player", declared: list):
@@ -3457,6 +3915,8 @@ class Game:
         for perm in p.battlefield:
             if getattr(perm, "frozen", False):
                 perm.frozen = False          # "no se endereza en su próximo enderezar": salta uno
+            elif getattr(perm, "exerted", False):
+                perm.exerted = False         # exert: no se endereza esta vez
             else:
                 perm.tapped = False
             perm.summoning_sick = False
@@ -3468,6 +3928,10 @@ class Game:
         # evalúa antes de reiniciar el contador de hechizos.
         self._update_day_night(p)
         self.spells_this_turn = 0    # para storm (hechizos lanzados este turno)
+        # "este turno" para palabras de habilidad (raid, spectacle, surge…)
+        for pl in self.players:
+            pl.spells_cast_turn = 0
+        self._life_start = {id(pl): pl.life for pl in self.players}
         self.damaged_players = set() # para bloodthirst (rivales dañados este turno)
         self.extra_combats = 0       # fases de combate adicionales se agotan por turno
         p.mana_pool = 0              # el maná flotante se vacía al empezar el turno
@@ -3480,6 +3944,7 @@ class Game:
 
         # UPKEEP
         self._tick_suspended(p)          # quita contadores de tiempo (suspend)
+        self._tick_rebound(p)            # rebound: relanzar gratis desde el exilio
         self._tick_upkeep_counters(p)    # fading / vanishing / cumulative upkeep
         self.emit("upkeep", player=p)
         # "at the beginning of EACH player's upkeep": sin alcance (dispara para todos)
@@ -3559,6 +4024,21 @@ class Game:
                         self.log(f"{card.name} vuelve a la mano (dash)")
                         break
             dret.clear()
+        # Warp: lo lanzado por warp se exilia al final del turno y queda jugable
+        # desde el exilio por su coste normal en un turno posterior.
+        if self.warp_eot:
+            for owner, card in list(self.warp_eot):
+                for perm in list(owner.battlefield):
+                    if perm.card is card:
+                        owner.battlefield.remove(perm)
+                        if perm.card.on_leave:
+                            self._run_fx(f"on_leave {perm.name}",
+                                         lambda _pm=perm, _o=owner: _pm.card.on_leave(self, _o, _pm))
+                        card._play_cost = card.cost
+                        owner.exile_play.append(card)
+                        self.log(f"{card.name} se exilia (warp): se puede volver a lanzar")
+                        break
+            self.warp_eot.clear()
         # Blitz: se sacrifican al fin del turno (y su muerte roba una carta).
         bsac = getattr(self, "blitz_sac", None)
         if bsac:
@@ -3581,6 +4061,11 @@ class Game:
                 perm.return_to = None
             self.control_returns.clear()
         self.sba()
+        # sacrificios / exilios de fin de turno (blitz, warp, unearth) pueden
+        # disparar habilidades (muerte, deja el campo): resolverlas ahora
+        if self.stack:
+            self.resolve_stack()
+            self.sba()
 
     def run_turn(self):
         p = self.ap()

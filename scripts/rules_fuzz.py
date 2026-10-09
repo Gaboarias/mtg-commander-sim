@@ -102,7 +102,15 @@ class Checker:
 # boca abajo (morph, disguise, manifest, cloak, bestow, ninjutsu, madness,
 # suspend) de su identidad, para estresar esas reglas.
 MECH_KWS = {"Morph", "Megamorph", "Disguise", "Manifest", "Manifest dread", "Cloak",
-            "Bestow", "Ninjutsu", "Commander ninjutsu", "Madness", "Suspend"}
+            "Bestow", "Ninjutsu", "Commander ninjutsu", "Madness", "Suspend",
+            # batch 2
+            "Landwalk", "Split second", "Umbra armor", "Totem armor", "Unleash", "Exert",
+            "Exhaust", "Boast", "Power-up", "Raid", "Morbid", "Hellbent", "Threshold",
+            "Delirium", "Metalcraft", "Ferocious", "Spell mastery", "Revolt", "Corrupted",
+            "Coven", "Celebration", "Descend", "Formidable", "Rebound", "Overload",
+            "Retrace", "Jump-start", "Miracle", "Plot", "Warp", "Prototype", "Surge",
+            "Spectacle", "Prowl", "Emerge", "Exploit", "Offspring", "Squad", "Casualty",
+            "Bargain"}
 _MECH_POOL = None
 
 

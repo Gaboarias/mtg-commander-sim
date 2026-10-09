@@ -26,7 +26,10 @@ _RULE_ALIAS = {"cycling": re.compile(r"cycling$"), "landwalk": re.compile(r"walk
 
 
 _DECK_RULES = {"partner", "partner with", "choose a background", "doctor's companion",
-               "friends forever", "commander tax", "commander damage"}
+               "friends forever", "commander tax", "commander damage",
+               # estructurales: los aplica el tipo de la carta (Aura) o no cambian el
+               # juego del simulador (devoid = incolora; la identidad no cambia)
+               "enchant", "devoid"}
 
 
 def _rule_for(name, rules):

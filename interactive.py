@@ -372,6 +372,8 @@ class InteractiveGame:
         a un permanente suyo, o es un barrido) y tiene con qué responder."""
         if not self._react_armed:
             return False
+        if self.g.split_second_on_stack():
+            return False                 # split second: nadie responde
         hu = self.human()
         if caster is hu or hu.lost or hu not in self.g.opponents(caster):
             return False
@@ -873,6 +875,22 @@ class InteractiveGame:
             if i is not None and 0 <= i < len(p.hand):
                 self.g.suspend_card(p, p.hand[i])
             return self.state()
+        if zone in ("overload", "plot", "warp", "prototype", "emerge"):
+            if i is not None and 0 <= i < len(p.hand):
+                c = p.hand[i]
+                if zone == "overload":
+                    self.g.cast_overload(p, c)
+                elif zone == "plot":
+                    self.g.plot_card(p, c)
+                elif zone == "warp":
+                    tg = self._chosen_targets(c, target_uids) if c.target_spec else None
+                    self.g.cast_warp(p, c, targets=tg)
+                elif zone == "prototype":
+                    self.g.cast_prototype(p, c)
+                else:
+                    self.g.cast_emerge(p, c)
+                self.g.sba()
+            return self.state()
         if zone == "face_down":   # morph/disguise: boca abajo por {3}
             if i is not None and 0 <= i < len(p.hand):
                 self.g.cast_face_down(p, p.hand[i])
@@ -1209,6 +1227,8 @@ class InteractiveGame:
                 pc = getattr(c, "_play_cost", None) or c.cost
                 playable = (c.is_land() and p.lands_played < self.g.land_limit(p)) or \
                            (not c.is_land() and (pc is None or p.can_pay(pc)))
+                if getattr(c, "_plot_turn", None) == self.g.turn:
+                    playable = False         # plot: en un turno posterior
                 exile_play.append({"i": i, "name": c.name,
                                    "cost": _cost_str_cost(pc) if pc else "0",
                                    "is_land": c.is_land(), "playable": playable})
@@ -1293,6 +1313,27 @@ class InteractiveGame:
                         "target_count": 1, "targets": _bt, "modes": [], "mode_pick": 1,
                         **({} if _bt else {"castable": False,
                                            "reason": "Sin criaturas para encantar"})})
+                # batch 2: overload / plot / warp / prototype / emerge
+                for _z, _lbl, _co in (
+                        ("overload", "sobrecarga", getattr(c, "overload_cost", None)),
+                        ("plot", "plot: jugarla en otro turno gratis",
+                         getattr(c, "plot_cost", None)),
+                        ("warp", "warp", getattr(c, "warp_cost", None)),
+                        ("prototype", "prototipo", (getattr(c, "prototype", None) or {}).get("cost"))):
+                    if _co is not None and p.can_pay(_co):
+                        _tg = self._targets_for(c) if _z == "warp" else []
+                        casts.append({
+                            "i": i, "name": f"{c.name} ({_lbl})", "zone": _z,
+                            "cost": _cost_str_cost(_co),
+                            "target_spec": getattr(c, "target_spec", None) if _z == "warp" else None,
+                            "target_count": getattr(c, "target_count", 1), "targets": _tg,
+                            "modes": [], "mode_pick": 1})
+                _em = self.g.emerge_option(p, c) if getattr(c, "emerge_cost", None) else None
+                if _em:
+                    casts.append({
+                        "i": i, "name": f"{c.name} (emerge: sacrificar {_em[0].name})",
+                        "zone": "emerge", "cost": _cost_str_cost(_em[1]), "target_spec": None,
+                        "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
                 # Cycling: descartar por robar una carta.
                 _cy = getattr(c, "cycling", None)
                 if _cy and p.can_pay(_cy):
@@ -1374,6 +1415,10 @@ class InteractiveGame:
                     reason = "recién invocada"
                 elif not p.can_pay(ab.get("cost"), exclude={pm} if ab.get("tap") else None):
                     reason = "sin maná"
+                elif not self.g.ability_allowed(pm, i, ab):
+                    reason = ("ya usada" if ab.get("once") or ab.get("once_turn")
+                              else "no atacó este turno" if ab.get("boast")
+                              else "condición no cumplida")
                 else:
                     reason = self._extra_cost_reason(p, pm, ab)
                 spec = ab.get("target_spec")
