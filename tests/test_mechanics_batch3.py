@@ -368,3 +368,94 @@ def test_ascend_blessing():
     g.sba()
     asc = next(p for p in me.battlefield if p.name == "Asc")
     assert me.citys_blessing and asc.has("flying")
+
+
+# ── batch 4A: huecos comunes ───────────────────────────────────────────── #
+
+def test_aura_keeps_its_etb():
+    g, me, ops = new_game()
+    host = put(g, creature("Bear", "1G", 2, 2), me)
+    me.library += [creature(f"L{k}", "1", 1, 1) for k in range(3)]
+    au = build("Aura Draw", "{1}{U}", "Enchantment — Aura",
+               "Enchant creature\nWhen this Aura enters, draw a card.\nEnchanted creature gets +1/+1.",
+               keywords=["Enchant"])
+    h = len(me.hand)
+    put(g, au, me)
+    assert len(me.hand) == h + 1 and host.power == 3
+
+
+def test_equipment_attaches_on_enter():
+    g, me, ops = new_game()
+    host = put(g, creature("Bear", "1G", 2, 2), me)
+    eq = build("Auto Sword", "{2}", "Artifact — Equipment",
+               "When this Equipment enters, attach it to target creature you control.\n"
+               "Equipped creature gets +2/+0.\nEquip {3}")
+    pm = put(g, eq, me)
+    assert pm.enchanting is host and host.power == 4
+
+
+def test_leaves_and_enters_or_dies():
+    g, me, ops = new_game()
+    c = build("Leaver", "{2}", "Creature — Human", "When this creature leaves the battlefield, "
+              "create a Food token.", 2, 2)
+    pm = put(g, c, me)
+    g.destroy(pm); g.sba(); run(g)
+    assert any(p.name.lower() == "food" for p in me.battlefield)
+    g, me, ops = new_game()
+    d = build("Dier", "{2}", "Creature — Human", "When this creature enters or dies, you gain 2 "
+              "life.", 2, 2)
+    life = me.life
+    pm = put(g, d, me)
+    assert me.life == life + 2
+    g.destroy(pm); g.sba(); run(g)
+    assert me.life == life + 4
+
+
+def test_you_may_and_it_connives_and_energy():
+    g, me, ops = new_game()
+    c = build("Quester", "{2}", "Enchantment", "Whenever a land you control enters, you may put a "
+              "quest counter on this enchantment.")
+    pm = put(g, c, me)
+    put(g, land("Forest", [G], basic=True), me)
+    assert pm.counters.get("quest") == 1
+    c2 = build("Conniver", "{2}", "Creature — Rogue", "When this creature enters, it connives.", 2, 2)
+    me.library.append(creature("Spell", "1R", 1, 1))
+    pm2 = put(g, c2, me)
+    assert pm2.counters.get("+1/+1", 0) in (0, 1) and any("connive" in l for l in g.log_lines)
+    c3 = build("Energizer", "{2}", "Creature — Human", "When this creature enters, you get {E}{E}.", 2, 2)
+    put(g, c3, me)
+    assert me.energy == 2
+
+
+def test_affinity_for_creatures_and_domain():
+    g, me, ops = new_game()
+    for k in range(3):
+        put(g, creature(f"B{k}", "1G", 1, 1), me)
+    af = build("Aff", "{6}{G}", "Creature — Elemental", "Affinity for creatures", 5, 5,
+               keywords=["Affinity"])
+    assert g.effective_cost(me, af).cmc == 4
+    dm = build("Dom", "{5}{G}", "Sorcery", "Domain — This spell costs {1} less to cast for each "
+               "basic land type among lands you control.\nDraw a card.")
+    put(g, land("Forest", [G], basic=True), me)
+    put(g, land("Island", [U], basic=True), me)
+    assert g.effective_cost(me, dm).cmc == 4
+
+
+def test_role_token_and_discover_and_clash():
+    import cardsdb
+    g, me, ops = new_game()
+    rl = build("Royal Gift", "{1}{W}", "Creature — Human",
+               "When this creature enters, create a Monster Role token attached to it.", 2, 2)
+    pm = put(g, rl, me)
+    assert pm.power == 3 and pm.has("trample")
+    me.library.append(build("Cheap", "{1}{G}", "Sorcery", "You gain 3 life."))
+    life = me.life
+    cardsdb._effect_any("Discover 3.")(g, me)
+    run(g)
+    assert me.life == life + 3
+    cl = build("Clasher", "{2}", "Creature — Giant",
+               "When this creature enters, clash with an opponent. If you win, put a +1/+1 "
+               "counter on this creature.", 2, 2)
+    me.library.append(creature("Big", "6G", 6, 6))
+    pm3 = put(g, cl, me)
+    assert pm3.counters.get("+1/+1") == 1

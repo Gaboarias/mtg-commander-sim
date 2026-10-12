@@ -119,7 +119,12 @@ MECH_KWS = {"Morph", "Megamorph", "Disguise", "Manifest", "Manifest dread", "Clo
             "Transmute", "Constellation", "Enrage", "Heroic", "Inspired", "Battalion",
             "Rally", "Survival", "Flurry", "Pack tactics", "Valiant", "Infusion",
             "Venture into the dungeon", "Blight", "Collect evidence", "Learn", "Suspect",
-            "Detain", "Recruit", "Forage", "Time travel", "Earthbend", "Waterbend", "Airbend"}
+            "Detain", "Recruit", "Forage", "Time travel", "Earthbend", "Waterbend", "Airbend",
+            # batch 4
+            "Undaunted", "Epic", "Ripple", "Impending", "Paradigm", "Provoke", "Recover",
+            "Demonstrate", "Eminence", "Kinship", "Haunt", "Forecast", "Soulbond", "Solved",
+            "More Than Meets the Eye", "Addendum", "Cohort", "Role", "Discover", "Clash",
+            "Connive", "Populate", "Goad", "Affinity", "Domain"}
 _MECH_POOL = None
 
 

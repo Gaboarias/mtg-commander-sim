@@ -29,13 +29,24 @@ _DECK_RULES = {"partner", "partner with", "choose a background", "doctor's compa
                "friends forever", "commander tax", "commander damage",
                # estructurales: los aplica el tipo de la carta (Aura) o no cambian el
                # juego del simulador (devoid = incolora; la identidad no cambia)
-               "enchant", "devoid", "companion"}
+               "enchant", "devoid", "companion",
+               # sin efecto en el simulador: conspiraciones (agendas), ayuda de otro
+               # jugador (assist), lealtad phyrexiana (compleated), capítulo inicial
+               # de saga (read ahead: el bot empieza en I), coste por objetivo extra
+               # (strive: el bot elige un objetivo)
+               "hidden agenda", "double agenda", "assist", "compleated", "read ahead",
+               "strive"}
 
 
 # mecánicas que se definen con la carta ENTERA (no con su línea suelta): se mide
 # si el parser le puso el atributo a la carta
 _BY_ATTR = {"spree": "spree_costs", "escalate": "escalate_cost", "cleave": "cleave_cost",
-            "awaken": "awaken_cost", "station": "station_creature_at"}
+            "awaken": "awaken_cost", "station": "station_creature_at",
+            "haunt": "haunt", "bargain": "bargain", "ripple": "ripple", "forecast": "forecast",
+            "solved": "case_cond", "cipher": "cipher", "undaunted": "cost_reduction_fn",
+            "epic": "epic", "paradigm": "paradigm", "demonstrate": "demonstrate",
+            "impending": "impending_cost", "more than meets the eye": "mtmte_cost",
+            "soulbond": "soulbond", "eminence": "eminence", "provoke": "provoke"}
 
 
 def _support_attr(attr, cards_with):

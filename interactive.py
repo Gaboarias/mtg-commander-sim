@@ -906,10 +906,14 @@ class InteractiveGame:
                     self.g.transmute(p, c)
                 self.g.sba()
             return self.state()
-        if zone in ("overload", "plot", "warp", "prototype", "emerge"):
+        if zone in ("overload", "plot", "warp", "prototype", "emerge", "impending", "converted"):
             if i is not None and 0 <= i < len(p.hand):
                 c = p.hand[i]
-                if zone == "overload":
+                if zone == "impending":
+                    self.g.cast_impending(p, c)
+                elif zone == "converted":
+                    self.g.cast_converted(p, c)
+                elif zone == "overload":
                     self.g.cast_overload(p, c)
                 elif zone == "plot":
                     self.g.plot_card(p, c)
@@ -1383,7 +1387,10 @@ class InteractiveGame:
                         ("plot", "plot: jugarla en otro turno gratis",
                          getattr(c, "plot_cost", None)),
                         ("warp", "warp", getattr(c, "warp_cost", None)),
-                        ("prototype", "prototipo", (getattr(c, "prototype", None) or {}).get("cost"))):
+                        ("prototype", "prototipo", (getattr(c, "prototype", None) or {}).get("cost")),
+                        ("impending", f"inminente {getattr(c, 'impending_n', 0)}",
+                         getattr(c, "impending_cost", None)),
+                        ("converted", "convertida", getattr(c, "mtmte_cost", None))):
                     if _co is not None and p.can_pay(_co):
                         _tg = self._targets_for(c) if _z == "warp" else []
                         casts.append({

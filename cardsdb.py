@@ -210,7 +210,7 @@ def _self_etb_body(text, name):
 
 
 _SELF_ETB_RE = re.compile(
-    r"^when(?:ever)? (.+?) (?:enters|enters the battlefield|is turned face up)( or attacks)?"
+    r"^when(?:ever)? (.+?) (?:enters|enters the battlefield|is turned face up)( or attacks| or dies)?"
     r"(?: under your control)?,\s*(.+)$", re.I)
 _SELF_SUBJ_RE = re.compile(
     r"^(?:this (?:creature|artifact|enchantment|permanent|land|vehicle|equipment|aura|"
@@ -1567,6 +1567,12 @@ def _parse_activated(oracle: str, name: str = ""):
         if mex_cost:
             flags["exert_self"] = True
             ln = ln.replace(mex_cost.group(0), "", 1)
+        mto = re.search(r"(?i),?\s*tap (an|a|one|two|three|four|five|\d+) untapped ([a-z]+?)s? "
+                        r"you control(?=\s*[,:]|$)", ln.split(":")[0] if ":" in ln else "")
+        if mto:
+            flags["tap_others"] = {"n": _count_word(mto.group(1).lower()) or 1,
+                                   "type": mto.group(2).lower()}
+            ln = ln.replace(mto.group(0), "", 1)
         mpre = re.match(r"(?i)(exhaust|boast|power-up)\s*[—–-]\s*", ln)
         if mpre:
             kw = mpre.group(1).lower()
@@ -1574,7 +1580,9 @@ def _parse_activated(oracle: str, name: str = ""):
             ln = ln[mpre.end():]
         for mo in list(re.finditer(r"(?i)\s*activate (?:this ability )?only ([^.]+)\.", ln)):
             cond = mo.group(1).strip().lower()
-            if cond in ("as a sorcery", "any time you could cast a sorcery"):
+            if cond in ("if this case is solved", "if ~ is solved"):
+                flags["solved_req"] = True
+            elif cond in ("as a sorcery", "any time you could cast a sorcery"):
                 flags["sorcery_speed"] = True
             elif cond == "once each turn":
                 flags["once_turn"] = True
@@ -2539,6 +2547,13 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
                 out["perm_enters"] = cb_pe
             continue
         simple = [
+            ("self_to_gy", r"when(?:ever)? " + me_re + r" (?:enters or dies|is put into a "
+             r"graveyard from the battlefield|dies or is put into exile from the "
+             r"battlefield),\s*(.+)$"),
+            ("becomes_tapped", r"whenever " + me_re + r" becomes tapped,\s*(.+)$"),
+            ("group_combat_damage", r"whenever one or more (?:[a-z]+ )?creatures you control "
+             r"deal combat damage to a player,\s*(.+)$"),
+            ("__leave", r"when(?:ever)? " + me_re + r" leaves the battlefield,\s*(.+)$"),
             ("dealt_damage", r"whenever " + me_re + r" is dealt damage,\s*(.+)$"),
             ("untapped", r"whenever " + me_re + r" becomes untapped,\s*(.+)$"),
             ("targeted_by_spell", r"whenever you cast a spell that targets " + me_re + r",\s*(.+)$"),
@@ -2843,6 +2858,35 @@ def _cond_gc(cond_text: str):
     c = re.sub(r"\s+", " ", (cond_text or "")).strip().lower().rstrip(".")
     c = re.sub(r"^(?:if|as long as|only if) ", "", c)
     turn = lambda g: g.turn  # noqa: E731
+    # eminence: funciona desde la zona de mando o el campo (siempre verdadero acá)
+    if re.fullmatch(r"[\w ,'~-]+ is in the command zone or on the battlefield", c):
+        return lambda g, p: True
+    # caso resuelto (el disparo se evalúa sobre el permanente fuente)
+    if re.fullmatch(r"(?:this case|~|it) is solved", c):
+        def _solved(g, p):
+            src = getattr(g, "_fx_source", None)
+            pool = [pm for pm in p.battlefield if "case" in {x.lower() for x in pm.card.subtypes}]
+            own = [pm for pm in pool if pm.name == src]
+            return any(getattr(pm, "solved", False) for pm in (own or pool))
+        return _solved
+    # addendum: al resolver en tu turno fuera del combate (= lanzado en main)
+    if re.fullmatch(r"you cast (?:this spell|it) during your main phase", c):
+        return lambda g, p: (g.players[g.active_index] is p and not any(
+            getattr(pm, "attacking", None) for pm in p.battlefield))
+    # kinship: la de arriba de tu biblioteca comparte tipo de criatura con la fuente
+    if re.fullmatch(r"the top card of your library shares a creature type with [\w ,'~-]+", c):
+        def _kin(g, p):
+            if not p.library:
+                return False
+            src = getattr(g, "_fx_source", None)
+            me = next((pm for pm in p.battlefield if pm.name == src), None)
+            top = p.library[-1]
+            if me is None or "creature" not in top.types and "kindred" not in top.types \
+                    and "tribal" not in top.types:
+                return False
+            return bool(top.subtypes) and any(me.has_subtype(st) for st in top.subtypes) \
+                or "changeling" in (top.keywords or set())
+        return _kin
     if re.fullmatch(r"you attacked(?: with (?:a|one or more) creatures?)? this turn", c):
         return lambda g, p: getattr(p, "attacked_turn", None) == turn(g)
     if re.fullmatch(r"(?:a|one or more) creatures? died this turn", c):
@@ -2987,6 +3031,8 @@ def _parse_static_condition(cond_text: str):
         return lambda p: getattr(p, "saddled_turn", None) == p.game.turn
     if re.fullmatch(r"(?:it'?s|this creature is|~ is) tapped", c):
         return lambda p: p.tapped
+    if re.fullmatch(r"(?:this case|~|it) is solved", c):
+        return lambda p: bool(getattr(p, "solved", False))
     gc = _cond_gc(c)
     if gc is not None:
         return (lambda p, _g=gc: p.game is not None and _g(p.game, p.controller))
@@ -3155,7 +3201,23 @@ def _wire_aura(card, oracle):
             perm.enchanting = host
             game.log(f"{ctrl.name}: {perm.name} se anexa a {host.name}")
 
-    card.on_etb = _attach
+    # el ETB propio del Aura (scry, robar, incubate…) se ejecuta tras anexarse
+    _aura_body, _ = _self_etb_body(oracle, card.name)
+    _aura_etb = _effect_any(_aura_body) if (_aura_body and not re.match(
+        r"(?i)\s*(?:attach|enchant)", _aura_body)) else None
+
+    def _attach_and_etb(game, ctrl, perm, _a=_attach, _e=_aura_etb):
+        _a(game, ctrl, perm)
+        if _e is not None:
+            prev = (getattr(game, "_trigger_subject", None),
+                    getattr(game, "_trigger_source", None))
+            game._trigger_subject = getattr(perm, "enchanting", None)
+            game._trigger_source = perm
+            try:
+                _e(game, ctrl, perm)
+            finally:
+                game._trigger_subject, game._trigger_source = prev
+    card.on_etb = _attach_and_etb
     card.tags = card.tags | {"aura"}
 
 
@@ -3457,6 +3519,13 @@ def _chapter_effect(body: str):
     eff = _generic_amount_effect(body)
     if eff is not None:
         return eff
+    # "you may <efecto>" (sin coste): el efecto (bots: casi siempre conviene)
+    _mm = re.match(r"(?i)\s*you may (?!pay|sacrifice|discard|exile a card|tap|return a land|"
+                   r"have)(.+)$", body or "")
+    if _mm and not re.search(r"\bif you do\b|\botherwise\b", body, re.I):
+        _inner = _chapter_effect(_mm.group(1))
+        if _inner is not None:
+            return _inner
     # texto con condición ("if you do", "otherwise") que el genérico no resolvió:
     # el parser por fragmento tomaría una parte y aplicaría el efecto SIEMPRE
     if re.search(r"\bif you do\b|\botherwise\b|\bif you don't\b", body or "", re.I):
@@ -4202,6 +4271,8 @@ def _each_count_fn(phrase: str):
     """'creature on the battlefield' / 'artifact you control' / 'opponent you have'
     (lo que sigue a 'for each') -> f(game, ctrl) o None."""
     p = (phrase or "").lower().strip()
+    if re.fullmatch(r"basic land types? among lands you control", p):
+        return _count_fn(p)
     if re.match(r"opponents? you have", p):
         return lambda g, c: len(g.opponents(c))
     if re.match(r"cards? in your hand", p):
@@ -4242,6 +4313,18 @@ def _count_fn(phrase: str):
         return lambda g, c, _f=f2: 2 * _f(g, c)
     if p in ("your life total", "your life"):
         return lambda g, c: max(0, c.life)
+    # domain: tipos de tierra básica entre tus tierras
+    if re.fullmatch(r"(?:the number of )?basic land types? among lands you control", p):
+        def _dom(g, c):
+            subs = set()
+            for pm in c.battlefield:
+                if pm.card.is_land():
+                    for b in ("plains", "island", "swamp", "mountain", "forest"):
+                        if pm.has_subtype(b) or pm.name.lower() == b:
+                            subs.add(b)
+            return len(subs)
+        return _dom
+
     # cartas en cementerios: "(the number of) [creature|land|instant and sorcery|
     # artifact] cards in your/all/your opponents' graveyard(s)"
     mg = re.match(r"(?:the number of )?(?:(other )?([a-z]+(?: and [a-z]+)?) )?cards? in "
@@ -4593,6 +4676,96 @@ def _atomic_effect(text):
             if src is not None:
                 src.temp_keywords.add("indestructible")    # aproximación de regenerar
         return eff_regen
+    m = re.fullmatch(r"create an? ([a-z]+(?: hero)?) role token attached to (another target "
+                     r"creature you control|up to one target creature you control|target "
+                     r"creature you control|it|this creature|target creature an opponent "
+                     r"controls|target creature)", t)
+    if m:
+        def eff_role(game, ctrl, *a, _k=m.group(1), _w=m.group(2), **_kw):
+            src = _src_perm(game, a)
+            if _w in ("it", "this creature"):
+                host = getattr(game, "_trigger_subject", None) or src
+            elif "opponent" in _w or (_k == "cursed" and _w == "target creature"):
+                pool = game.legal_creature_targets(ctrl)
+                host = max(pool, key=lambda x: x.power + x.toughness) if pool else None
+            else:
+                pool = [pm for pm in ctrl.creatures() if not ("another" in _w and pm is src)]
+                host = max(pool, key=lambda x: x.power + x.toughness) if pool else None
+            if host is not None and hasattr(host, "card"):
+                game.create_role(ctrl, host, _k)
+        return eff_role
+    m = re.fullmatch(r"discover (\d+)", t)
+    if m:
+        return lambda game, ctrl, *a, _n=int(m.group(1)), **kw: game.discover(ctrl, _n)
+    m = re.fullmatch(r"clash with (?:an opponent|defending player)(?:\. if you win, (.+))?", t)
+    if m:
+        _we = _effect_any(m.group(1)) if m.group(1) else None
+
+        def eff_clash(game, ctrl, *a, _e=_we, **_kw):
+            if game.clash(ctrl) and _e is not None:
+                _e(game, ctrl, *a)
+        return eff_clash
+    m = re.fullmatch(r"attach (?:it|this equipment|~) to (?:up to one )?target creature you "
+                     r"control", t)
+    if m:
+        def eff_attach_eq(game, ctrl, *a, **_kw):
+            src = _src_perm(game, a)
+            pool = [pm for pm in ctrl.creatures() if pm is not src]
+            if src is None or not pool:
+                return
+            host = max(pool, key=lambda pm: (pm.power + pm.toughness))
+            src.enchanting = host
+            game._trigger_subject = host
+            game.log(f"{ctrl.name}: {src.name} se anexa a {host.name}")
+        return eff_attach_eq
+    m = re.fullmatch(r"(?:you )?get ((?:\{e\})+)", t)
+    if m:
+        n = m.group(1).count("{e}")
+
+        def eff_energy(game, ctrl, *a, _n=n, **_kw):
+            ctrl.energy = getattr(ctrl, "energy", 0) + _n
+            game.log(f"{ctrl.name} obtiene {_n} de energía")
+        return eff_energy
+    m = re.fullmatch(r"double the number of \+1/\+1 counters on (?:" + _SELF_REF + r"|it|"
+                     r"that creature|target creature you control)", t)
+    if m:
+        def eff_double_ctr(game, ctrl, *a, _t=t, **_kw):
+            pm = (getattr(game, "_trigger_subject", None) if ("that creature" in _t or
+                  _t.endswith(" it")) else None) or _src_perm(game, a)
+            if "target creature" in _t:
+                pool = [x for x in ctrl.creatures() if x.counters.get("+1/+1", 0)]
+                pm = max(pool, key=lambda x: x.counters["+1/+1"]) if pool else None
+            if pm is not None and hasattr(pm, "counters") and pm.counters.get("+1/+1", 0):
+                game.add_counters(pm, "+1/+1", pm.counters["+1/+1"])
+        return eff_double_ctr
+    m = re.fullmatch(r"double (?:target creature's|" + _SELF_REF + r"'s|its) power(?: and "
+                     r"toughness)? until end of turn", t)
+    if m:
+        def eff_double_pw(game, ctrl, *a, _t=t, **_kw):
+            if "target" in _t:
+                pool = list(ctrl.creatures())
+                pm = max(pool, key=lambda x: x.power) if pool else None
+            else:
+                pm = _src_perm(game, a)
+            if pm is not None and hasattr(pm, "temp_pt"):
+                pm.temp_pt[0] += max(0, pm.power)
+                if "toughness" in _t:
+                    pm.temp_pt[1] += max(0, pm.toughness)
+        return eff_double_pw
+    if t in ("populate", "then populate"):
+        _pe = _populate_effect()
+        return lambda game, ctrl, *a, _p=_pe, **kw: _p(game, ctrl, [])
+    m = re.fullmatch(r"(?:it|that creature|target creature you control) connives?", t)
+    if m:
+        def eff_it_connive(game, ctrl, *a, _t=t, **_kw):
+            if "target" in _t:
+                pool = list(ctrl.creatures())
+                pm = max(pool, key=lambda x: x.power) if pool else None
+            else:
+                pm = getattr(game, "_trigger_subject", None) or _src_perm(game, a)
+            if pm is not None and hasattr(pm, "card"):
+                _do_connive(game, pm, 1)
+        return eff_it_connive
     if re.fullmatch(_SELF_REF + r" connives?", t) or t == "connive":
         def eff_connive(game, ctrl, *a, **_kw):
             src = _src_perm(game, a)
@@ -6524,6 +6697,40 @@ def _rewrite_mechanics(text):
                 ln = f"This creature has {mk.group(1).lower()} as long as your speed is 4."
             else:
                 ln = body
+        st = ln.strip()
+        # batch 4B: líneas que se cablean aparte (no como texto suelto)
+        if re.match(r"(?i)(forecast|to solve|impending \d+|more than meets the eye|recover)"
+                    r"\b\s*[—–-]?", st) or re.match(
+                    r"(?i)when the creature (?:this card|it|~) haunts dies", st):
+            continue
+        # haunt: "When this creature enters or the creature it haunts dies, X"
+        ln = re.sub(r"(?i)^(when (?:this creature|~|[^,]+?) enters) or the creature it haunts "
+                    r"dies,", r"\1,", st)
+        # caso resuelto: "Solved — <habilidad>" con la condición explícita
+        msv = re.match(r"(?i)solved\s*[—–-]\s*(.+)$", ln)
+        if msv:
+            body = msv.group(1).strip()
+            if re.match(r"(?i)(when|whenever|at the beginning)", body):
+                ln = re.sub(r",\s*", ", if this case is solved, ", body, count=1)
+            elif ":" in body.split(".")[0]:
+                ln = body.rstrip(".") + ". Activate only if this case is solved."
+            else:
+                ln = "As long as this case is solved, " + body[0].lower() + body[1:]
+        # kinship: "...look at the top card... If it shares a creature type with
+        # this creature, you may reveal it. If you do, X" -> disparo con condición
+        mkin = re.match(r"(?i)at the beginning of your upkeep, you may look at the top card of "
+                        r"your library\. if it shares a creature type with ([^,]+), you may "
+                        r"reveal it\. if you do, (.+)$", ln)
+        if mkin:
+            ln = (f"At the beginning of your upkeep, if the top card of your library shares "
+                  f"a creature type with {mkin.group(1)}, {mkin.group(2)}")
+        # eminence: la condición "is in the command zone or on the battlefield" es
+        # siempre cierta donde el motor la evalúa (campo o zona de mando)
+        ln = re.sub(r"(?i),? if [^,]+? is in the command zone or on the battlefield,", ",", ln)
+        ln = re.sub(r"(?i)^as long as [^,]+? is in the command zone or on the battlefield, ",
+                    "", ln)
+        # convert (Transformers) = transform
+        ln = re.sub(r"(?i)\bconvert(ed|s)?\b", lambda m: "transform" + (m.group(1) or ""), ln)
         # "Waterbend {X}: …" como coste de activada -> "{X}: …"
         ln = re.sub(r"(?i)^waterbend ((?:\{[^}]+\})+)\s*:", r"\1:", ln.strip())
         ln = re.sub(r"(?i)\bwaterbend (\{[^}]+\}(?:\{[^}]+\})*)", r"pay \1", ln)
@@ -6547,8 +6754,31 @@ def _build_card_from_data_impl(data: dict) -> Card:
     # station: "It's an artifact creature at N+" vive en el recordatorio
     _mst = re.search(r"artifact creature at (\d+)\+", data.get("oracle_text", "") or "", re.I)
     _station_at = int(_mst.group(1)) if _mst else 0
-    data["oracle_text"] = _rewrite_mechanics(_strip_ability_words(
-        _strip_reminder(data.get("oracle_text", ""))))
+    _pre4 = _strip_ability_words(_strip_reminder(data.get("oracle_text", "")))
+    data["oracle_text"] = _rewrite_mechanics(_pre4)
+    # hechizo "<efecto>. If <condición>, <bonus>." (addendum, raid, morbid…): el
+    # bonus se separa y se aplica solo si se cumple al resolver. Antes el parser
+    # genérico lo aplicaba SIEMPRE (o tomaba solo una de las dos partes).
+    _cond_bonus = None
+    if re.search(r"\b(?:instant|sorcery)\b", (data.get("type_line") or "").lower()) \
+            and not data.get("card_faces"):
+        _ot = data.get("oracle_text", "") or ""
+        mcb = re.search(r"(?:(?<=\.)\s+|\n)If ([^,.]+), ([^.]+\.)\s*$", _ot)
+        if mcb and _ot[:mcb.start()].strip() and not re.search(
+                r"\binstead\b|kicked|bargained|gift|paid|evidence|foretold|spent|was cast|"
+                r"you do\b|you don't|it's|that|those|they|its\b", mcb.group(0), re.I):
+            _cg = _cond_gc(mcb.group(1))
+            if _cg is not None:
+                _be = _effect_any(mcb.group(2))
+                if _be is not None:
+                    _cond_bonus = (_cg, _be)
+                    data["oracle_text"] = _ot[:mcb.start()].rstrip()
+        elif mcb and _ot[:mcb.start()].strip() and _cond_gc(mcb.group(1)) is not None \
+                and re.search(r"\b(?:those|they|them)\b", mcb.group(2), re.I) \
+                and not re.search(r"\binstead\b", mcb.group(0), re.I):
+            # bonus sobre lo del efecto base (addendum de Unbreakable Formation): no
+            # modelado -> se descarta en vez de aplicarlo siempre
+            data["oracle_text"] = _ot[:mcb.start()].rstrip()
     # cleave: el texto normal sin corchetes; el de cleave sin lo que va entre ellos
     _cleave_txt = None
     if "[" in (data.get("oracle_text") or "") and "cleave" in {
@@ -6610,6 +6840,19 @@ def _build_card_from_data_impl(data: dict) -> Card:
         card.tags = card.tags | {"delve"}
     if "affinity for artifacts" in _ktext:
         card.tags = card.tags | {"affinity_art"}
+    else:
+        _maf = re.search(r"affinity for ([a-z]+?)s?\b", _ktext)
+        if _maf:
+            _ak = _maf.group(1).lower()
+            _ak = {"forest": "forest", "equipment": "equipment"}.get(_ak, _ak)
+
+            def _aff(g, p, _k=_ak):
+                if _k in ("creature", "enchantment", "artifact", "land", "planeswalker"):
+                    return sum(1 for pm in p.battlefield
+                               if (pm.is_creature() if _k == "creature" else _k in pm.card.types))
+                return sum(1 for pm in p.battlefield if pm.has_subtype(_k)
+                           or pm.name.lower() == _k)
+            card.cost_reduction_fn = _aff
     if "improvise" in _ktext:      # como convoke pero girando artefactos
         card.tags = card.tags | {"improvise"}
 
@@ -7124,6 +7367,9 @@ def _build_card_from_data_impl(data: dict) -> Card:
     # Se ejecuta al resolverse el hechizo (encadenado con el efecto previo si lo hay).
     if re.search(r"\bpopulate\b", (data.get("oracle_text", "") or ""), re.I) \
             and {"instant", "sorcery"} & types:
+        card.tags = card.tags | {"populate"}
+    if re.search(r"\bpopulate\b", (data.get("oracle_text", "") or ""), re.I) \
+            and {"instant", "sorcery"} & types and card.on_cast_resolve is None:
         _pop = _populate_effect()
         _prev = card.on_cast_resolve
         if _prev is None:
@@ -7552,7 +7798,8 @@ def _build_card_from_data_impl(data: dict) -> Card:
             # transform vs modal (MDFC): es "transform" si se da vuelta en juego
             # (día/noche, o el texto dice "transform"); si no, es modal -> ambas
             # caras se juegan desde la mano (Pathways, DFC modal tierra/hechizo).
-            _is_transform = _day or bool(re.search(r"\btransform\b", _f0_txt + _f1_txt))
+            _is_transform = _day or bool(re.search(r"\b(?:transform|convert)\b|more than meets the eye",
+                                                   _f0_txt + _f1_txt))
             card.dfc = "transform" if _is_transform else "modal"
             if _day:
                 card.daybound = "daybound" in _f0_txt
@@ -7708,6 +7955,97 @@ def _build_card_from_data_impl(data: dict) -> Card:
                 card.bargain = True
                 card.bargain_instead = _inst
                 card.bargain_effect = (lambda g, ctrl, tg, _e=_beff: _e(g, ctrl, *tg))
+    if _cond_bonus is not None:
+        def _cb_resolve(g, ctrl, tg, _base=card.on_cast_resolve, _cb=_cond_bonus):
+            if _base is not None:
+                _base(g, ctrl, tg)
+            if _cb[0](g, ctrl):
+                _cb[1](g, ctrl)
+        card.on_cast_resolve = _cb_resolve
+    # ── batch 4B: undaunted, epic, ripple, impending, paradigm, provoke, recover,
+    # demonstrate, eminence, haunt, forecast, cases, MTMTE, bargain en criaturas ──
+    _p4l = "\n" + (_pre4 or "").lower()
+
+    def _mcost(txt):
+        return parse_cost(mana_cost_to_str("".join(re.findall(r"\{[wubrgc0-9/x]+\}", txt))))
+    if "bargain" in _kws_l and not _spell and re.search(r"if it was bargained", _lt):
+        card.bargain = True
+    if "undaunted" in _kws_l:
+        def _undaunted(g, p, _pv=getattr(card, "cost_reduction_fn", None)):
+            return len(g.opponents(p)) + (_pv(g, p) if _pv else 0)
+        card.cost_reduction_fn = _undaunted
+    if _spell:
+        card.epic = "epic" in _kws_l
+        card.paradigm = "paradigm" in _kws_l
+        card.demonstrate = "demonstrate" in _kws_l
+        if (mrip := re.search(r"\nripple (\d+)", _p4l)):
+            card.ripple = int(mrip.group(1))
+    if "provoke" in _kws_l and "creature" in types:
+        card.provoke = True
+    if "eminence" in _kws_l:
+        card.eminence = True
+    if (mimp := re.search(r"\nimpending (\d+)\s*[—–-]\s*((?:\{[^}]+\})+)", _p4l)):
+        card.impending_n = int(mimp.group(1))
+        card.impending_cost = _mcost(mimp.group(2))
+    if (mmt := re.search(r"\nmore than meets the eye\s*((?:\{[^}]+\})+)", _p4l)) \
+            and getattr(card, "dfc", None) == "transform":
+        card.mtmte_cost = _mcost(mmt.group(1))
+    # Recover: cuando una criatura va a TU cementerio desde el campo, pagás el
+    # coste (vuelve a la mano) o se exilia.
+    mrec = re.search(r"\nrecover\s*[—–-]?\s*((?:\{[^}]+\})+|pay half your life)", _p4l)
+    if mrec:
+        _rc = None if mrec.group(1).startswith("pay") else _mcost(mrec.group(1))
+
+        def _recover(g, pl, c, dying=None, _rc=_rc, _prev=(card.gy_triggers or {}).get("death"),
+                     **_kw):
+            if _prev:
+                _prev(g, pl, c, dying=dying, **_kw)
+            if c not in pl.graveyard or dying is None or dying.is_token \
+                    or dying.card is c or dying.controller is not pl:
+                return
+            pl.graveyard.remove(c)
+            if _rc is not None and pl.can_pay(_rc):
+                pl.pay(_rc)
+                pl.hand.append(c)
+                g.log(f"{pl.name} paga recover: {c.name} vuelve a la mano")
+            elif _rc is None and pl.life > 10:
+                pl.life -= (pl.life + 1) // 2
+                pl.hand.append(c)
+                g.log(f"{pl.name} paga la mitad de su vida: {c.name} vuelve a la mano")
+            else:
+                pl.exile.append(c)
+                g.log(f"{c.name} se exilia (recover sin pagar)")
+        card.gy_triggers = dict(card.gy_triggers or {}, death=_recover)
+    # Haunt: al morir (criatura) / tras resolver (hechizo) se exilia rondando una
+    # criatura; cuando esa muere, se repite el efecto.
+    if "haunt" in _kws_l:
+        mh = (re.search(r"\nwhen (?:this creature|~|[^,\n]+?) enters or the creature it haunts "
+                        r"dies, ([^\n]+)", _p4l)
+              or re.search(r"\nwhen the creature (?:this card|it|~) haunts dies, ([^\n]+)", _p4l))
+        _heff = _effect_any(mh.group(1)) if mh else None
+        if _heff is not None:
+            card.haunt = True
+            _hf = (lambda g, owner, _e=_heff: _e(g, owner))
+            if _spell:
+                card.haunt_effect = _hf
+            elif "creature" in types:
+                def _haunt_die(g, perm, _hf=_hf, _prev=(card.triggers or {}).get("self_to_gy"),
+                               **_kw):
+                    if _prev:
+                        _prev(g, perm, **_kw)
+                    own = next((p for p in g.players if perm.card in p.graveyard), None)
+                    if own is not None:
+                        g._haunt(own, perm.card, _hf)
+                card.triggers = dict(card.triggers or {}, self_to_gy=_haunt_die)
+    # Forecast — {coste}, reveal this card from your hand: efecto (solo en tu upkeep)
+    mfc = re.search(r"\nforecast\s*[—–-]\s*((?:\{[^}]+\})+), reveal (?:this card|~|[^:]+?) "
+                    r"from your hand: ([^\n]+)", _p4l)
+    if mfc and (_fe := _effect_any(mfc.group(2))) is not None:
+        card.forecast = {"cost": _mcost(mfc.group(1)),
+                         "effect": (lambda g, p, _e=_fe: _e(g, p))}
+    # Case: "To solve — <condición>" se chequea en tu paso final
+    if (mcs := re.search(r"\nto solve\s*[—–-]\s*([^\n]+)", _p4l)):
+        card.case_cond = _cond_gc(mcs.group(1).strip().rstrip("."))
     if "unleash" in _kws_l and "creature" in types:
         card.unleash = True
 
@@ -8073,6 +8411,13 @@ def _build_card_from_data_impl(data: dict) -> Card:
 
     # palabras de habilidad / eventos propios (constellation, enrage, heroic…)
     _mte = _misc_trigger_effects(data.get("oracle_text", ""), name)
+    _lv = _mte.pop("__leave", None)
+    if _lv is not None:
+        def _leave_chain(g, ctrl, perm, _cb=_lv, _prev=card.on_leave):
+            if _prev:
+                _prev(g, ctrl, perm)
+            g._run_trigger(_cb, perm, {})
+        card.on_leave = _leave_chain
     if _mte:
         card.triggers = dict(card.triggers)
         for ev, cb in _mte.items():
@@ -8182,6 +8527,7 @@ def _build_card_from_data_impl(data: dict) -> Card:
                 lst.append(_b)
                 g.log(f"{ctrl.name} cifra {_nm} en {enc.name}")
         card.on_cast_resolve = _cipher_resolve
+        card.cipher = True
 
     # Suspend N—<coste>: en vez de lanzar, pagás el coste y la exiliás con N
     # contadores de tiempo; cada mantenimiento se quita uno y al llegar a 0 se lanza
@@ -8191,29 +8537,26 @@ def _build_card_from_data_impl(data: dict) -> Card:
         card.suspend = {"n": int(msus.group(1)), "cost": parse_cost(mana_cost_to_str(
             "".join(re.findall(r"\{[wubrgc0-9/x]+\}", msus.group(2)))))}
 
-    # Soulbond: al entrar, se empareja con otra criatura tuya sin pareja; mientras
-    # estén emparejadas, ambas tienen <keyword>. Aprox: se otorga de forma persistente.
-    if "soulbond" in _lt and "creature" in types:
-        mkw = re.search(r"both (?:creatures? )?have ([a-z ,and]+?)(?:\.|as long|$)", _lt)
-        gained = set()
-        if mkw:
-            for nm2, key in _KEYWORD_WORDS:
-                if re.search(r"\b" + nm2 + r"\b", mkw.group(1)):
-                    gained.add(key)
-        if gained:
-            def _soulbond_etb(g, ctrl, perm, _prev=card.on_etb, _kw=gained):
-                partner = next((pm for pm in ctrl.battlefield
-                                if pm.is_creature() and pm is not perm
-                                and not getattr(pm, "_soulbond_partner", None)), None)
-                if partner is not None:
-                    perm._soulbond_partner = partner
-                    partner._soulbond_partner = perm
-                    perm.perma_keywords |= _kw
-                    partner.perma_keywords |= _kw
-                    g.log(f"{perm.name} se empareja con {partner.name} (soulbond)")
-                if _prev:
-                    _prev(g, ctrl, perm)
-            card.on_etb = _soulbond_etb
+    # Soulbond: al entrar (ella u otra), se empareja con otra criatura tuya sin
+    # pareja; mientras sigan emparejadas, AMBAS tienen el bono (motor: _paired).
+    if ("soulbond" in {k.lower() for k in (data.get("keywords") or [])}
+            or re.search(r"(?:^|\n)soulbond\b", (data.get("oracle_text", "") or "").lower())) \
+            and "creature" in types:
+        card.soulbond = True
+        msb = re.search(r"as long as [^,]+? is paired with another creature, (?:each of those "
+                        r"creatures|both creatures|they each) ([^.]+)", _lt)
+        if msb:
+            _sbt = msb.group(1)
+            mpt = re.search(r"gets? \+(\d+)/\+(\d+)", _sbt)
+            if mpt:
+                card.soulbond_pt = (int(mpt.group(1)), int(mpt.group(2)))
+            mhv = re.search(r"ha(?:ve|s) ([a-z ,]+?)(?:$| and get| as long)", _sbt)
+            gained = set()
+            if mhv and '"' not in _sbt:
+                for nm2, key in _KEYWORD_WORDS:
+                    if re.search(r"\b" + nm2 + r"\b", mhv.group(1)):
+                        gained.add(key)
+            card.soulbond_kws = frozenset(gained)
 
     # efecto genérico POR TAG: en un hechizo, al resolver; en un permanente, solo si
     # tiene un disparo de entrada propio y con los tags de ESE cuerpo (antes un

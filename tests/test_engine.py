@@ -5429,7 +5429,7 @@ def test_soulbond_grants_keyword_to_both():
         "oracle_text": "Soulbond\nAs long as this creature is paired with another "
                        "creature, both creatures have flying."})
     fp = g.move_to_battlefield(sb, me)
-    assert getattr(fp, "_soulbond_partner", None) is bear
+    assert getattr(fp, "_paired", None) is bear
     assert bear.has("flying") and fp.has("flying")
 
 

@@ -290,6 +290,14 @@ class Policy:
             return bool(game.cast_prototype(me, card))
         if getattr(card, "emerge_cost", None) is not None and game.emerge_option(me, card):
             return bool(game.cast_emerge(me, card))
+        # impending: el ETB del Overlord por menos (sin cuerpo por unos turnos)
+        ic = getattr(card, "impending_cost", None)
+        if ic is not None and me.can_pay(ic):
+            return bool(game.cast_impending(me, card))
+        # More Than Meets the Eye: entra convertida por su coste menor
+        mc2 = getattr(card, "mtmte_cost", None)
+        if mc2 is not None and me.can_pay(mc2):
+            return bool(game.cast_converted(me, card))
         wc = getattr(card, "warp_cost", None)
         if wc is not None and me.can_pay(wc) and card.on_etb is not None:
             return bool(game.cast_warp(me, card, targets=self.choose_targets(game, me, card)
