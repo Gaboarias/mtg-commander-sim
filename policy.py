@@ -124,8 +124,11 @@ class Policy:
         if adv and not second:
             self._cast_ramp_first(game, me)
 
-        # 3) comandante
+        # 3) comandante (y el compañero, si conviene traerlo a la mano)
         self._maybe_cast_commander(game, me)
+        if (not second and getattr(me, "companion", None) is not None
+                and me.available_mana() >= 5 and len(me.hand) <= 3):
+            game.companion_to_hand(me)
 
         # 4) hechizos por prioridad. Secuenciación: primero por valor, y a igual
         # valor el más barato (entra más por turno: mejor uso del maná).
@@ -256,6 +259,32 @@ class Policy:
                 return bool(game.cast_overload(me, card))
         if full:
             return False
+        # mutate: sobre mi mejor criatura no Humana
+        mc = getattr(card, "mutate_cost", None)
+        if mc is not None and me.can_pay(mc):
+            hosts = [pm for pm in me.creatures() if not pm.has_subtype("human")
+                     and not getattr(pm.card, "_bestow", False)]
+            if hosts and (not full or mc.cmc <= (card.cost.cmc if card.cost else 99)):
+                host = max(hosts, key=lambda pm: pm.power + pm.toughness)
+                return bool(game.cast_mutate(me, card, host))
+        # cleave / awaken: si alcanza, la versión mejor
+        cc = getattr(card, "cleave_cost", None)
+        if cc is not None and me.can_pay(cc):
+            return bool(game.cast_alt_effect(me, card, cc, "_cleaved",
+                                             targets=self.choose_targets(game, me, card)
+                                             if card.target_spec else None))
+        ac = getattr(card, "awaken_cost", None)
+        if ac is not None and me.can_pay(ac) and any(pm.card.is_land() for pm in me.battlefield):
+            tg = self.choose_targets(game, me, card) if card.target_spec else None
+            if not (card.target_spec and not tg):
+                return bool(game.cast_alt_effect(me, card, ac, "_awakened", targets=tg))
+        if full:
+            return False
+        if getattr(card, "web_slinging_cost", None) is not None and \
+                me.can_pay(card.web_slinging_cost) and \
+                any(pm.tapped and pm.is_creature() and not me.is_commander(pm.card)
+                    for pm in me.battlefield):
+            return bool(game.cast_web_slinging(me, card))
         # no puedo pagarla entera: prototype / emerge / warp / plot
         if getattr(card, "prototype", None) and me.can_pay(card.prototype["cost"]):
             return bool(game.cast_prototype(me, card))
@@ -352,6 +381,14 @@ class Policy:
                 continue
             if gp and game.play_from_graveyard(me, c):
                 used += 1
+        # reforzar desde la mano (si no la puedo lanzar)
+        for c in list(me.hand):
+            rf = getattr(c, "reinforce", None)
+            if rf and me.creatures() and me.can_pay(rf["cost"]) and not (
+                    c.cost is not None and me.can_pay(game.effective_cost(me, c))):
+                if game.reinforce(me, c):
+                    used += 1
+                    break
         # jugar lo predicho/exiliado jugable
         for c in list(me.exile_play):
             if used >= 3:
@@ -393,6 +430,11 @@ class Policy:
                 if ab.get("tap") and not second and perm.is_creature():
                     continue
                 if ab.get("tap") and perm.tapped:
+                    continue
+                if str(ab.get("label", "")).startswith("Ensillar") and (
+                        second or not perm.can_attack()):
+                    continue            # ensillar solo si la montura va a atacar
+                if not game.ability_allowed(perm, j, ab):
                     continue
                 if not me.can_pay(ab.get("cost")):
                     continue
@@ -457,6 +499,23 @@ class Policy:
             from engine import Cost
             if me.can_pay(Cost(card.cost.generic + ent, card.cost.pips)):
                 return list(range(len(modes)))
+        # Spree / Escalate: tantos modos útiles como alcance el maná
+        sc = getattr(card, "spree_costs", None)
+        esc = getattr(card, "escalate_cost", None)
+        if (sc or esc) and card.cost is not None:
+            from engine import Cost
+            chosen, gen, pips = [], card.cost.generic, tuple(card.cost.pips)
+            for i, m in enumerate(modes):
+                spec = m.get("target_spec")
+                if spec == "opp_creature" and not game.legal_creature_targets(me):
+                    continue
+                add = sc[i] if sc and i < len(sc) else (esc if chosen else None)
+                g2 = gen + (add.generic if add else 0)
+                p2 = pips + (tuple(add.pips) if add else ())
+                if me.can_pay(Cost(g2, p2)):
+                    chosen.append(i)
+                    gen, pips = g2, p2
+            return chosen or [0]
         pick = max(1, getattr(card, "mode_pick", 1))
         scored = []
         for i, m in enumerate(modes):

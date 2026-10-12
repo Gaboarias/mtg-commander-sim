@@ -110,7 +110,16 @@ MECH_KWS = {"Morph", "Megamorph", "Disguise", "Manifest", "Manifest dread", "Clo
             "Coven", "Celebration", "Descend", "Formidable", "Rebound", "Overload",
             "Retrace", "Jump-start", "Miracle", "Plot", "Warp", "Prototype", "Surge",
             "Spectacle", "Prowl", "Emerge", "Exploit", "Offspring", "Squad", "Casualty",
-            "Bargain"}
+            "Bargain",
+            # batch 3
+            "Mutate", "Splice", "Saddle", "Station", "Phasing", "Champion", "Ascend",
+            "Sneak", "Spree", "Escalate", "Awaken", "Cleave", "Enlist", "Freerunning",
+            "Conspire", "Harmonize", "Reinforce", "Tribute", "Web-slinging", "Amplify",
+            "Increment", "Ingest", "Start your engines!", "Max speed", "Gift", "Mayhem",
+            "Transmute", "Constellation", "Enrage", "Heroic", "Inspired", "Battalion",
+            "Rally", "Survival", "Flurry", "Pack tactics", "Valiant", "Infusion",
+            "Venture into the dungeon", "Blight", "Collect evidence", "Learn", "Suspect",
+            "Detain", "Recruit", "Forage", "Time travel", "Earthbend", "Waterbend", "Airbend"}
 _MECH_POOL = None
 
 

@@ -29,7 +29,25 @@ _DECK_RULES = {"partner", "partner with", "choose a background", "doctor's compa
                "friends forever", "commander tax", "commander damage",
                # estructurales: los aplica el tipo de la carta (Aura) o no cambian el
                # juego del simulador (devoid = incolora; la identidad no cambia)
-               "enchant", "devoid"}
+               "enchant", "devoid", "companion"}
+
+
+# mecánicas que se definen con la carta ENTERA (no con su línea suelta): se mide
+# si el parser le puso el atributo a la carta
+_BY_ATTR = {"spree": "spree_costs", "escalate": "escalate_cost", "cleave": "cleave_cost",
+            "awaken": "awaken_cost", "station": "station_creature_at"}
+
+
+def _support_attr(attr, cards_with):
+    ok = tot = 0
+    for row in cards_with[:SAMPLE]:
+        try:
+            c = cardsdb.build_card_from_data(row)
+        except Exception:  # noqa: BLE001
+            continue
+        tot += 1
+        ok += getattr(c, attr, None) not in (None, (), 0, False)
+    return round(ok / tot, 2) if tot else None
 
 
 def _rule_for(name, rules):
@@ -87,6 +105,8 @@ def main():
         rule = _rule_for(name, rules["keywords"])
         cw = by_kw.get(name.lower(), [])
         sup = _support(name, cw) if cw else None
+        if name.lower() in _BY_ATTR and cw:
+            sup = _support_attr(_BY_ATTR[name.lower()], cw)
         if name.lower() in _DECK_RULES:
             sup = 1.0  # regla de construcción de mazo: la aplica el validador
         official = []

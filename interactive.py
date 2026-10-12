@@ -319,6 +319,9 @@ class InteractiveGame:
                         return True          # pausa de defensa
                 step = "main2"
             if step == "main2":
+                if not p.lost:
+                    self.g.emit("main2", player=p)
+                    self.g.resolve_stack()
                 if not p.lost and p.policy:
                     self._react_armed = True
                     try:
@@ -875,6 +878,34 @@ class InteractiveGame:
             if i is not None and 0 <= i < len(p.hand):
                 self.g.suspend_card(p, p.hand[i])
             return self.state()
+        if zone == "companion":
+            self.g.companion_to_hand(p)
+            return self.state()
+        if zone in ("mutate", "cleave", "awaken", "web", "reinforce", "transmute"):
+            if i is not None and 0 <= i < len(p.hand):
+                c = p.hand[i]
+                if zone == "mutate":
+                    tg = self._chosen_targets(c, target_uids, spec="own_creature") or []
+                    hosts = [x for x in tg if not x.has_subtype("human")]
+                    if not hosts:
+                        hosts = sorted((x for x in p.creatures() if not x.has_subtype("human")),
+                                       key=lambda x: x.power + x.toughness, reverse=True)
+                    if hosts:
+                        self.g.cast_mutate(p, c, hosts[0])
+                elif zone in ("cleave", "awaken"):
+                    tg = self._chosen_targets(c, target_uids) if c.target_spec else None
+                    co = c.cleave_cost if zone == "cleave" else c.awaken_cost
+                    self.g.cast_alt_effect(p, c, co, "_cleaved" if zone == "cleave"
+                                           else "_awakened", targets=tg)
+                elif zone == "web":
+                    self.g.cast_web_slinging(p, c)
+                elif zone == "reinforce":
+                    tg = self._chosen_targets(c, target_uids, spec="own_creature") or [None]
+                    self.g.reinforce(p, c, tg[0])
+                else:
+                    self.g.transmute(p, c)
+                self.g.sba()
+            return self.state()
         if zone in ("overload", "plot", "warp", "prototype", "emerge"):
             if i is not None and 0 <= i < len(p.hand):
                 c = p.hand[i]
@@ -1118,6 +1149,10 @@ class InteractiveGame:
     def _after_human_combat(self, p):
         """Tras el daño del combate propio del humano: maneja combate adicional y
         deja al humano en su fase principal."""
+        if not p.lost:
+            self.g.emit("main2", player=p)      # segunda fase principal (survival)
+            self.g.resolve_stack()
+            self.g.sba()
         # fase de combate adicional (Aggravated Assault, etc.): permite atacar de nuevo
         if getattr(self.g, "extra_combats", 0) > 0 and len(self.g.alive()) > 1:
             self.g.extra_combats -= 1
@@ -1313,6 +1348,35 @@ class InteractiveGame:
                         "target_count": 1, "targets": _bt, "modes": [], "mode_pick": 1,
                         **({} if _bt else {"castable": False,
                                            "reason": "Sin criaturas para encantar"})})
+                # batch 3: mutate / cleave / awaken / web-slinging / reinforce / transmute
+                _mc = getattr(c, "mutate_cost", None)
+                if _mc is not None and p.can_pay(_mc):
+                    _mt = [{"uid": pm.uid, "name": pm.name, "power": pm.power,
+                            "toughness": pm.toughness, "from": "tuyo"}
+                           for pm in p.creatures() if not pm.has_subtype("human")]
+                    casts.append({
+                        "i": i, "name": f"{c.name} (mutar)", "zone": "mutate",
+                        "cost": _cost_str_cost(_mc), "target_spec": "own_creature",
+                        "target_count": 1, "targets": _mt, "modes": [], "mode_pick": 1,
+                        **({} if _mt else {"castable": False,
+                                           "reason": "Sin criatura no Humana"})})
+                for _z, _lbl, _co in (
+                        ("cleave", "hendir", getattr(c, "cleave_cost", None)),
+                        ("awaken", "despertar", getattr(c, "awaken_cost", None)),
+                        ("web", "lanzar telarañas", getattr(c, "web_slinging_cost", None)),
+                        ("reinforce", "reforzar", (getattr(c, "reinforce", None) or {}).get("cost")),
+                        ("transmute", "transmutar", getattr(c, "transmute_cost", None))):
+                    if _co is None or not p.can_pay(_co):
+                        continue
+                    _sp = ("own_creature" if _z == "reinforce"
+                           else getattr(c, "target_spec", None) if _z in ("cleave", "awaken")
+                           else None)
+                    casts.append({
+                        "i": i, "name": f"{c.name} ({_lbl})", "zone": _z,
+                        "cost": _cost_str_cost(_co), "target_spec": _sp,
+                        "target_count": getattr(c, "target_count", 1),
+                        "targets": self._targets_for_spec(_sp) if _sp else [],
+                        "modes": [], "mode_pick": 1})
                 # batch 2: overload / plot / warp / prototype / emerge
                 for _z, _lbl, _co in (
                         ("overload", "sobrecarga", getattr(c, "overload_cost", None)),
@@ -1371,6 +1435,13 @@ class InteractiveGame:
                             "targets": self._targets_for(bf),
                             "modes": self._modes_for(bf),
                             "mode_pick": getattr(bf, "mode_pick", 1)})
+            comp = getattr(p, "companion", None)
+            if comp is not None:
+                casts.append({"name": f"{comp.name} (compañero: a la mano)", "zone": "companion",
+                              "cost": "{3}", "target_spec": None, "target_count": 1,
+                              "targets": [], "modes": [], "mode_pick": 1,
+                              **({} if p.can_pay(Cost(3, ())) else
+                                 {"castable": False, "reason": "Sin maná"})})
             for c in p.command:
                 pay = None if c.cost is None else Cost(c.cost.generic + p.tax_for(c),
                                                        c.cost.pips)

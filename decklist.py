@@ -28,7 +28,8 @@ _TAGS = re.compile(r"\s*\^[^^]*\^")
 _CATS = re.compile(r"\s*\[([^\]]*)\]\s*$")
 _HEADERS_CMD = {"commander", "comandante", "commanders", "comandantes"}
 _HEADERS_SKIP = {"sideboard", "maybeboard", "sb", "considering", "tokens", "maybe",
-                 "companion", "attractions", "stickers"}
+                 "attractions", "stickers"}
+_HEADERS_COMPANION = {"companion", "compañero", "companions"}
 _HEADERS_MAIN = {"deck", "mainboard", "main", "creatures", "lands", "spells",
                  "instants", "sorceries", "artifacts", "enchantments",
                  "planeswalkers", "other", "creature", "land", "instant", "sorcery",
@@ -67,6 +68,7 @@ def _category_kind(cat: str) -> str:
 def parse_decklist(text: str) -> dict:
     """{'commander': str|None, 'commanders': [str] (1-2, partners), 'cards': [(qty, name)]}"""
     commanders = []
+    companions = []         # compañero (fuera del mazo, regla de Companion)
     entries = []            # [(qty, name)]
     blocks = []             # bloques del mazo principal separados por línea en blanco
     cur_block = []
@@ -94,6 +96,10 @@ def parse_decklist(text: str) -> dict:
         if low in _HEADERS_CMD:
             _close_block()
             section = "commander"
+            continue
+        if low in _HEADERS_COMPANION:
+            _close_block()
+            section = "companion"
             continue
         if low in _HEADERS_SKIP:
             _close_block()
@@ -123,6 +129,10 @@ def parse_decklist(text: str) -> dict:
             continue
         if section == "skip" or kind == "skip":
             continue
+        if section == "companion":
+            if not companions:
+                companions.append(name)
+            continue
         if section == "commander" or is_cmd_mark or kind == "commander":
             if name not in commanders and len(commanders) < 2:
                 commanders.append(name)
@@ -143,7 +153,8 @@ def parse_decklist(text: str) -> dict:
             entries = entries[:len(entries) - len(tail)]
 
     return {"commander": commanders[0] if commanders else None,
-            "commanders": commanders, "cards": entries}
+            "commanders": commanders, "cards": entries,
+            "companion": companions[0] if companions else None}
 
 
 def build_deck(parsed: dict, fetch=None, target=99):
@@ -173,6 +184,15 @@ def build_deck(parsed: dict, fetch=None, target=99):
                 implemented += 1
             commander._partner = partner
             target -= 1                    # 98 + 2 comandantes
+
+    # compañero: va como atributo del comandante (Player lo saca de ahí)
+    comp_name = parsed.get("companion")
+    if comp_name:
+        comp = cardsdb.resolve(comp_name, fetch)
+        if comp is None:
+            unresolved.append(comp_name)
+        else:
+            commander._companion = comp
 
     deck = []
     for qty, name in parsed["cards"]:

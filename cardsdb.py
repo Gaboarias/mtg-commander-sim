@@ -1063,6 +1063,44 @@ def _clone_enter_effect(spec):
 def _fragment_effect(seg: str):
     """Parsea un fragmento de texto a (effect(g,ctrl,targets), target_spec, count).
     Reusa los helpers de remoción/monto/robar. effect=None si no se reconoce."""
+    # suspect / detain dirigidos
+    msu = re.search(r"suspect (?:up to one )?target creature( you control| an opponent controls|"
+                    r" you don't control)?", seg or "", re.I)
+    if msu:
+        who = (msu.group(1) or "").strip().lower()
+
+        def eff_suspect(game, ctrl, targets):
+            for t in (targets or []):
+                if hasattr(t, "card"):
+                    t.suspected = True
+                    t.perma_keywords.add("menace")
+                    game.log(f"{t.name} es sospechosa")
+        return eff_suspect, ("own_creature" if who == "you control" else "opp_creature"), 1
+    mdt = re.search(r"detain (?:up to (\w+) )?target (?:nonland permanent|creature)s?"
+                    r"(?: an opponent controls| you don't control)?", seg or "", re.I)
+    if mdt:
+        def eff_detain(game, ctrl, targets):
+            for t in (targets or []):
+                if hasattr(t, "card"):
+                    t._detained_by = ctrl
+                    game.log(f"{ctrl.name} detiene a {t.name}")
+        return eff_detain, "opp_creature", _count_word(mdt.group(1) or "one") or 1
+    # phasing dirigido: "target creature (you control) phases out"
+    mph = re.search(r"(?:up to one )?target (creature|permanent|nonland permanent|artifact|"
+                    r"creature or planeswalker)( you control| an opponent controls| you "
+                    r"don't control)? phases out", seg or "", re.I)
+    if mph:
+        who = (mph.group(2) or "").strip().lower()
+        kind = mph.group(1).lower()
+        spec = ("own_creature" if who == "you control" and kind == "creature" else
+                "own_perm" if who == "you control" else
+                "opp_creature" if kind == "creature" else "any_nonland")
+
+        def eff_phase(game, ctrl, targets):
+            for t in (targets or []):
+                if hasattr(t, "card"):
+                    game.phase_out(t)
+        return eff_phase, spec, 1
     # reanimación: "return [up to N] target <tipos> card... [with mana value N or less]
     # from your graveyard to the battlefield [with a finality counter] [... flying]"
     mre = re.search(r"return (?:up to \w+ )?target ([\w ,/'-]+?) cards?"
@@ -2434,6 +2472,110 @@ def _event_trigger_effect_impl(oracle: str):
     return out
 
 
+def _misc_trigger_effects(oracle: str, name: str = ""):
+    """Disparos de palabras de habilidad y eventos propios: entra un permanente
+    de un tipo (constellation, eerie, rally, 'another Elf enters'), enrage, inspired,
+    heroic, valiant, battalion, pack tactics, survival y flurry."""
+    out = {}
+    names = _self_names(name)
+    me_re = r"(?:~|this creature|" + "|".join(re.escape(n) for n in names if n) + r")"
+
+    def _eff(body):
+        return _effect_any(body.strip())
+
+    for ln in _ability_lines(oracle):
+        l = ln.strip()
+        # --- entra un permanente de un tipo / subtipo
+        m = re.match(r"(?i)whenever (?:(this creature|~|" + "|".join(re.escape(n) for n in names if n)
+                     + r") or )?(a|an|another|one or more) (nontoken )?(artifact|enchantment|"
+                     r"land|planeswalker|permanent|battle|token|[A-Z][a-z]+)(?: creature)?s?"
+                     r"( you control)?(?: and whenever [^,]+?)?"
+                     r" enters?(?: the battlefield)?( under your control)?,\s*(.+)$", l)
+        if m and m.group(4).lower() not in ("creature", "land", "creatures") \
+                and "perm_enters" not in out:
+            kind = m.group(4)
+            eff = _eff(m.group(7))
+            if eff is not None:
+                incl_self = bool(m.group(1))
+                another = m.group(2).lower() == "another"
+                yours = bool(m.group(5) or m.group(6))
+                nontoken = bool(m.group(3))
+                kl = kind.lower()
+                is_type = kl in ("artifact", "enchantment", "land", "planeswalker",
+                                 "permanent", "battle", "token")
+                once = bool(re.search(r"only once each turn|this ability only once each turn",
+                                      oracle or "", re.I))
+
+                def cb_pe(game, watcher, entered=None, _e=eff, _k=kl, _t=is_type,
+                          _a=another, _y=yours, _nt=nontoken, _s=incl_self, _o=once, **_kw):
+                    if entered is None:
+                        return
+                    if _o and getattr(watcher, "_pe_turn", None) == game.turn:
+                        return
+                    if entered is watcher and not _s:
+                        if _a or not _t or _k != "permanent":
+                            return
+                    if _y and entered.controller is not watcher.controller:
+                        return
+                    if _nt and entered.is_token:
+                        return
+                    if _t:
+                        if _k == "token":
+                            if not entered.is_token:
+                                return
+                        elif _k != "permanent" and _k not in entered.card.types:
+                            return
+                    elif not entered.has_subtype(_k) and entered is not watcher:
+                        return
+                    if _o:
+                        watcher._pe_turn = game.turn
+                    prev = (getattr(game, "_trigger_subject", None),
+                            getattr(game, "_trigger_source", None))
+                    game._trigger_subject, game._trigger_source = entered, watcher
+                    try:
+                        _e(game, watcher.controller, watcher)
+                    finally:
+                        game._trigger_subject, game._trigger_source = prev
+                out["perm_enters"] = cb_pe
+            continue
+        simple = [
+            ("dealt_damage", r"whenever " + me_re + r" is dealt damage,\s*(.+)$"),
+            ("untapped", r"whenever " + me_re + r" becomes untapped,\s*(.+)$"),
+            ("targeted_by_spell", r"whenever you cast a spell that targets " + me_re + r",\s*(.+)$"),
+            ("targeted_first", r"whenever " + me_re + r" becomes the target of a spell or "
+             r"ability you control for the first time each turn,\s*(.+)$"),
+            ("battalion", r"whenever " + me_re + r" and at least two other creatures attack,"
+             r"\s*(.+)$"),
+            ("pack_tactics", r"whenever " + me_re + r" attacks, if you attacked with creatures "
+             r"with total power 6 or greater this combat,\s*(.+)$"),
+            ("main2", r"at the beginning of your second main phase, (?:if " + me_re +
+             r" is tapped, )?(.+)$"),
+        ]
+        for key, pat in simple:
+            mm = re.match("(?i)" + pat, l)
+            if not mm or key in out:
+                continue
+            eff = _eff(mm.group(1))
+            if eff is None:
+                continue
+            need_tapped = key == "main2" and " is tapped," in l.lower()
+
+            def cb_s(game, perm, _e=eff, _nt=need_tapped, **_kw):
+                if _nt and not perm.tapped:
+                    return
+                _e(game, perm.controller, perm)
+            out[key] = cb_s
+        mf = re.match(r"(?i)whenever you cast your second spell each turn,\s*(.+)$", l)
+        if mf and "cast" not in out:
+            eff = _eff(mf.group(1))
+            if eff is not None:
+                def cb_fl(game, perm, card=None, _e=eff, **_kw):
+                    if getattr(perm.controller, "spells_cast_turn", 0) == 2:
+                        _e(game, perm.controller, perm)
+                out["cast"] = cb_fl
+    return out
+
+
 def _recurring_trigger_effects(oracle: str):
     """Disparos recurrentes 'At the beginning of (your) upkeep/end step, <efecto>'.
     Devuelve {"upkeep"|"end_step": callback(g, perm, **kw)} usando la capa genérica
@@ -2777,6 +2919,27 @@ def _cond_gc(cond_text: str):
     m = re.fullmatch(r"you have (\d+) or less life", c)
     if m:
         return lambda g, p, _n=int(m.group(1)): p.life <= _n
+    if re.fullmatch(r"you(?:'ve| have) completed a dungeon", c):
+        return lambda g, p: getattr(p, "dungeons_completed", 0) > 0
+    if re.fullmatch(r"you have the initiative", c):
+        return lambda g, p: getattr(p, "initiative", False)
+    if re.fullmatch(r"you have the city'?s blessing", c):
+        return lambda g, p: getattr(p, "citys_blessing", False)
+    m = re.fullmatch(r"your speed is (\d+)(?: or greater)?", c)
+    if m:
+        return lambda g, p, _n=int(m.group(1)): getattr(p, "speed", 0) >= _n
+    if re.fullmatch(r"(?:the )?gift was promised", c):
+        return lambda g, p: bool(getattr(getattr(g, "_resolving_card", None),
+                                         "_gift_promised", False)
+                                 or getattr(getattr(getattr(g, "_trigger_source", None),
+                                                    "card", None), "_gift_promised", False))
+    if re.fullmatch(r"(?:this spell|it) was bargained", c):
+        return lambda g, p: bool(getattr(getattr(g, "_resolving_card", None),
+                                         "_bargained", False)
+                                 or getattr(getattr(getattr(g, "_trigger_source", None),
+                                                    "card", None), "_bargained", False))
+    if re.fullmatch(r"you(?:'ve| have)? gained life this turn", c):
+        return lambda g, p: getattr(p, "gained_turn", None) == turn(g)
     if re.fullmatch(r"it'?s your turn", c):
         return lambda g, p: g.players[g.active_index] is p
     if re.fullmatch(r"it'?s not your turn", c):
@@ -2819,6 +2982,11 @@ def _parse_static_condition(cond_text: str):
     # "a card left your graveyard this turn" (Primary Research, Lorehold)
     if re.search(r"(?:a|one or more) cards? left your graveyard this turn", c):
         return (lambda p: getattr(p.controller, "gy_left_turn", None) == p.game.turn)
+    # condiciones sobre el PROPIO permanente
+    if re.fullmatch(r"(?:it'?s|it is|this creature is|~ is) saddled", c):
+        return lambda p: getattr(p, "saddled_turn", None) == p.game.turn
+    if re.fullmatch(r"(?:it'?s|this creature is|~ is) tapped", c):
+        return lambda p: p.tapped
     gc = _cond_gc(c)
     if gc is not None:
         return (lambda p, _g=gc: p.game is not None and _g(p.game, p.controller))
@@ -4199,6 +4367,131 @@ def _atomic_effect(text):
     """Efectos atómicos que el parser genérico no cubría. Devuelve eff o None."""
     t = re.sub(r"\s+", " ", _strip_reminder(text or "")).strip().rstrip(".").lower()
     t = re.sub(r"^(?:then |and )", "", t)
+
+    # ── acciones clave (batch 3) ──
+    m = re.fullmatch(r"(?:you may )?earthbend (\w+)", t)
+    if m and (n := _count_word(m.group(1))):
+        return lambda game, ctrl, *a, _n=n, **kw: game.animate_land(ctrl, _n, earthbend=True)
+    if t in ("venture into the dungeon", "you venture into the dungeon"):
+        return lambda game, ctrl, *a, **kw: game.venture(ctrl)
+    if t in ("venture into undercity", "you venture into undercity"):
+        return lambda game, ctrl, *a, **kw: game.venture(ctrl, undercity=True)
+    if t in ("you take the initiative", "take the initiative"):
+        return lambda game, ctrl, *a, **kw: game.take_initiative(ctrl)
+    m = re.fullmatch(r"(?:you may )?blight (\w+)", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff_blight(game, ctrl, *a, _n=n, **_kw):
+            pool = list(ctrl.creatures())
+            if not pool:
+                return
+            pm = min(pool, key=lambda x: (not x.is_token, x.power + x.toughness))
+            game.add_counters(pm, "-1/-1", _n)
+            game.log(f"{ctrl.name} plaga {_n} sobre {pm.name}")
+            game.sba()
+        return eff_blight
+    m = re.fullmatch(r"(?:you may )?collect evidence (\d+)", t)
+    if m:
+        def eff_evidence(game, ctrl, *a, _n=int(m.group(1)), **_kw):
+            pool = sorted(ctrl.graveyard, key=lambda c: -(c.cost.cmc if c.cost else 0))
+            pick, tot = [], 0
+            for c in pool:
+                if tot >= _n:
+                    break
+                v = c.cost.cmc if c.cost else 0
+                if v <= 0:
+                    continue
+                pick.append(c)
+                tot += v
+            if tot < _n:
+                return
+            for c in pick:
+                ctrl.graveyard.remove(c)
+                ctrl.exile.append(c)
+            game.emit("leaves_graveyard", player=ctrl)
+            game.log(f"{ctrl.name} reúne evidencia ({tot})")
+        return eff_evidence
+    if t in ("learn", "you learn"):
+        def eff_learn(game, ctrl, *a, **_kw):
+            if ctrl.hand:
+                pol = ctrl.policy
+                c = pol.choose_discard(game, ctrl) if pol and hasattr(pol, "choose_discard") \
+                    else ctrl.hand[-1]
+                if c in ctrl.hand:
+                    ctrl.hand.remove(c)
+                    game.discard_card(ctrl, c)
+            ctrl.draw(1, game)
+            game.log(f"{ctrl.name} aprende (descarta y roba)")
+        return eff_learn
+    if t in ("recruit", "you recruit"):
+        def eff_recruit(game, ctrl, *a, **_kw):
+            ctrl.draw(1, game)
+            if not ctrl.hand:
+                return
+            pol = ctrl.policy
+            c = pol.choose_discard(game, ctrl) if pol and hasattr(pol, "choose_discard") \
+                else ctrl.hand[-1]
+            if c in ctrl.hand:
+                ctrl.hand.remove(c)
+                game.discard_card(ctrl, c)
+                if not c.is_land():
+                    cards.make_token(game, ctrl, "Human Soldier", 1, 1,
+                                     subtypes=("Human", "Soldier"))
+        return eff_recruit
+    if t in ("forage", "you forage"):
+        def eff_forage(game, ctrl, *a, **_kw):
+            if len(ctrl.graveyard) >= 3:
+                for _ in range(3):
+                    ctrl.exile.append(ctrl.graveyard.pop(0))
+                game.emit("leaves_graveyard", player=ctrl)
+                game.log(f"{ctrl.name} forrajea (exilia 3 del cementerio)")
+                return
+            food = [pm for pm in ctrl.battlefield if pm.name.lower() == "food"]
+            if food:
+                game.to_graveyard(food[0], "forage")
+                game.log(f"{ctrl.name} forrajea (sacrifica una Comida)")
+        return eff_forage
+    if t in ("time travel", "you time travel"):
+        def eff_tt(game, ctrl, *a, **_kw):
+            for e in game.suspended:
+                if e["player"] is ctrl and e["n"] > 1:
+                    e["n"] -= 1
+            for pm in ctrl.battlefield:
+                if pm.counters.get("time", 0) > 1:
+                    pm.counters["time"] -= 1
+            game.log(f"{ctrl.name} viaja en el tiempo")
+        return eff_tt
+    m = re.fullmatch(r"(?:you may )?suspect (it|that creature|" + _SELF_REF + r")", t)
+    if m:
+        def eff_suspect_self(game, ctrl, *a, _w=m.group(1), **_kw):
+            pm = (getattr(game, "_trigger_subject", None) if _w in ("it", "that creature")
+                  else None) or _src_perm(game, a)
+            if pm is not None and hasattr(pm, "card"):
+                pm.suspected = True
+                pm.perma_keywords.add("menace")
+                game.log(f"{pm.name} es sospechosa")
+        return eff_suspect_self
+
+    # phasing sin objetivo: "all permanents/creatures you control phase out",
+    # "~ phases out"
+    m = re.fullmatch(r"(?:all|each) (permanents?|creatures?|nonland permanents?) you control "
+                     r"phases? out|" + _SELF_REF + r" phases out", t)
+    if m:
+        kind = (m.group(1) or "").rstrip("s")
+
+        def eff_phase_all(game, ctrl, *a, _k=kind, **_kw):
+            if not _k:
+                src = _src_perm(game, a)
+                if src is not None:
+                    game.phase_out(src)
+                return
+            for pm in list(ctrl.battlefield):
+                if _k == "creature" and not pm.is_creature():
+                    continue
+                if _k.startswith("nonland") and pm.card.is_land():
+                    continue
+                if pm.enchanting is None:
+                    game.phase_out(pm)
+        return eff_phase_all
 
     # manifest / manifest dread / cloak: criatura 2/2 boca abajo desde la biblioteca
     m = re.fullmatch(r"(?:you may )?(?:(manifest dread)( twice)?|(manifest|cloak) the top "
@@ -6210,6 +6503,36 @@ def _strip_ability_words(text):
     return _ABILITY_WORD_RE.sub("", text or "")
 
 
+def _rewrite_mechanics(text):
+    """Reescrituras de texto a formas que el parser ya entiende:
+    - 'Max speed — <habilidad>': solo con velocidad 4.
+    - 'waterbend {N}' -> 'pay {N}' (se puede pagar girando; aprox: maná).
+    - 'airbend target X' -> 'return target X to its owner's hand' (aprox)."""
+    out = []
+    for ln in (text or "").split("\n"):
+        m = re.match(r"(?i)max speed\s*[—–-]\s*(.+)$", ln.strip())
+        if m:
+            body = m.group(1).strip()
+            mk = re.fullmatch(r"([A-Za-z ,]+)\.?", body)
+            if re.match(r"(?i)(when|whenever|at the beginning)", body):
+                ln = re.sub(r",\s*", ", if your speed is 4, ", body, count=1)
+            elif ":" in body.split(".")[0]:
+                ln = body.rstrip(".") + ". Activate only if your speed is 4."
+            elif mk and all(w.strip().lower().replace(" ", "_") in KEYWORDS
+                            for w in re.split(r",\s*(?:and\s+)?|\s+and\s+", mk.group(1))
+                            if w.strip()):
+                ln = f"This creature has {mk.group(1).lower()} as long as your speed is 4."
+            else:
+                ln = body
+        # "Waterbend {X}: …" como coste de activada -> "{X}: …"
+        ln = re.sub(r"(?i)^waterbend ((?:\{[^}]+\})+)\s*:", r"\1:", ln.strip())
+        ln = re.sub(r"(?i)\bwaterbend (\{[^}]+\}(?:\{[^}]+\})*)", r"pay \1", ln)
+        ln = re.sub(r"(?i)\bairbend (up to (?:one|two) )?target ([a-z ]+?)(\.|,| and)",
+                    r"return \1target \2 to its owner's hand\3", ln)
+        out.append(ln)
+    return "\n".join(out)
+
+
 def _build_card_from_data_impl(data: dict) -> Card:
     data = _prefer_front_face(data)
     if not data.get("_no_reminder"):
@@ -6221,7 +6544,21 @@ def _build_card_from_data_impl(data: dict) -> Card:
     # sin texto recordatorio: el "(It's an artifact with '{T}, Sacrifice…: Add one
     # mana…')" de Treasure/Food/etc. se parseaba como efecto propio de la carta
     data = dict(data)
-    data["oracle_text"] = _strip_ability_words(_strip_reminder(data.get("oracle_text", "")))
+    # station: "It's an artifact creature at N+" vive en el recordatorio
+    _mst = re.search(r"artifact creature at (\d+)\+", data.get("oracle_text", "") or "", re.I)
+    _station_at = int(_mst.group(1)) if _mst else 0
+    data["oracle_text"] = _rewrite_mechanics(_strip_ability_words(
+        _strip_reminder(data.get("oracle_text", ""))))
+    # cleave: el texto normal sin corchetes; el de cleave sin lo que va entre ellos
+    _cleave_txt = None
+    if "[" in (data.get("oracle_text") or "") and "cleave" in {
+            k.lower() for k in (data.get("keywords") or [])}:
+        _cleave_txt = re.sub(r"\s*\[[^\]]*\]", "", data["oracle_text"])
+        data["oracle_text"] = data["oracle_text"].replace("[", "").replace("]", "")
+    # station: líneas "N+ | <habilidad>" se cablean aparte (no como texto suelto)
+    _station_lines = re.findall(r"(?m)^(\d+)\+\s*\|\s*(.+)$", data.get("oracle_text") or "")
+    if _station_lines:
+        data["oracle_text"] = re.sub(r"(?m)^\d+\+\s*\|.*$\n?", "", data["oracle_text"])
     if data.get("card_faces"):
         data["card_faces"] = [dict(f, oracle_text=_strip_ability_words(
             _strip_reminder(f.get("oracle_text", "")))) for f in data["card_faces"]]
@@ -7357,7 +7694,7 @@ def _build_card_from_data_impl(data: dict) -> Card:
         card.offspring_cost = ofc
     if (sqc := _kwcost("squad")) is not None and "creature" in types:
         card.squad_cost = sqc
-    mcas = re.search(r"(?:^|\n)casualty (\d+|x)", "\n" + _lt)
+    mcas = re.search(r"(?:^|\n)casualty (\d+|x)", "\n" + (data.get("oracle_text", "") or "").lower())
     if mcas and _spell and mcas.group(1).isdigit():
         card.casualty = int(mcas.group(1))
     if "bargain" in _kws_l and _spell:
@@ -7405,6 +7742,208 @@ def _build_card_from_data_impl(data: dict) -> Card:
                 _prev(g, ctrl, perm)
             g.exploit(ctrl, perm, _e)
         card.on_etb = _exploit_etb
+
+    # ── batch 3: mutate / splice / saddle / station / champion / companion… ──
+    if (mtc := _kwcost("mutate")) is not None and "creature" in types:
+        card.mutate_cost = mtc
+        mmu = re.search(r"whenever (?:this creature|~|" + re.escape(name.lower()) +
+                        r") mutates, ([^\n]+)", _lt)
+        if mmu and (_me := _effect_any(mmu.group(1))) is not None:
+            card.on_mutate = (lambda g, ctrl, perm, _e=_me: _e(g, ctrl, perm))
+    msp = re.search(r"(?:^|\n)splice onto (?:arcane|instant or sorcery)[ —–]*((?:\{[wubrgc0-9/x]+\})+)",
+                    "\n" + (data.get("oracle_text", "") or "").lower())
+    if msp:
+        card.splice_cost = parse_cost(mana_cost_to_str("".join(
+            re.findall(r"\{[wubrgc0-9/x]+\}", msp.group(1)))))
+    msd = re.search(r"(?:^|\n)saddle (\d+)", "\n" + (data.get("oracle_text", "") or "").lower())
+    if msd and "creature" in types:
+        _sn = int(msd.group(1))
+        card.saddle_n = _sn
+        card.activated_abilities = tuple(card.activated_abilities or ()) + ({
+            "cost": parse_cost("0"), "tap": False, "sacrifice_self": False,
+            "sacrifice_other": None, "pay_life": 0, "discard": 0,
+            "label": f"Ensillar {_sn}", "target_spec": None, "target_count": 1,
+            "is_copy_ability": False, "sorcery_speed": True,
+            "effect": (lambda g, ctrl, perm, targets=None, _n=_sn: g.saddle(ctrl, perm, _n)),
+        },)
+        mws = re.search(r"whenever (?:this creature|~|" + re.escape(name.lower()) +
+                        r") attacks while saddled, ([^\n]+)", _lt)
+        if mws and (_we := _effect_any(mws.group(1))) is not None:
+            def _atk_saddled(g, perm, _e=_we, _prev=(card.triggers or {}).get("attacks"), **kw):
+                if _prev is not None:
+                    _prev(g, perm, **kw)
+                if getattr(perm, "saddled_turn", None) == g.turn:
+                    _e(g, perm.controller, perm)
+            card.triggers = dict(card.triggers or {})
+            card.triggers["attacks"] = _atk_saddled
+    if "station" in _kws_l:
+        card.station_creature_at = _station_at
+        card.activated_abilities = tuple(card.activated_abilities or ()) + ({
+            "cost": parse_cost("0"), "tap": False, "sacrifice_self": False,
+            "sacrifice_other": None, "pay_life": 0, "discard": 0,
+            "label": "Cargar (station)", "target_spec": None, "target_count": 1,
+            "is_copy_ability": False, "sorcery_speed": True,
+            "effect": (lambda g, ctrl, perm, targets=None: g.station(ctrl, perm)),
+        },)
+        _ckw = list(getattr(card, "cond_keywords", ()) or ())
+        for _thr, _txt in _station_lines:
+            _thr = int(_thr)
+            _words = [w.strip().lower().replace(" ", "_")
+                      for w in re.split(r",\s*(?:and\s+)?|\s+and\s+", _txt.strip().rstrip("."))]
+            if _words and all(w in KEYWORDS for w in _words):
+                for w in _words:
+                    _ckw.append((w, lambda pm, _n=_thr: pm.counters.get("charge", 0) >= _n))
+                continue
+            for _ab in _parse_activated(_txt, name):
+                card.activated_abilities = tuple(card.activated_abilities) + (
+                    dict(_ab, station_req=_thr),)
+        if _ckw:
+            card.cond_keywords = tuple(_ckw)
+    mch = re.search(r"(?:^|\n)champion an? ([a-z ]+?)(?:\.|\n|$)", "\n" + (data.get("oracle_text", "") or "").lower())
+    if mch and "creature" in types:
+        _ck = mch.group(1).strip()
+
+        def _champ_etb(g, ctrl, perm, _k=_ck, _prev=card.on_etb):
+            g.champion_etb(ctrl, perm, _k)
+            if _prev and perm in ctrl.battlefield:
+                _prev(g, ctrl, perm)
+
+        def _champ_leave(g, ctrl, perm, _prev=card.on_leave):
+            ch = getattr(perm, "_championed", None)
+            if ch:
+                cd, owner = ch
+                perm._championed = None
+                if cd in owner.exile:
+                    owner.exile.remove(cd)
+                    g.move_to_battlefield(cd, owner)
+                    g.log(f"{cd.name} vuelve al campo (champion)")
+            if _prev:
+                _prev(g, ctrl, perm)
+        card.on_etb = _champ_etb
+        card.on_leave = _champ_leave
+    if "ascend" in _kws_l:
+        card.ascend = True
+    if (snc := _kwcost("sneak")) is not None and "creature" in types:
+        card.ninjutsu_cost = snc
+        card.sneak = True
+    if "spree" in _kws_l:
+        _sm, _scs = [], []
+        for _l in (data.get("oracle_text") or "").split("\n"):
+            _mm = re.match(r"\s*\+\s*((?:\{[^}]+\})+)\s*[—–-]\s*(.+)$", _l)
+            if not _mm:
+                continue
+            _fe, _fs, _fc = _fragment_effect(_mm.group(2))
+            if _fe is None:
+                _ge = _effect_any(_mm.group(2))
+                if _ge is None:
+                    continue
+                _fe, _fs, _fc = (lambda g, ctrl, tg, _e=_ge: _e(g, ctrl)), None, 1
+            _sm.append({"label": _short_label(_mm.group(2)), "effect": _fe,
+                        "target_spec": _fs, "target_count": _fc})
+            _scs.append(parse_cost(mana_cost_to_str("".join(
+                re.findall(r"\{[^}]+\}", _mm.group(1))))))
+        if _sm:
+            card.modes = tuple(_sm)
+            card.mode_pick = len(_sm)
+            card.spree_costs = tuple(_scs)
+    if (esc := _kwcost("escalate")) is not None and card.modes:
+        card.escalate_cost = esc
+        card.mode_pick = len(card.modes)
+    maw = re.search(r"(?:^|\n)awaken (\d+)\s*[—–-]\s*((?:\{[wubrgc0-9/x]+\})+)", "\n" + (data.get("oracle_text", "") or "").lower())
+    if maw and _spell:
+        card.awaken_n = int(maw.group(1))
+        card.awaken_cost = parse_cost(mana_cost_to_str("".join(
+            re.findall(r"\{[wubrgc0-9/x]+\}", maw.group(2)))))
+    if _cleave_txt is not None and (clc := _kwcost("cleave")) is not None and _spell:
+        _ct = "\n".join(l for l in _cleave_txt.split("\n") if not re.match(r"(?i)cleave", l.strip()))
+        _ce = _generic_amount_effect(_ct)
+        if _ce is None:
+            _cfe, _cfs, _cfc = _fragment_effect(_ct)
+            _ce = (lambda g, ctrl, tg, _f=_cfe: _f(g, ctrl, tg)) if _cfe else None
+        else:
+            _ce = (lambda g, ctrl, tg, _e=_ce: _e(g, ctrl))
+        if _ce is not None:
+            card.cleave_cost = clc
+            card.cleave_effect = _ce
+    if "enlist" in _kws_l:
+        card.enlist = True
+    if (frc := _kwcost("freerunning")) is not None and card.cost is not None:
+        card.alt_costs = tuple(getattr(card, "alt_costs", ()) or ()) + ((
+            "freerunning", frc, lambda g, p, c: getattr(p, "_prowl_turn", None) == g.turn
+            and bool({"assassin", "commander"} & getattr(p, "prowl_types", set()))),)
+        card._printed_cost = card.cost
+    if "conspire" in _kws_l:
+        card.conspire = True
+    if (hmc := _kwcost("harmonize")) is not None:
+        card.gy_play = {"mode": "harmonize", "cost": hmc, "after": "exile"}
+    if (myc := _kwcost("mayhem")) is not None:
+        card.gy_play = {"mode": "mayhem", "cost": myc, "after": "graveyard"}
+    mrf = re.search(r"(?:^|\n)reinforce (\d+|x)\s*[—–-]\s*((?:\{[wubrgc0-9/x]+\})+)", "\n" + (data.get("oracle_text", "") or "").lower())
+    if mrf and mrf.group(1).isdigit():
+        card.reinforce = {"n": int(mrf.group(1)), "cost": parse_cost(mana_cost_to_str(
+            "".join(re.findall(r"\{[wubrgc0-9/x]+\}", mrf.group(2)))))}
+    if (tmc := _kwcost("transmute")) is not None:
+        card.transmute_cost = tmc
+    mtr = re.search(r"(?:^|\n)tribute (\d+)", "\n" + (data.get("oracle_text", "") or "").lower())
+    if mtr and "creature" in types:
+        _tn = int(mtr.group(1))
+        mtw = re.search(r"if tribute wasn'?t paid, ([^\n]+)", _lt)
+        _te = _effect_any(mtw.group(1)) if mtw else None
+
+        def _tribute_etb(g, ctrl, perm, _n=_tn, _e=_te, _prev=card.on_etb):
+            # el rival elige: paga el tributo (contadores) si son pocos
+            paid = _n <= 2 or _e is None
+            if paid:
+                g.add_counters(perm, "+1/+1", _n)
+                g.log(f"Un rival paga el tributo: {perm.name} recibe {_n} contador(es)")
+            elif _e is not None:
+                g.log(f"No se pagó el tributo de {perm.name}")
+                _e(g, ctrl, perm)
+            if _prev:
+                _prev(g, ctrl, perm)
+        card.on_etb = _tribute_etb
+    if (wsc := _kwcost("web-slinging")) is not None and "creature" in types:
+        card.web_slinging_cost = wsc
+    mamp = re.search(r"(?:^|\n)amplify (\d+)", "\n" + (data.get("oracle_text", "") or "").lower())
+    if mamp and "creature" in types:
+        _an = int(mamp.group(1))
+
+        def _amp_etb(g, ctrl, perm, _n=_an, _prev=card.on_etb):
+            subs = {x.lower() for x in perm.card.subtypes}
+            k = sum(1 for c in ctrl.hand if c.is_creature()
+                    and subs & {x.lower() for x in c.subtypes})
+            if k:
+                g.add_counters(perm, "+1/+1", _n * k)
+                g.log(f"{perm.name} amplifica: revela {k} carta(s)")
+            if _prev:
+                _prev(g, ctrl, perm)
+        card.on_etb = _amp_etb
+    if "increment" in _kws_l and "creature" in types:
+        def _incr(g, perm, card=None, **_kw):
+            c = card
+            if c is None or perm.controller is None:
+                return
+            spent = c.cost.cmc if c.cost is not None else 0
+            if spent > min(perm.power, perm.toughness):
+                g.add_counters(perm, "+1/+1", 1)
+        card.triggers = dict(card.triggers or {})
+        card.triggers.setdefault("cast", _incr)
+    if "ingest" in _kws_l:
+        card.keywords = set(card.keywords) | {"ingest"}
+    if "start your engines!" in _kws_l:
+        card.start_engines = True
+
+        def _engines_etb(g, ctrl, perm, _prev=card.on_etb):
+            if not getattr(ctrl, "speed", 0):
+                ctrl.speed = 1
+                g.log(f"{ctrl.name} arranca motores: velocidad 1")
+            if _prev:
+                _prev(g, ctrl, perm)
+        card.on_etb = _engines_etb
+    mgf = re.search(r"(?:^|\n)gift (a card|a food|a treasure|a clue|a tapped fish|an octopus|"
+                    r"an extra turn)", "\n" + (data.get("oracle_text", "") or "").lower())
+    if mgf:
+        card.gift_kind = mgf.group(1).replace("extra turn", "extra turn")
 
     # Commander ninjutsu: también desde la zona de mando
     if re.search(r"commander ninjutsu", _lt):
@@ -7530,6 +8069,13 @@ def _build_card_from_data_impl(data: dict) -> Card:
     if rec:
         card.triggers = dict(card.triggers)
         for ev, cb in rec.items():
+            card.triggers.setdefault(ev, cb)
+
+    # palabras de habilidad / eventos propios (constellation, enrage, heroic…)
+    _mte = _misc_trigger_effects(data.get("oracle_text", ""), name)
+    if _mte:
+        card.triggers = dict(card.triggers)
+        for ev, cb in _mte.items():
             card.triggers.setdefault(ev, cb)
 
     # disparos por evento: muerte de criatura, daño de combate a jugador, magecraft.
