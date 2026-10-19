@@ -757,7 +757,8 @@ class StackObject:
 
 class Game:
     SELF_SCOPED = {"upkeep", "end_step", "draw", "landfall", "cast", "begin_combat",
-                   "gain_life", "token_created", "cards_exiled", "main2"}
+                   "gain_life", "token_created", "cards_exiled", "main2", "scry", "surveil",
+                   "ring_tempts"}
     # descripción amigable de cada evento, para el resumen de habilidades
     EVENT_KIND = {
         "etb": "cuando algo entra al campo", "landfall": "al jugar una tierra",
@@ -1166,14 +1167,17 @@ class Game:
                 inner = {k: v for k, v in kw.items() if k != "perm"}
                 if "perm" in kw:
                     inner["subject"] = kw["perm"]
-                self.stack.append(StackObject(
-                    controller=pl,
-                    resolve=(lambda g, _cb=cb, _perm=perm, _kw=inner:
-                             g._run_trigger(_cb, _perm, _kw)),
-                    source=perm,
-                    label=f"trigger:{event}:{perm.name}",
-                    kind="trigger", perm=perm,
-                ))
+                # Teysa / Drivnod: los disparos por muerte se disparan otra vez
+                copies = 1 + (self._death_extra(pl) if event == "death" else 0)
+                for _ in range(copies):
+                    self.stack.append(StackObject(
+                        controller=pl,
+                        resolve=(lambda g, _cb=cb, _perm=perm, _kw=inner:
+                                 g._run_trigger(_cb, _perm, _kw)),
+                        source=perm,
+                        label=f"trigger:{event}:{perm.name}",
+                        kind="trigger", perm=perm,
+                    ))
                 self.note_ability(perm.card, self.EVENT_KIND.get(event, event),
                                   controller=pl)
                 # registrar esta disparada como la última habilidad COPIABLE
@@ -1395,6 +1399,11 @@ class Game:
             try:
                 self._run_fx(f"ETB {card.name}",
                              lambda: card.on_etb(self, player, perm))
+                # Panharmonicon / Yarok: el disparo de entrada se dispara otra vez
+                for _ in range(self._etb_extra(player, perm)):
+                    if perm in player.battlefield:
+                        self._run_fx(f"ETB extra {card.name}",
+                                     lambda: card.on_etb(self, player, perm))
             finally:
                 self._fx_source = prev
                 self._fx_controller = prev_c
@@ -1494,6 +1503,42 @@ class Game:
                 return True
         return False
 
+    def ring_tempt(self, p: "Player"):
+        """'The Ring tempts you': sube el nivel del Anillo (máx. 4) y elegís
+        portador (la criatura de más fuerza). Nivel 1: no la bloquean criaturas con
+        más fuerza; 2: al atacar roba y descarta; 3: quien la bloquea sacrifica al
+        bloqueador; 4: al hacer daño de combate cada rival pierde 3."""
+        p.ring_level = min(4, getattr(p, "ring_level", 0) + 1)
+        for pm in p.battlefield:
+            pm._ring_bearer = False
+        cr = p.creatures()
+        if cr:
+            bearer = max(cr, key=lambda x: (x.power, x.toughness))
+            bearer._ring_bearer = True
+            self.log(f"El Anillo tienta a {p.name} (nivel {p.ring_level}): portador {bearer.name}")
+        else:
+            self.log(f"El Anillo tienta a {p.name} (nivel {p.ring_level})")
+        self.emit("ring_tempts", player=p)
+
+    def _etb_extra(self, player, perm) -> int:
+        """Copias extra de los disparos de entrada (Panharmonicon: artefacto o
+        criatura; Yarok: cualquier permanente) que controla `player`."""
+        n = 0
+        for src in player.battlefield:
+            k = getattr(src.card, "etb_double", None)
+            if not k or src.abilities_off():
+                continue
+            if k == "permanent" or (k == "artifact_creature" and (
+                    perm.is_creature() or "artifact" in perm.card.types)) or \
+                    (k == "creature" and perm.is_creature()):
+                n += 1
+        return n
+
+    def _death_extra(self, player) -> int:
+        """Teysa / Drivnod: los disparos por muerte de criatura se disparan otra vez."""
+        return sum(1 for src in player.battlefield
+                   if getattr(src.card, "death_double", False) and not src.abilities_off())
+
     def exile_permanent(self, perm: Permanent, reason: str = "") -> bool:
         """Exilia un permanente del campo: on_leave, 'leave', fichas desaparecen,
         el comandante va a la zona de mando y las cartas de un proxy (boca abajo,
@@ -1509,6 +1554,7 @@ class Game:
         if not perm.card.is_land():
             self.nonland_left_turn = self.turn
         self.emit("leave", perm=perm)
+        self.emit("other_leaves", perm=perm)
         if perm.is_token:
             return True
         card = perm.card
@@ -1526,6 +1572,10 @@ class Game:
             ctrl.exile.append(card)
         return True
 
+    _SAC_REASONS = ("sacrif", "bargain", "casualty", "aniquilador", "exploit", "emerge",
+                    "blitz", "fin de turno", "mantenimiento impago", "sin tierra requerida",
+                    "devour", "fling")
+
     def to_graveyard(self, perm: Permanent, reason: str = ""):
         """Ignora indestructible. El comandante vuelve a la zona de mando.
         Los tokens desaparecen."""
@@ -1533,6 +1583,10 @@ class Game:
         if perm not in ctrl.battlefield:
             return
         ctrl.battlefield.remove(perm)
+        _r = (reason or "").lower()
+        if any(k in _r for k in self._SAC_REASONS):
+            self.emit("sacrificed", player=ctrl, perm=perm)   # "whenever you sacrifice ..."
+        self.emit("other_leaves", perm=perm)
         if perm.card.on_leave:                # "cuando deja el campo" (muerte/exilio)
             self._run_fx(f"on_leave {perm.name}",
                          lambda: perm.card.on_leave(self, ctrl, perm))
@@ -1562,10 +1616,12 @@ class Game:
         # criaturas que vuelven al morir) se despacha aparte.
         _own_death = (perm.card.triggers or {}).get("death") if dies else None
         if _own_death:
-            self.stack.append(StackObject(
-                ctrl,
-                (lambda g, _cb=_own_death, _p=perm, _pl=ctrl: _cb(g, _p, player=_pl, self_death=True)),
-                source=perm, label=f"death-self:{perm.name}", kind="trigger"))
+            for _ in range(1 + self._death_extra(ctrl)):
+                self.stack.append(StackObject(
+                    ctrl,
+                    (lambda g, _cb=_own_death, _p=perm, _pl=ctrl: _cb(g, _p, player=_pl,
+                                                                     self_death=True)),
+                    source=perm, label=f"death-self:{perm.name}", kind="trigger"))
         if not exiled_instead:
             self._push_self_trigger(perm, "self_to_gy", "va al cementerio")
         for owner, heff in (getattr(perm, "_haunted_by", None) or []):
@@ -1825,6 +1881,12 @@ class Game:
                         self._push_self_trigger(w, "group_combat_damage",
                                                 "daño de combate de tus criaturas",
                                                 damaged=target)
+            # El Anillo nivel 4: el portador hace daño de combate -> cada rival pierde 3
+            if combat and src_perm and getattr(source, "_ring_bearer", False) and \
+                    getattr(source.controller, "ring_level", 0) >= 4:
+                for o in self.opponents(source.controller):
+                    o.life -= 3
+                self.log("El Anillo: cada rival pierde 3 vida")
             # disparo "cuando ~ hace daño de combate a un jugador"
             if combat and src_perm:
                 cb = source.card.triggers.get("combat_damage_to_player")
@@ -4597,6 +4659,15 @@ class Game:
             else:
                 self.log(f"{p.name}: {perm.name} ({perm.power}) ataca al "
                          f"planeswalker {defender.name} de {defender.controller.name}")
+            # El Anillo nivel 2+: el portador al atacar roba y descarta
+            if getattr(perm, "_ring_bearer", False) and getattr(p, "ring_level", 0) >= 2:
+                p.draw(1, self)
+                if p.hand and p.policy and hasattr(p.policy, "choose_discard"):
+                    dc = p.policy.choose_discard(self, p)
+                    if dc in p.hand:
+                        p.hand.remove(dc)
+                        self.discard_card(p, dc)
+                self.log(f"El Anillo: {perm.name} roba y descarta")
             cb = perm.card.triggers.get("attacks")
             if cb:
                 self.stack.append(StackObject(
@@ -4760,6 +4831,8 @@ class Game:
             return False
         if getattr(attacker.card, "unblock_by_walls", False) and blocker.has_subtype("wall"):
             return False
+        if getattr(attacker, "_ring_bearer", False) and blocker.power > attacker.power:
+            return False             # portador del Anillo: no la bloquean las de más fuerza
         ub = getattr(attacker.card, "unblock_power_le", None)
         if ub is not None and blocker.power <= ub:
             return False             # "can't be blocked by creatures with power N or less"
@@ -4796,6 +4869,11 @@ class Game:
         afflict, flanking, rampage, bushido, y los 'whenever ~ blocks / becomes
         blocked' de cada criatura."""
         for a in declared:
+            if a.blocked_by and getattr(a, "_ring_bearer", False) and \
+                    getattr(a.controller, "ring_level", 0) >= 3:
+                for b in list(a.blocked_by):
+                    self.delayed_end.append(lambda g, _b=b: g.to_graveyard(_b, "sacrificio (Anillo)")
+                                            if _b in _b.controller.battlefield else None)
             if a.blocked_by:
                 self._push_self_trigger(a, "becomes_blocked", "es bloqueada",
                                         subject=a.blocked_by[0])

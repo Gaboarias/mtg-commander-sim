@@ -2095,6 +2095,14 @@ def _spell_filter(words):
         return lambda c: True
     if w in ("instant or sorcery", "instant and sorcery"):
         return lambda c: bool({"instant", "sorcery"} & c.types)
+    mmv = re.fullmatch(r"(?:([a-z ]+?) )?spell with mana value (\d+) or (greater|less)", w)
+    if mmv:
+        base = _spell_filter(mmv.group(1) or "") if mmv.group(1) else (lambda c: True)
+        if base is None:
+            return None
+        n, ge = int(mmv.group(2)), mmv.group(3) == "greater"
+        return lambda c, _b=base, _n=n, _g=ge: _b(c) and (
+            ((c.cost.cmc if c.cost else 0) >= _n) if _g else ((c.cost.cmc if c.cost else 0) <= _n))
     # colores / multicolor / histórico / legendario (Shrine, Jhoira, Sram…)
     _cmap = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
 
@@ -2183,25 +2191,29 @@ def _event_trigger_effect_impl(oracle: str):
     # control" (solo las tuyas) para no sobre-dispararse con muertes rivales.
     md = None
     for _ln in _ability_lines(oracle):
-        md = re.search(r"whenever (this creature or )?(a|an|another) (nontoken )?"
-                       r"creature( you control)? dies,?\s*(.{0,160})", _ln, re.I)
+        md = re.search(r"whenever (this creature or |~ or )?(a|an|another) (nontoken )?"
+                       r"creature( you control| an opponent controls| your opponents control| "
+                       r"you don't control)? dies,?\s*(.{0,160})", _ln, re.I)
         if md:
             break
     if md:
         eff = _effect_any(md.group(5))
         if eff is not None:
-            yours = bool(md.group(4))
+            yours = (md.group(4) or "").strip().lower() == "you control"
+            theirs = bool(md.group(4)) and not yours
             nontoken = bool(md.group(3))
             # "a/an creature" o "this creature or ..." incluyen a la propia; "another"
             # (sin "this creature or") excluye su propia muerte.
             self_counts = bool(md.group(1)) or md.group(2).lower() in ("a", "an")
 
             def cb_death(game, perm, player=None, self_death=False, subject=None,
-                         _e=eff, _y=yours, _nt=nontoken, _sc=self_counts, **_kw):
+                         _e=eff, _y=yours, _th=theirs, _nt=nontoken, _sc=self_counts, **_kw):
                 if self_death and not _sc:
                     return                       # "another": no cuenta su propia muerte
                 if _y and player is not None and player is not perm.controller:
                     return                       # "you control": solo tus criaturas
+                if _th and (player is None or player is perm.controller):
+                    return                       # "an opponent controls": solo las rivales
                 if _nt and subject is not None and subject.is_token:
                     return                       # "nontoken": una ficha no cuenta
                 _e(game, perm.controller)
@@ -2472,6 +2484,10 @@ def _event_trigger_effect_impl(oracle: str):
         mc = re.search(r"whenever you cast (?:or copy )?(?:your first |an? )"
                        r"([\w ]*?) ?spells?(?: from your hand)?(?: each turn)?,?\s*(.{0,160})",
                        _ln, re.I)
+        mmv2 = re.search(r"whenever you cast an? ((?:[a-z]+ )?spell with mana value \d+ or "
+                         r"(?:greater|less)),\s*(.{0,160})", _ln, re.I)
+        if mmv2:
+            mc = mmv2
         if mc:
             break
     _cfilt = _spell_filter(mc.group(1)) if mc else None
@@ -2682,6 +2698,9 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
              r"with total power 6 or greater this combat,\s*(.+)$"),
             ("main2", r"at the beginning of your second main phase, (?:if " + me_re +
              r" is tapped, )?(.+)$"),
+            ("scry", r"whenever you scry,\s*(.+)$"),
+            ("ring_tempts", r"whenever the ring tempts you,\s*(.+)$"),
+            ("surveil", r"whenever you surveil,\s*(.+)$"),
             ("blocks_or_blocked", r"whenever " + me_re + r" blocks or becomes blocked"
              r"(?: by a creature)?,\s*(.+)$"),
             ("blocks", r"whenever " + me_re + r" blocks(?: a creature)?,\s*(.+)$"),
@@ -2710,6 +2729,39 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
             _bb = out.pop("blocks_or_blocked")
             out.setdefault("blocks", _bb)
             out.setdefault("becomes_blocked", _bb)
+        # "whenever you sacrifice (another) <tipo>, <efecto>"
+        msac = re.match(r"(?i)whenever you sacrifice (another |one or more )?(?:an? )?([a-z]+?)s?"
+                        r"(?: or (?:an? )?([a-z]+?)s?)?,\s*(.+)$", l)
+        if msac and "sacrificed" not in out:
+            eff = _eff(re.sub(r"(?i)^it (gets|gains)\b", r"this creature \1", msac.group(4)))
+            if eff is not None:
+                kinds = {k.lower() for k in (msac.group(2), msac.group(3)) if k}
+                another = bool(msac.group(1)) and "another" in msac.group(1).lower()
+
+                def cb_sac(game, perm, player=None, subject=None, _e=eff, _k=kinds,
+                           _an=another, **_kw):
+                    if player is not perm.controller or subject is None:
+                        return
+                    if _an and subject is perm:
+                        return
+                    if "permanent" not in _k and not any(
+                            (k == "creature" and subject.card.is_creature()) or
+                            k in subject.card.types or subject.has_subtype(k) for k in _k):
+                        return
+                    _e(game, perm.controller, perm)
+                out["sacrificed"] = cb_sac
+        # "whenever another creature you control leaves the battlefield, ..."
+        mlv = re.match(r"(?i)whenever (?:a|another) (nontoken )?creature you control leaves the "
+                       r"battlefield,\s*(.+)$", l)
+        if mlv and "other_leaves" not in out:
+            eff = _eff(mlv.group(2))
+            if eff is not None:
+                def cb_lv(game, perm, subject=None, _e=eff, _nt=bool(mlv.group(1)), **_kw):
+                    if subject is None or subject is perm or subject.controller is not perm.controller \
+                            or not subject.card.is_creature() or (_nt and subject.is_token):
+                        return
+                    _e(game, perm.controller, perm)
+                out["other_leaves"] = cb_lv
         mf = re.match(r"(?i)whenever you cast your second spell each turn,\s*(.+)$", l)
         if mf and "cast" not in out:
             eff = _eff(mf.group(1))
@@ -3765,12 +3817,25 @@ def _chapter_effect(body: str):
     return None
 
 
+_CUR_NAMES: list = []          # pila de nombres de la carta que se está armando
+
+
 def _effect_any(body: str):
     """Efecto de un DISPARO / ENTRADA / capítulo: el parser genérico y, si no lo
     reconoce, el dirigido con objetivo elegido al resolver (humano: modal; bot:
     el mejor). Antes los disparos solo aceptaban efectos sin objetivo: 'when this
     creature enters, return target nonland permanent…' quedaba sin efecto."""
-    return _chapter_effect(body)
+    eff = _chapter_effect(body)
+    if eff is None and _CUR_NAMES and body:
+        # "put a +1/+1 counter on Elenda" / "Kozilek deals 3 damage…": el nombre
+        # propio como "~" (lo que entienden los atómicos)
+        b2 = body
+        for nm in sorted(_CUR_NAMES[-1], key=len, reverse=True):
+            if len(nm) >= 3:
+                b2 = re.sub(r"(?<![\w'])" + re.escape(nm) + r"(?![\w'])", "~", b2, flags=re.I)
+        if b2 != body:
+            eff = _chapter_effect(b2)
+    return eff
 
 
 def _parse_saga(oracle: str):
@@ -4269,6 +4334,8 @@ def _scry_surveil_effect(n, to_graveyard, draw_n=0, draw_first=False, fateseal=F
                      f"{len(kept)} arriba, {moved} al {dest}")
             if (not _df) and _dn:
                 ctrl.draw(_dn, game)
+            if not _fs:                           # "whenever you scry / surveil"
+                game.emit(kind, player=ctrl)
 
         def _apply(choice):
             c = looked[st["i"]]
@@ -4690,6 +4757,8 @@ def _atomic_effect(text):
     t = re.sub(r"\s+", " ", _strip_reminder(text or "")).strip().rstrip(".").lower()
     t = re.sub(r"^(?:then |and )", "", t)
 
+    if t in ("the ring tempts you", "the ring tempts you again"):
+        return lambda game, ctrl, *a, **kw: game.ring_tempt(ctrl)
     # ── batch 8: efectos simples frecuentes en ETB / upkeep / ataque ──
     m = re.fullmatch(r"each player loses (\w+) life", t)
     if m and (n := _count_word(m.group(1))):
@@ -7072,7 +7141,11 @@ def build_card_from_data(data: dict) -> Card:
         return _vanilla_from_data(data)
     _build_depth += 1
     try:
-        c = _build_card_from_data_impl(data)
+        _n_before = len(_CUR_NAMES)
+        try:
+            c = _build_card_from_data_impl(data)
+        finally:
+            del _CUR_NAMES[_n_before:]
         # habilidades con coste "discard this card" (Channel…): se activan DESDE LA
         # MANO, no desde el campo (antes descartaban otra carta al azar en el campo)
         abs_ = tuple(c.activated_abilities or ())
@@ -7281,6 +7354,8 @@ def _build_card_from_data_impl(data: dict) -> Card:
     _station_at = int(_mst.group(1)) if _mst else 0
     _pre4 = _strip_ability_words(_strip_reminder(data.get("oracle_text", "")))
     data["oracle_text"] = _rewrite_mechanics(_pre4)
+    # nombres propios de la carta en construcción: _effect_any los lee como "~"
+    _CUR_NAMES.append(_self_names(data.get("name") or ""))
     # hechizo "<efecto>. If <condición>, <bonus>." (addendum, raid, morbid…): el
     # bonus se separa y se aplica solo si se cumple al resolver. Antes el parser
     # genérico lo aplicaba SIEMPRE (o tomaba solo una de las dos partes).
@@ -9186,6 +9261,15 @@ def _build_card_from_data_impl(data: dict) -> Card:
         elif re.fullmatch(_subj5 + r" must be blocked if able", _l5) or \
                 re.fullmatch(_subj5 + r" must be blocked each combat if able", _l5):
             card.must_be_blocked = True
+        elif (m9 := re.fullmatch(r"if an? (artifact or creature|permanent|creature|nontoken creature) "
+                                 r"entering(?: the battlefield)? causes a triggered ability of a "
+                                 r"permanent you control to trigger, that ability triggers an "
+                                 r"additional time", _l5)):
+            card.etb_double = {"artifact or creature": "artifact_creature",
+                               "permanent": "permanent"}.get(m9.group(1), "creature")
+        elif re.fullmatch(r"if a creature dying causes a triggered ability of a permanent you "
+                          r"control to trigger, that ability triggers an additional time", _l5):
+            card.death_double = True
         elif _l5 == "you have hexproof":
             card.player_hexproof = True
         elif _l5 == "if you would gain life, you gain twice that much life instead":
