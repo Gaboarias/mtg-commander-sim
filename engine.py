@@ -3367,6 +3367,32 @@ class Game:
                     self.to_graveyard(perm, "cumulative upkeep")
         self.sba()
 
+    def activate_from_hand(self, p: "Player", card: Card, index: int = 0, targets=None) -> bool:
+        """Habilidad de la MANO con coste 'discard this card' (Channel, Boseiju…):
+        paga, descarta la carta y el efecto va a la pila."""
+        abils = getattr(card, "hand_abilities", None) or ()
+        if card not in p.hand or not (0 <= index < len(abils)):
+            return False
+        ab = abils[index]
+        if not p.can_pay(ab["cost"]) or (ab.get("pay_life") and p.life <= ab["pay_life"]):
+            return False
+        p.pay(ab["cost"])
+        if ab.get("pay_life"):
+            p.life -= ab["pay_life"]
+        p.hand.remove(card)
+        self.log(f"{p.name} descarta {card.name}: {ab.get('label', '')}")
+        self.discard_card(p, card)
+        eff = ab.get("effect")
+        tg = list(targets or [])
+
+        def _resolve(g, _e=eff, _p=p, _tg=tg):
+            if _e is not None:
+                _e(g, _p, None, _tg)
+        self.stack.append(StackObject(p, _resolve, source=card, targets=tg,
+                                      label=f"ability:{card.name}:mano", kind="ability"))
+        self._targeted_triggers(p, tg, spell=False)
+        return self._after_stack_push(p, self.stack[-1])
+
     def cycle_card(self, p: "Player", card: Card) -> bool:
         """Cycling: paga el coste de cycling, descarta esta carta (madness aplica) y
         roba una. Es una habilidad de la MANO."""

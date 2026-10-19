@@ -143,6 +143,8 @@ def make_resource_token(game, player, kind):
     produces = None
     if k == "treasure":
         produces = (lambda perm, pl: {"W": 1, "U": 1, "B": 1, "R": 1, "G": 1})
+    elif k == "powerstone":                     # {T}: add {C} (aprox.: maná incoloro)
+        produces = (lambda perm, pl: {"C": 1})
     tok = Card(
         name=k.capitalize() or "Token",
         types={"artifact"},

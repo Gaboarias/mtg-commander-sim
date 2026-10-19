@@ -300,6 +300,17 @@ class Policy:
             return bool(game.cast_prototype(me, card))
         if getattr(card, "emerge_cost", None) is not None and game.emerge_option(me, card):
             return bool(game.cast_emerge(me, card))
+        # habilidad desde la mano ("discard this card:", Channel): solo si la carta
+        # no se puede lanzar ahora y no es tierra (las tierras se juegan)
+        if not card.is_land():
+            for k, ha in enumerate(getattr(card, "hand_abilities", None) or ()):
+                if not me.can_pay(ha["cost"]):
+                    continue
+                spec = ha.get("target_spec")
+                tg = self._spec_targets(game, me, spec, ha.get("target_count", 1)) if spec else []
+                if spec and not tg:
+                    continue
+                return bool(game.activate_from_hand(me, card, k, targets=tg))
         # impending: el ETB del Overlord por menos (sin cuerpo por unos turnos)
         ic = getattr(card, "impending_cost", None)
         if ic is not None and me.can_pay(ic):

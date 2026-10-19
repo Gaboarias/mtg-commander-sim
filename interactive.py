@@ -951,6 +951,16 @@ class InteractiveGame:
             if i is not None and 0 <= i < len(p.hand):
                 self.g.cycle_card(p, p.hand[i])
             return self.state()
+        if str(zone).startswith("hand_ability"):   # Channel: "discard this card: …"
+            if i is not None and 0 <= i < len(p.hand):
+                c = p.hand[i]
+                k = int(str(zone).split(":")[1]) if ":" in str(zone) else 0
+                abs_ = getattr(c, "hand_abilities", None) or ()
+                if 0 <= k < len(abs_):
+                    tg = self._chosen_targets(c, target_uids, spec=abs_[k].get("target_spec"))
+                    self.g.activate_from_hand(p, c, k, targets=tg)
+                    self.g.sba()
+            return self.state()
         if zone == "adventure":   # lanzar la cara de aventura de una carta de la mano
             if i is not None and 0 <= i < len(p.hand):
                 c = p.hand[i]
@@ -1406,6 +1416,17 @@ class InteractiveGame:
                         "zone": "emerge", "cost": _cost_str_cost(_em[1]), "target_spec": None,
                         "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
                 # Cycling: descartar por robar una carta.
+                for _k, _ha in enumerate(getattr(c, "hand_abilities", None) or ()):
+                    if p.can_pay(_ha["cost"]):
+                        _hs = _ha.get("target_spec")
+                        _ht = self._targets_for_spec(_hs) if _hs else []
+                        if _hs in self._MUST_TARGET and not _ht:
+                            continue
+                        casts.append({
+                            "i": i, "name": f"{c.name} (descartar: {_ha.get('label', '')})",
+                            "zone": f"hand_ability:{_k}", "cost": _cost_str_cost(_ha["cost"]),
+                            "target_spec": _hs, "target_count": _ha.get("target_count", 1),
+                            "targets": _ht, "modes": [], "mode_pick": 1})
                 _cy = getattr(c, "cycling", None)
                 if _cy and p.can_pay(_cy):
                     casts.append({
