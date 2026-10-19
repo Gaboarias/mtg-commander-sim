@@ -1963,6 +1963,15 @@ class Game:
                             self.log(f"{p.name} crea {tok['name']} "
                                      f"{tok['power']}/{tok['toughness']}")
                         changed = True
+            # "When you control no Islands, sacrifice this creature" (Dandân, Serpents)
+            for p in self.players:
+                for perm in list(p.battlefield):
+                    need = getattr(perm.card, "sac_without_land", None)
+                    if need and not any(pm.card.is_land() and pm.has_subtype(need)
+                                        for pm in p.battlefield):
+                        self.log(f"{perm.name} se sacrifica (no controlás {need})")
+                        self.to_graveyard(perm, "sin tierra requerida")
+                        changed = True
             # aura sin huésped válido -> al cementerio (bestow: vuelve a ser criatura)
             for p in self.players:
                 for perm in list(p.battlefield):
@@ -2527,6 +2536,11 @@ class Game:
         """Heroic ('whenever you cast a spell that targets ~') y valiant ('becomes
         the target of a spell or ability you control for the first time each turn')."""
         for t in (targets or []):
+            if isinstance(t, Permanent) and getattr(t.card, "sac_when_targeted", False) \
+                    and t in t.controller.battlefield:
+                self.log(f"{t.name} es objetivo: se sacrifica")
+                self.to_graveyard(t, "objetivo (se sacrifica)")
+                continue
             if not isinstance(t, Permanent) or t.controller is not caster:
                 continue
             if spell:
@@ -2820,7 +2834,9 @@ class Game:
             ctrl, _resolve, source=perm.card, targets=_t,
             label=f"ability:{perm.name}:{ab.get('label', '')}", kind="ability",
             perm=perm, is_copy_ability=is_copy))
-        return self._after_stack_push(ctrl, self.stack[-1])
+        obj = self.stack[-1]
+        self._targeted_triggers(ctrl, _t, spell=False)
+        return self._after_stack_push(ctrl, obj)
 
     _SPEC_OK = {
         "opp_creature": lambda o: isinstance(o, Permanent) and o.is_creature(),
@@ -3699,6 +3715,29 @@ class Game:
                         if not pm.blocking and not pm.tapped and pm.is_creature() \
                                 and a not in pm.blocking:
                             self._apply_block_pairs([a], [(a, pm)])
+        # lure: "all creatures able to block this creature do so" / "must be blocked
+        # if able" — se fuerzan bloqueos con las criaturas del defensor que puedan
+        for a in declared:
+            lure = getattr(a.card, "lure_all", False)
+            must = getattr(a.card, "must_be_blocked", False)
+            if not (lure or must) or a not in a.controller.battlefield:
+                continue
+            dfn = self._def_player(a)
+            able = [pm for pm in dfn.battlefield if pm.is_creature() and not pm.tapped
+                    and not pm.cant_block and not pm.attacking and a not in pm.blocking
+                    and (not a.has("flying") or pm.has("flying") or pm.has("reach"))
+                    and self._can_block_evasion(a, pm)]
+            if lure:
+                for pm in able:
+                    for other in list(pm.blocking):          # deja lo que bloqueaba
+                        if pm in other.blocked_by:
+                            other.blocked_by.remove(pm)
+                    pm.blocking = []
+                    self._apply_block_pairs([a], [(a, pm)])
+            elif must and not a.blocked_by:
+                free = [pm for pm in able if not pm.blocking]
+                if free:
+                    self._apply_block_pairs([a], [(a, min(free, key=lambda x: x.power + x.toughness))])
         human = getattr(self, "interactive_human", None)
         ap = self.players[self.active_index] if self.players else None
         order = ([ap] if ap else []) + [pl for pl in self.players if pl is not ap]
@@ -4694,7 +4733,16 @@ class Game:
 
     def _combat_block_triggers(self, declared: list):
         """Disparos/estáticas que dependen de los bloqueadores ya asignados:
-        afflict, flanking, rampage, bushido."""
+        afflict, flanking, rampage, bushido, y los 'whenever ~ blocks / becomes
+        blocked' de cada criatura."""
+        for a in declared:
+            if a.blocked_by:
+                self._push_self_trigger(a, "becomes_blocked", "es bloqueada",
+                                        subject=a.blocked_by[0])
+                for b in a.blocked_by:
+                    self._push_self_trigger(b, "blocks", "bloquea", subject=a)
+        if self.stack:
+            self.resolve_stack()
         for a in declared:
             blockers = list(a.blocked_by)
             if not blockers:
@@ -4822,9 +4870,22 @@ class Game:
                     self.deal_damage(b, a, b.power, combat=True)
 
     # -- turno ------------------------------------------------------------ #
+    def _opening_leylines(self):
+        """'If this card is in your opening hand, you may begin the game with it on
+        the battlefield' (Leylines): una vez, antes del primer turno."""
+        if getattr(self, "_leylines_done", False):
+            return
+        self._leylines_done = True
+        for pl in self.players:
+            for c in [c for c in pl.hand if getattr(c, "leyline", False)]:
+                pl.hand.remove(c)
+                self.move_to_battlefield(c, pl)
+                self.log(f"{pl.name} empieza con {c.name} en el campo")
+
     def begin_turn(self, p: "Player"):
         """UNTAP + UPKEEP + DRAW + SBA. Compartido por el turno de la política
         (run_turn) y por el turno manual de un humano (interactive)."""
+        self._opening_leylines()
         self.turns_played += 1
         # encabezado de turno: separa visualmente los turnos en el registro
         self.log(f"‹turno› {p.name}")
@@ -4852,6 +4913,11 @@ class Game:
         # día/noche: la regla mira los hechizos del turno ANTERIOR, así que se
         # evalúa antes de reiniciar el contador de hechizos.
         self._update_day_night(p)
+        # werewolves: "si no se lanzaron hechizos el turno anterior" / "si un jugador
+        # lanzó dos o más hechizos el turno anterior"
+        self.spells_last_turn = getattr(self, "spells_this_turn", 0)
+        self.max_player_spells_last_turn = max(
+            (getattr(pl, "spells_cast_turn", 0) for pl in self.players), default=0)
         self.spells_this_turn = 0    # para storm (hechizos lanzados este turno)
         # "este turno" para palabras de habilidad (raid, spectacle, surge…)
         for pl in self.players:

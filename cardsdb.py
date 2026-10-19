@@ -1085,6 +1085,51 @@ def _fragment_effect(seg: str):
                     t._detained_by = ctrl
                     game.log(f"{ctrl.name} detiene a {t.name}")
         return eff_detain, "opp_creature", _count_word(mdt.group(1) or "one") or 1
+    # "put target creature/nonland permanent on top of its owner's library"
+    mtop = re.match(r"\s*put target (creature|nonland permanent|permanent|artifact or creature)"
+                    r"( an opponent controls| you don't control)? on (top|the bottom) of its "
+                    r"owner's library\.?\s*$", seg or "", re.I)
+    if mtop:
+        def eff_top(game, ctrl, targets, _bottom=mtop.group(3).lower() != "top"):
+            for t in (targets or []):
+                if not hasattr(t, "card") or t not in t.controller.battlefield:
+                    continue
+                pl = t.controller
+                pl.battlefield.remove(t)
+                if t.card.on_leave:
+                    t.card.on_leave(game, pl, t)
+                game.emit("leave", perm=t)
+                if t.is_token:
+                    continue
+                real = getattr(t.card, "_real", None) or t.card
+                owner = game.commander_owner(real)
+                if owner is not None:
+                    owner.command.append(real)
+                elif _bottom:
+                    pl.library.insert(0, real)
+                else:
+                    pl.library.append(real)
+                game.log(f"{t.name} va {'al fondo' if _bottom else 'arriba'} de la biblioteca")
+        return eff_top, ("opp_creature" if mtop.group(1).lower() == "creature"
+                         else "any_nonland"), 1
+    # "tap (up to) N target creatures[. They/Those creatures don't untap during their
+    # controller's next untap step]" (Chilling Grasp, A Good Day to Pie)
+    mtp = re.match(r"\s*tap (?:up to )?(\w+) target (creature|permanent|artifact)s?"
+                   r"( an opponent controls| you don't control| your opponents control)?\.?"
+                   r"(?:\s*(?:they|those (?:creatures|permanents)|it) (?:don't|doesn't) untap during "
+                   r"(?:their|its) controllers?(?:'s|s'|')? next untap steps?\.?)?\s*$", seg or "", re.I)
+    if mtp and (n_tp := _count_word(mtp.group(1))) and n_tp > 1:
+        frz = "untap" in (seg or "").lower()
+
+        def eff_tap_n(game, ctrl, targets, _f=frz):
+            for t in (targets or []):
+                if hasattr(t, "card") and t in t.controller.battlefield:
+                    t.tapped = True
+                    if _f:
+                        t.frozen = True
+            game.log(f"{ctrl.name} gira {len(targets or [])} objetivo(s)")
+        return eff_tap_n, ("opp_creature" if mtp.group(2).lower() == "creature"
+                           else "any_nonland"), n_tp
     # phasing dirigido: "target creature (you control) phases out"
     mph = re.search(r"(?:up to one )?target (creature|permanent|nonland permanent|artifact|"
                     r"creature or planeswalker)( you control| an opponent controls| you "
@@ -2139,8 +2184,42 @@ def _event_trigger_effect_impl(oracle: str):
                 game.move_to_battlefield(card, ctrl)
                 game.log(f"{card.name} vuelve al campo tras morir")
         out["death"] = cb_death_return
+    if "death" not in out and re.search(
+            r"when (?:this creature|~|it) dies, return it to its owner's hand", t, re.I):
+        def cb_death_hand(game, perm, **_kw):
+            card = getattr(perm.card, "_real", None) or perm.card
+            for pl in game.players:
+                if card in pl.graveyard:
+                    pl.graveyard.remove(card)
+                    pl.hand.append(card)
+                    game.log(f"{card.name} vuelve a la mano tras morir")
+                    break
+        out["death"] = cb_death_hand
+    if "death" not in out and re.search(
+            r"when (?:this creature|~|it) dies, it deals damage equal to its power to any target",
+            t, re.I):
+        def cb_death_power(game, perm, self_death=False, **_kw):
+            if not self_death and perm in perm.controller.battlefield:
+                return                  # el disparo "death" global: solo su PROPIA muerte
+            n = max(0, perm.power)
+            ctrl = perm.controller
+            if n <= 0:
+                return
+            opps = [o for o in game.opponents(ctrl) if not o.lost]
+            kill = [pm for o in opps for pm in o.creatures()
+                    if pm.toughness - pm.damage <= n and game.can_target(ctrl, pm)]
+            cands = ([(f"{pm.name} {pm.power}/{pm.toughness}", pm)
+                      for pm in sorted(kill, key=lambda x: x.power + x.toughness, reverse=True)]
+                     + [(f"{o.name} ({o.life})", o) for o in sorted(opps, key=lambda o: o.life)])
+
+            def _do(t, _n=n):
+                game.deal_damage(perm, t, _n)
+                game.sba()
+            _human_target_choice(game, ctrl, "etb_target", f"{perm.name}: {n} de daño a…",
+                                 cands, _do)
+        out["death"] = cb_death_power
     # daño de combate a un jugador
-    mcd = re.search(r"whenever [\w' ,]{0,40}? deals combat damage to a player,?\s*"
+    mcd = re.search(r"whenever [\w' ,]{0,40}? deals (?:combat )?damage to a player,?\s*"
                     r"(.{0,160})", t, re.I)
     if mcd:
         eff = _effect_any(mcd.group(1))
@@ -2565,12 +2644,21 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
              r"with total power 6 or greater this combat,\s*(.+)$"),
             ("main2", r"at the beginning of your second main phase, (?:if " + me_re +
              r" is tapped, )?(.+)$"),
+            ("blocks_or_blocked", r"whenever " + me_re + r" blocks or becomes blocked"
+             r"(?: by a creature)?,\s*(.+)$"),
+            ("blocks", r"whenever " + me_re + r" blocks(?: a creature)?,\s*(.+)$"),
+            ("becomes_blocked", r"whenever " + me_re + r" becomes blocked(?: by a creature)?,"
+             r"\s*(.+)$"),
         ]
         for key, pat in simple:
             mm = re.match("(?i)" + pat, l)
             if not mm or key in out:
                 continue
-            eff = _eff(mm.group(1))
+            _body = mm.group(1)
+            if key not in ("perm_enters", "group_combat_damage", "main2", "__leave", "self_to_gy"):
+                # disparo sobre la PROPIA criatura: "it" es ella misma
+                _body = re.sub(r"(?i)^it (gets|gains|deals|has)\b", r"this creature \1", _body)
+            eff = _eff(_body)
             if eff is None:
                 continue
             need_tapped = key == "main2" and " is tapped," in l.lower()
@@ -2580,6 +2668,10 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
                     return
                 _e(game, perm.controller, perm)
             out[key] = cb_s
+        if "blocks_or_blocked" in out:
+            _bb = out.pop("blocks_or_blocked")
+            out.setdefault("blocks", _bb)
+            out.setdefault("becomes_blocked", _bb)
         mf = re.match(r"(?i)whenever you cast your second spell each turn,\s*(.+)$", l)
         if mf and "cast" not in out:
             eff = _eff(mf.group(1))
@@ -2858,6 +2950,12 @@ def _cond_gc(cond_text: str):
     c = re.sub(r"\s+", " ", (cond_text or "")).strip().lower().rstrip(".")
     c = re.sub(r"^(?:if|as long as|only if) ", "", c)
     turn = lambda g: g.turn  # noqa: E731
+    # werewolves (Innistrad): hechizos del turno anterior
+    if re.fullmatch(r"no spells were cast last turn", c):
+        return lambda g, p: getattr(g, "turns_played", 0) > 1 and \
+            getattr(g, "spells_last_turn", 0) == 0
+    if re.fullmatch(r"a player cast two or more spells last turn", c):
+        return lambda g, p: getattr(g, "max_player_spells_last_turn", 0) >= 2
     # eminence: funciona desde la zona de mando o el campo (siempre verdadero acá)
     if re.fullmatch(r"[\w ,'~-]+ is in the command zone or on the battlefield", c):
         return lambda g, p: True
@@ -4533,6 +4631,50 @@ def _atomic_effect(text):
     t = re.sub(r"\s+", " ", _strip_reminder(text or "")).strip().rstrip(".").lower()
     t = re.sub(r"^(?:then |and )", "", t)
 
+    # ── batch 6: debuffs / pumps en masa y dirigidos, top of library ──
+    m = re.fullmatch(r"creatures your opponents control get ([+-]\d+)/([+-]\d+) until end of turn", t)
+    if m:
+        def eff_opp_mass(game, ctrl, *a, _p=int(m.group(1)), _t=int(m.group(2)), **kw):
+            for o in game.opponents(ctrl):
+                for pm in o.creatures():
+                    pm.temp_pt[0] += _p
+                    pm.temp_pt[1] += _t
+            game.sba()
+        return eff_opp_mass
+    m = re.fullmatch(r"attacking creatures(?: you control)? get ([+-]\d+)/([+-]\d+) until end of turn", t)
+    if m:
+        def eff_atk_mass(game, ctrl, *a, _p=int(m.group(1)), _t=int(m.group(2)), **kw):
+            for pm in ctrl.creatures():
+                if pm.attacking is not None:
+                    pm.temp_pt[0] += _p
+                    pm.temp_pt[1] += _t
+        return eff_atk_mass
+    m = re.fullmatch(r"(?:up to one )?target creature( an opponent controls| you don't control| you "
+                     r"control)? gets ([+-]\d+)/([+-]\d+) until end of turn", t)
+    if m:
+        dp, dt = int(m.group(2)), int(m.group(3))
+        who = (m.group(1) or "").strip()
+
+        def eff_tgt_pt(game, ctrl, *a, _p=dp, _t=dt, _w=who, **kw):
+            bad = _p < 0 or _t < 0
+            if _w == "you control" or (not bad and not _w):
+                pool = sorted(ctrl.creatures(), key=lambda x: x.power + x.toughness, reverse=True)
+            else:
+                pool = [pm for o in game.opponents(ctrl) for pm in o.creatures()
+                        if game.can_target(ctrl, pm)]
+                pool.sort(key=lambda x: (x.toughness - x.damage + _t <= 0, x.power), reverse=True)
+            cands = [(f"{pm.name} {pm.power}/{pm.toughness} · {pm.controller.name}", pm)
+                     for pm in pool]
+
+            def _do(pm):
+                if pm in pm.controller.battlefield:
+                    pm.temp_pt[0] += _p
+                    pm.temp_pt[1] += _t
+                    game.log(f"{pm.name} recibe {_p:+d}/{_t:+d}")
+                    game.sba()
+            _human_target_choice(game, ctrl, "etb_target", f"Elegí la criatura ({_p:+d}/{_t:+d})",
+                                 cands, _do)
+        return eff_tgt_pt
     # ── acciones clave (batch 3) ──
     m = re.fullmatch(r"(?:you may )?earthbend (\w+)", t)
     if m and (n := _count_word(m.group(1))):
@@ -4730,6 +4872,16 @@ def _atomic_effect(text):
                                  f"Elegí una criatura ({_n} contador {_k})", cands, _do)
         return eff_tgt_counter
 
+    # "this creature deals N damage to that creature" (bloqueo / disparo con sujeto)
+    m = re.fullmatch(_SELF_REF + r" deals (\w+) damage to that creature", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff_dmg_subject(game, ctrl, *a, _n=n, **_kw):
+            src = _src_perm(game, a)
+            tgt = getattr(game, "_trigger_subject", None)
+            if tgt is not None and hasattr(tgt, "card") and tgt in tgt.controller.battlefield:
+                game.deal_damage(src, tgt, _n)
+                game.sba()
+        return eff_dmg_subject
     # la propia criatura: "+N/+N hasta fin de turno" / "gana <keyword> hasta fin de turno"
     m = re.fullmatch(_SELF_REF + r" gets ([+-]\d+)/([+-]\d+) until end of turn", t)
     if m:
@@ -5261,19 +5413,24 @@ def _generic_amount_single(oracle: str):
         _a = _o.rfind(".", 0, _sw.start()) + 1
         _b = _o.find(".", _sw.end())
         _sw_sent = _o[_a:_b if _b >= 0 else len(_o)]
-    if _sw and not re.search(r"with (?:flying|power|toughness)|without flying|"
-                             r"\bif |for each", _sw_sent, re.I):
+    _flyf = None
+    if _sw:
+        _mfl = re.search(r"each (?:other )?creature (with|without) flying", _sw_sent, re.I)
+        _flyf = _mfl.group(1).lower() if _mfl else None
+    if _sw and not re.search(r"with (?:power|toughness)|\bif |for each", _sw_sent, re.I) and \
+            (_flyf or not re.search(r"with(?:out)? flying", _sw_sent, re.I)):
         _n = int(_sw.group(1))
         _opp_only = bool(_sw.group(3))
         _also = (_sw.group(4) or "").lower()
 
-        def eff_sweep(game, ctrl, *a, _n=_n, _oo=_opp_only, _al=_also):
+        def eff_sweep(game, ctrl, *a, _n=_n, _oo=_opp_only, _al=_also, _ff=_flyf):
             src = getattr(game, "_trigger_source", None)
             for pl in list(game.players):
                 if _oo and pl is ctrl:
                     continue
                 for pm in list(pl.battlefield):
-                    if pm.is_creature() and pm is not src:
+                    if pm.is_creature() and pm is not src and (
+                            _ff is None or (_ff == "with") == pm.has("flying")):
                         game.deal_damage(src, pm, _n)
             if _al in ("player", "opponent"):
                 for pl in list(game.players):
@@ -7906,7 +8063,10 @@ def _build_card_from_data_impl(data: dict) -> Card:
             # antes se agregaba igual una gratis y se volvía Ormendahl sin pagar
             _act_tf = any(_is_activated_line(l) and re.search(r"\btransform\b", l, re.I)
                           for l in _ability_lines(data.get("oracle_text", "")))
-            if card.dfc == "transform" and re.search(r"\btransform\b", _lt) and not _act_tf:
+            _ww = re.search(r"at the beginning of each upkeep, if (?:no spells were cast|a "
+                            r"player cast two or more spells) last turn, transform", _lt)
+            if card.dfc == "transform" and re.search(r"\btransform\b", _lt) and not _act_tf \
+                    and not _ww:
                 def _tf_eff(game, ctrl, perm, targets=None):
                     game.transform(perm)
                 card.activated_abilities = tuple(card.activated_abilities or ()) + (
@@ -8055,6 +8215,101 @@ def _build_card_from_data_impl(data: dict) -> Card:
             if _cb[0](g, ctrl):
                 _cb[1](g, ctrl)
         card.on_cast_resolve = _cb_resolve
+    # Exiliar HASTA que deje el campo (Banishing Light, O-Ring, Faceless Butcher):
+    # el ETB exilia el objetivo y lo recuerda; al irse, vuelve bajo su dueño.
+    _xl = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "").lower())
+    for _nm5 in _self_names(name):
+        if _nm5:
+            _xl = _xl.replace(_nm5, "~")
+    mxu = re.search(r"when (?:~|this \w+) enters, (?:you may )?exile ((?:up to one |another )?target [^.]+?) until "
+                    r"(?:~|this \w+) leaves the battlefield", _xl)
+    mxb = None if mxu else re.search(
+        r"when (?:~|this \w+) enters, (?:you may )?exile ((?:up to one |another )?target [^.]+?)\. ", _xl + " ")
+    if mxb and not re.search(r"leaves the battlefield, return the exiled card to the battlefield "
+                             r"under its owner's control", _xl):
+        mxb = None
+    _mx = mxu or mxb
+    if _mx and "aura" not in {x.lower() for x in card.subtypes}:
+        _d = _mx.group(1)
+        _opt = _d.startswith("up to one")
+        _opp = bool(re.search(r"an opponent controls|you don't control", _d))
+        _tapped = " tapped " in f" {_d} "
+        _kinds = set(re.findall(r"\b(creature|artifact|enchantment|planeswalker|land|battle)\b",
+                                _d))
+        _nonland = "nonland permanent" in _d
+        _anyperm = not _kinds and not _nonland
+        _mvcap = re.search(r"mana value (\d+) or less", _d)
+        _mvcap = int(_mvcap.group(1)) if _mvcap else None
+
+        def _xok(pm, src, ctrl, _k=_kinds, _nl=_nonland, _ap=_anyperm, _o=_opp, _t=_tapped,
+                 _cap=_mvcap):
+            if pm is src or (_o and pm.controller is ctrl):
+                return False
+            if _t and not pm.tapped:
+                return False
+            if _cap is not None and (pm.card.cost.cmc if pm.card.cost else 0) > _cap:
+                return False
+            if _nl:
+                return not pm.card.is_land()
+            if _ap:
+                return True
+            return any((k == "creature" and pm.is_creature()) or
+                       (k != "creature" and k in pm.card.types) for k in _k)
+
+        def _exile_until_etb(game, ctrl, perm, _ok=_xok, _optional=_opt):
+            pool = [pm for o in game.players for pm in o.battlefield
+                    if _ok(pm, perm, ctrl) and game.can_target(ctrl, pm)]
+            # el bot apunta a lo del rival (lo más valioso); nunca a lo propio si hay rival
+            pool.sort(key=lambda pm: (pm.controller is not ctrl,
+                                      (pm.power + pm.toughness) if pm.is_creature()
+                                      else (pm.card.cost.cmc if pm.card.cost else 0)),
+                      reverse=True)
+            if ctrl is not getattr(game, "interactive_human", None):
+                pool = [pm for pm in pool if pm.controller is not ctrl] or \
+                    ([] if _optional else pool)
+            cands = [(f"{pm.name} · {pm.controller.name}", pm) for pm in pool]
+
+            def _do(victim, _src=perm):
+                if victim not in victim.controller.battlefield or not game.ward_ok(ctrl, victim):
+                    return
+                owner = victim.controller
+                real = getattr(victim.card, "_real", None) or victim.card
+                tok = victim.is_token
+                if game.exile_permanent(victim, "exiliada hasta que se vaya"):
+                    game.log(f"{ctrl.name}: {_src.name} exilia {victim.name}")
+                    if not tok and real in owner.exile:
+                        _src._exiled_until = list(getattr(_src, "_exiled_until", None) or []) \
+                            + [(owner, real)]
+            _human_target_choice(game, ctrl, "etb_target",
+                                 "Elegí qué exiliar mientras siga en el campo",
+                                 cands, _do, allow_none=_optional)
+
+        def _exile_until_leave(game, ctrl, perm, _prev=card.on_leave):
+            for owner, c in list(getattr(perm, "_exiled_until", None) or []):
+                if c in owner.exile and not owner.lost:
+                    owner.exile.remove(c)
+                    game.move_to_battlefield(c, owner)
+                    game.log(f"{c.name} vuelve al campo ({perm.name} dejó el campo)")
+            perm._exiled_until = None
+            if _prev:
+                _prev(game, ctrl, perm)
+        card.on_etb = _exile_until_etb
+        card.on_leave = _exile_until_leave
+        card.tags = set(card.tags) | {"removal"}
+
+    # werewolves: "At the beginning of each upkeep, if <hechizos del turno anterior>,
+    # transform this creature." (cada cara trae su propia condición)
+    mww = re.search(r"at the beginning of each upkeep, if (no spells were cast last turn|a "
+                    r"player cast two or more spells last turn), transform (?:this creature|~|it)",
+                    _lt)
+    if mww and (_wc := _cond_gc(mww.group(1))) is not None:
+        def _ww_upkeep(g, perm, _c=_wc, _prev=(card.triggers or {}).get("each_upkeep"), **_kw):
+            if _prev:
+                _prev(g, perm, **_kw)
+            if perm in perm.controller.battlefield and _c(g, perm.controller):
+                if g.transform(perm):
+                    g.log(f"{perm.name} se transforma (luna llena)")
+        card.triggers = dict(card.triggers or {}, each_upkeep=_ww_upkeep)
     # ── batch 4B: undaunted, epic, ripple, impending, paradigm, provoke, recover,
     # demonstrate, eminence, haunt, forecast, cases, MTMTE, bargain en criaturas ──
     _p4l = "\n" + (_pre4 or "").lower()
@@ -8578,6 +8833,77 @@ def _build_card_from_data_impl(data: dict) -> Card:
             card.unblock_power_lt_self = True
         elif (m5 := re.fullmatch(_subj5 + r" can't be blocked by more than (\w+) creatures?", _l5)):
             card.max_blockers = _count_word(m5.group(1)) or 1
+        elif re.fullmatch(r"at the beginning of (?:the|each|your) end step, return " + _subj5 +
+                          r" to its owner's hand", _l5):
+            _ev6 = "end_step" if "your end step" in _l5 else "each_end_step"
+
+            def _eot_bounce(g, perm, _prev=(card.triggers or {}).get(_ev6), **_kw):
+                if _prev:
+                    _prev(g, perm, **_kw)
+                pl = perm.controller
+                if perm in pl.battlefield:
+                    pl.battlefield.remove(perm)
+                    if perm.card.on_leave:
+                        perm.card.on_leave(g, pl, perm)
+                    if not perm.is_token:
+                        owner = g.commander_owner(perm.card)
+                        (owner.command if owner else pl.hand).append(
+                            getattr(perm.card, "_real", None) or perm.card)
+                    g.log(f"{perm.name} vuelve a la mano al final del turno")
+            card.triggers = dict(card.triggers or {}, **{_ev6: _eot_bounce})
+        elif (m6 := re.fullmatch(r"at the beginning of your upkeep, sacrifice " + _subj5 +
+                                 r" unless you pay ((?:\{[wubrgc0-9/]+\})+)", _l5)):
+            _uc = parse_cost(mana_cost_to_str(m6.group(1)))
+
+            def _upk_tax(g, perm, _c=_uc, _prev=(card.triggers or {}).get("upkeep"), **_kw):
+                if _prev:
+                    _prev(g, perm, **_kw)
+                pl = perm.controller
+                if perm not in pl.battlefield:
+                    return
+                if pl.can_pay(_c):
+                    pl.pay(_c)
+                    g.log(f"{pl.name} paga el mantenimiento de {perm.name}")
+                else:
+                    g.log(f"{perm.name} se sacrifica (no pagó su mantenimiento)")
+                    g.to_graveyard(perm, "mantenimiento impago")
+            card.triggers = dict(card.triggers or {}, upkeep=_upk_tax)
+        elif (m6 := re.fullmatch(r"at the beginning of your upkeep, " + _subj5 +
+                                 r" deals (\w+) damage to you", _l5)) and _count_word(m6.group(1)):
+            def _upk_dmg(g, perm, _n=_count_word(m6.group(1)),
+                         _prev=(card.triggers or {}).get("upkeep"), **_kw):
+                if _prev:
+                    _prev(g, perm, **_kw)
+                g.deal_damage(perm, perm.controller, _n)
+            card.triggers = dict(card.triggers or {}, upkeep=_upk_dmg)
+        elif (m6 := re.fullmatch(r"when you control no (islands|swamps|forests|mountains|plains), "
+                                 r"sacrifice " + _subj5, _l5)):
+            card.sac_without_land = {"islands": "Island", "swamps": "Swamp", "forests": "Forest",
+                                     "mountains": "Mountain", "plains": "Plains"}[m6.group(1)]
+        elif re.fullmatch(_subj5 + r" can't be blocked except by two or more creatures", _l5):
+            card.keywords = set(card.keywords) | {"menace"}
+        elif (m6 := re.fullmatch(_subj5 + r" gets \+(\d+)/\+(\d+) for each (.+)", _l5)):
+            _cf6 = _count_fn(m6.group(3)) or _count_fn(re.sub(r"^(\w+)", r"\1s", m6.group(3)))
+            if _cf6 is not None:
+                def _sm6(src, target, _a=int(m6.group(1)), _b=int(m6.group(2)), _f=_cf6,
+                         _p=card.static_mod):
+                    base = _p(src, target) if _p else (0, 0)
+                    if target is src and getattr(src, "game", None) is not None:
+                        n = _f(src.game, src.controller)
+                        return (base[0] + _a * n, base[1] + _b * n)
+                    return base
+                card.static_mod = _sm6
+        elif re.fullmatch(r"if this card is in your opening hand, you may begin the game with "
+                          r"it on the battlefield", _l5):
+            card.leyline = True
+        elif re.fullmatch(r"when " + _subj5 + r" becomes the target of a spell or ability, "
+                          r"sacrifice it", _l5):
+            card.sac_when_targeted = True
+        elif re.fullmatch(r"all creatures able to block " + _subj5 + r" do so", _l5):
+            card.lure_all = True
+        elif re.fullmatch(_subj5 + r" must be blocked if able", _l5) or \
+                re.fullmatch(_subj5 + r" must be blocked each combat if able", _l5):
+            card.must_be_blocked = True
         elif _l5 == "you have no maximum hand size":
             card.no_max_hand = True
         elif _l5 == "skip your draw step":
