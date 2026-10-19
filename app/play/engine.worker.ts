@@ -63,6 +63,24 @@ let ready: Promise<any> | null = null;
 
 function post(msg: unknown) { (self as unknown as Worker).postMessage(msg); }
 
+// mensaje legible de cualquier cosa lanzada (Error, PythonError, Event de red,
+// objeto plano…). Antes un rechazo que no era Error llegaba como "[object Object]".
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message || err.name || "error del motor";
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object") {
+    const o = err as Record<string, unknown>;
+    if (typeof o.message === "string" && o.message) return o.message;
+    if (typeof o.type === "string") return `evento ${o.type}`;
+    try {
+      const j = JSON.stringify(err);
+      if (j && j !== "{}") return j;
+    } catch { /* circular */ }
+    return Object.prototype.toString.call(err);
+  }
+  return String(err);
+}
+
 async function ensurePyodide(): Promise<any> {
   if (py) return py;
   if (!ready) {
@@ -74,10 +92,15 @@ async function ensurePyodide(): Promise<any> {
       const res = await fetch("/api/pysrc");
       if (!res.ok) throw new Error(`no se pudo bajar el motor (HTTP ${res.status})`);
       const { modules } = await res.json();
+      // rutas ABSOLUTAS bajo el cwd de Python (/home/pyodide): FS.mkdirTree("data")
+      // crea /data (desde la raíz) pero writeFile("data/x") resuelve contra el cwd,
+      // así que data/preset_cards.json fallaba con ErrnoError 44 (ENOENT)
+      const cwd: string = p.FS.cwd();
       for (const [name, src] of Object.entries(modules as Record<string, string>)) {
-        const dir = name.includes("/") ? name.slice(0, name.lastIndexOf("/")) : "";
-        if (dir) p.FS.mkdirTree(dir);            // p. ej. data/preset_cards.json
-        p.FS.writeFile(name, src as string);
+        const path = `${cwd}/${name}`;
+        const dir = path.slice(0, path.lastIndexOf("/"));
+        p.FS.mkdirTree(dir);                     // p. ej. /home/pyodide/data
+        p.FS.writeFile(path, src as string);
       }
       p.runPython(BOOTSTRAP);
       py = p;
@@ -120,6 +143,6 @@ self.onmessage = async (e: MessageEvent) => {
       post({ id, ok: false, error: "tipo de mensaje desconocido: " + type });
     }
   } catch (err) {
-    post({ id, ok: false, error: err instanceof Error ? err.message : String(err) });
+    post({ id, ok: false, error: describeError(err) });
   }
 };
