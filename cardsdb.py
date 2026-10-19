@@ -3187,6 +3187,27 @@ def _wire_aura(card, oracle):
         ab_off = True
     if ab_off:
         card.aura_abilities_off = True
+    # auras de BLOQUEO (Pacifism, Claustrophobia, Arrest…) y de CONTROL (Mind
+    # Control): restricciones sobre el huésped que el motor consulta
+    mca = re.search(r"enchanted (?:creature|permanent) can't ([a-z ,]+?)(?:\.|$| and its)", t)
+    if mca:
+        card.aura_no_attack = "attack" in mca.group(1)
+        card.aura_no_block = "block" in mca.group(1)
+    card.aura_no_activate = bool(re.search(
+        r"(?:its|enchanted (?:creature|permanent)'s) activated abilities can't be activated", t))
+    card.aura_no_untap = bool(re.search(
+        r"enchanted (?:creature|permanent|artifact|land) doesn't untap during its "
+        r"controller's untap step", t))
+    card.aura_tap_etb = bool(re.search(
+        r"when this aura enters, tap enchanted (?:creature|permanent)", t))
+    card.aura_control = bool(re.search(
+        r"you control enchanted (?:creature|permanent|artifact|land|planeswalker)", t))
+    if any(getattr(card, f, False) for f in ("aura_no_attack", "aura_no_block",
+                                             "aura_no_activate", "aura_no_untap",
+                                             "aura_control")):
+        ab_off = ab_off or False
+        bad = True
+        card.tags = card.tags | {"removal"}
     if ab_off or card.aura_pt_set:
         bad = True                     # es removal: se anexa a criatura rival
         card.tags = card.tags | {"removal"}   # la IA la valora y la juega como tal
@@ -3196,15 +3217,30 @@ def _wire_aura(card, oracle):
             pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield if pm.is_creature()]
         else:
             pool = [pm for pm in ctrl.battlefield if pm.is_creature() and pm is not perm]
+        if _bad:
+            pool = [pm for pm in pool if game.can_target(ctrl, pm)] or pool
+            if getattr(perm.card, "aura_no_untap", False) or getattr(perm.card, "aura_tap_etb", False):
+                pool.sort(key=lambda x: x.tapped, reverse=True)
         if pool:
             host = max(pool, key=lambda x: (x.power, x.toughness))
             perm.enchanting = host
             game.log(f"{ctrl.name}: {perm.name} se anexa a {host.name}")
+            if getattr(perm.card, "aura_tap_etb", False):
+                host.tapped = True
+            if getattr(perm.card, "aura_control", False) and host.controller is not ctrl:
+                old = host.controller
+                old.battlefield.remove(host)
+                host.controller = ctrl
+                ctrl.battlefield.append(host)
+                host.summoning_sick = True
+                host.attacking = None
+                perm._stolen = (host, old)
+                game.log(f"{ctrl.name} toma el control de {host.name} ({perm.name})")
 
     # el ETB propio del Aura (scry, robar, incubate…) se ejecuta tras anexarse
     _aura_body, _ = _self_etb_body(oracle, card.name)
     _aura_etb = _effect_any(_aura_body) if (_aura_body and not re.match(
-        r"(?i)\s*(?:attach|enchant)", _aura_body)) else None
+        r"(?i)\s*(?:attach|enchant|tap enchanted)", _aura_body)) else None
 
     def _attach_and_etb(game, ctrl, perm, _a=_attach, _e=_aura_etb):
         _a(game, ctrl, perm)
@@ -3219,6 +3255,22 @@ def _wire_aura(card, oracle):
                 game._trigger_subject, game._trigger_source = prev
     card.on_etb = _attach_and_etb
     card.tags = card.tags | {"aura"}
+    if card.aura_control:
+        def _return_host(game, ctrl, perm, _prev=card.on_leave):
+            st = getattr(perm, "_stolen", None)
+            if st:
+                host, old = st
+                if host in host.controller.battlefield and host.controller is not old \
+                        and not old.lost:
+                    host.controller.battlefield.remove(host)
+                    host.controller = old
+                    old.battlefield.append(host)
+                    host.attacking = None
+                    game.log(f"{host.name} vuelve a {old.name}")
+                perm._stolen = None
+            if _prev:
+                _prev(game, ctrl, perm)
+        card.on_leave = _return_host
 
 
 def _wire_equipment(card, oracle):
@@ -3294,6 +3346,9 @@ def _parse_etb_counters(oracle: str):
             out["+1/+1"] = "X"          # X contadores = el X pagado al lanzar (Hydra)
         elif (n := _count_word(m.group(1))):
             out["+1/+1"] = n
+    m1 = re.search(r"enters (?:the battlefield )?with (\w+) -1/-1 counters?", t, re.I)
+    if m1 and (n := _count_word(m1.group(1))):
+        out["-1/-1"] = n
     m = re.search(r"enters (?:the battlefield )?with (\w+) ([a-z]+) counters?", t, re.I)
     if m and (n := _count_word(m.group(1))):
         kind = m.group(2).lower()
@@ -3337,23 +3392,50 @@ def _exile_all_creatures_effect(oracle: str):
     ficha Incubator aproximada (artefacto que se transforma en 0/0 con X contadores).
     Devuelve effect(g, ctrl, targets) o None."""
     t = re.sub(r"\s+", " ", (oracle or "").lower())
-    if not re.search(r"exile all creatures", t):
+    mx = re.search(r"exile all creatures( you control| your opponents control| you don't control)?", t)
+    if not mx:
         return None
+    scope = (mx.group(1) or "").strip()
     incubate = ("incubate" in t and ("creatures exiled" in t or "incubate x" in t))
+    # Mass Polymorph / Synthetic Destiny: revelar hasta N criaturas y ponerlas
+    poly = bool(re.search(r"reveal cards from the top of your library until you reveal "
+                          r"that many creature cards", t))
+    poly_later = poly and "at the beginning of the next end step" in t
 
-    def eff(game, ctrl, targets=None, _inc=incubate):
+    def eff(game, ctrl, targets=None, _inc=incubate, _scope=scope):
         n = 0
-        for pl in game.players:
+        if _scope == "you control":
+            who = [ctrl]
+        elif _scope:
+            who = game.opponents(ctrl)
+        else:
+            who = list(game.players)
+        for pl in who:
             for pm in list(pl.battlefield):
                 if not pm.is_creature():
                     continue
-                pl.battlefield.remove(pm)
-                if not pm.is_token:
-                    pl.exile.append(pm.card)
-                game.emit("leave", perm=pm)
-                n += 1
+                if game.exile_permanent(pm, "exile all"):
+                    n += 1
         game.sba()
-        game.log(f"{ctrl.name}: exilia todas las criaturas ({n})")
+        game.log(f"{ctrl.name}: exilia {'sus' if _scope == 'you control' else 'todas las'} "
+                 f"criaturas ({n})")
+        if poly and n > 0:
+            def _poly(g, _n=n, _c=ctrl):
+                revealed, found = [], []
+                while len(found) < _n and _c.library:
+                    c = _c.library.pop()
+                    (found if c.is_creature() else revealed).append(c)
+                for c in found:
+                    g.move_to_battlefield(c, _c)
+                if revealed:
+                    _c.library.extend(revealed)
+                    g.rng.shuffle(_c.library)
+                g.log(f"{_c.name} revela hasta {_n} criatura(s): pone "
+                      f"{', '.join(c.name for c in found) or 'ninguna'} en el campo")
+            if poly_later:
+                game.delayed_end.append(_poly)
+            else:
+                _poly(game)
         if _inc and n > 0:
             # Incubate X: ficha Incubator (artefacto) con X contadores +1/+1 y
             # "{2}: transformar" en una 0/0 Phyrexian. La aproximamos como un
@@ -6729,6 +6811,13 @@ def _rewrite_mechanics(text):
         ln = re.sub(r"(?i),? if [^,]+? is in the command zone or on the battlefield,", ",", ln)
         ln = re.sub(r"(?i)^as long as [^,]+? is in the command zone or on the battlefield, ",
                     "", ln)
+        # batch 5: formas equivalentes que el parser ya entiende
+        ln = re.sub(r"(?i)^during your turn, (this creature|~|[^,]+?) (has|gets) ([^.]+)\.$",
+                    lambda m: f"{m.group(1)[0].upper() + m.group(1)[1:]} {m.group(2)} "
+                              f"{m.group(3)} as long as it's your turn.", ln)
+        ln = re.sub(r"(?i)\bto target attacking or blocking creature\b", "to target creature", ln)
+        ln = re.sub(r"(?i)\btarget attacking creature\b", "target creature", ln)
+        ln = re.sub(r"(?i)^target player gains (\w+) life\.$", r"You gain \1 life.", ln)
         # convert (Transformers) = transform
         ln = re.sub(r"(?i)\bconvert(ed|s)?\b", lambda m: "transform" + (m.group(1) or ""), ln)
         # "Waterbend {X}: …" como coste de activada -> "{X}: …"
@@ -7211,7 +7300,11 @@ def _build_card_from_data_impl(data: dict) -> Card:
         xa = _exile_all_creatures_effect(data.get("oracle_text", ""))
         if xa is not None:
             card.on_cast_resolve = xa
-            card.tags = card.tags | {"wipe"}
+            if re.search(r"exile all creatures you control",
+                         (data.get("oracle_text", "") or "").lower()):
+                card.tags = (card.tags - {"wipe"}) | {"polymorph"}   # no es barrida
+            else:
+                card.tags = card.tags | {"wipe"}
 
     # barrida CON rider de fichas ("destroy all creatures, then create N tokens per
     # your nontoken creature destroyed this way"): p. ej. Ceaseless Conflict. Se
@@ -8458,6 +8551,72 @@ def _build_card_from_data_impl(data: dict) -> Card:
             card.keywords = set(card.keywords) | {"unblockable"}
             break
 
+    # ── batch 5: restricciones, evasión y reglas de turno estáticas ──────────
+    _subj5 = r"(?:this creature|~|it|" + "|".join(re.escape(n) for n in _names if n) + r")"
+    for _l in _ability_lines(data.get("oracle_text", "")):
+        _l5 = _strip_reminder(_l).strip().lower().rstrip(".")
+        if re.fullmatch(_subj5 + r" attacks each (?:combat|turn) if able", _l5):
+            card.attacks_each_combat = True
+        elif re.fullmatch(_subj5 + r" (?:doesn't|does not) untap during your untap step", _l5):
+            card.no_untap_self = True
+        elif re.fullmatch(_subj5 + r" can't attack", _l5):
+            card.cant_attack_static = True
+        elif re.fullmatch(_subj5 + r" can't attack or block", _l5):
+            card.cant_attack_static = True
+            card.cant_block_static = True
+        elif (m5 := re.fullmatch(_subj5 + r" can't attack unless defending player controls "
+                                 r"an? (island|swamp|forest|mountain|plains)", _l5)):
+            card.attack_needs_land = m5.group(1).capitalize()
+        elif (m5 := re.fullmatch(_subj5 + r" can't be blocked by creatures with power (\d+) "
+                                 r"or (less|greater)", _l5)):
+            if m5.group(2) == "less":
+                card.unblock_power_le = int(m5.group(1))
+            else:
+                card.unblock_power_ge = int(m5.group(1))
+        elif re.fullmatch(r"creatures with power less than " + _subj5 + r"(?:'s)? power can't "
+                          r"block it", _l5):
+            card.unblock_power_lt_self = True
+        elif (m5 := re.fullmatch(_subj5 + r" can't be blocked by more than (\w+) creatures?", _l5)):
+            card.max_blockers = _count_word(m5.group(1)) or 1
+        elif _l5 == "you have no maximum hand size":
+            card.no_max_hand = True
+        elif _l5 == "skip your draw step":
+            card.skip_draw = True
+        elif re.fullmatch(r"whenever " + _subj5 + r" deals damage, you gain that much life", _l5):
+            card.keywords = set(card.keywords) | {"lifelink"}
+        elif re.fullmatch(r"at the beginning of (?:the|each) end step, sacrifice " + _subj5, _l5) \
+                or re.fullmatch(r"at the beginning of your end step, sacrifice " + _subj5, _l5):
+            _ev5 = "end_step" if "your end step" in _l5 else "each_end_step"
+
+            def _eot_sac(g, perm, _prev=(card.triggers or {}).get(_ev5), **_kw):
+                if _prev:
+                    _prev(g, perm, **_kw)
+                if perm in perm.controller.battlefield:
+                    g.log(f"{perm.name} se sacrifica al final del turno")
+                    g.to_graveyard(perm, "fin de turno")
+            card.triggers = dict(card.triggers or {}, **{_ev5: _eot_sac})
+        elif re.fullmatch(r"when (?:this aura|this enchantment|~) is put into a graveyard from the "
+                          r"battlefield, return (?:it|~|this card) to its owner's hand", _l5):
+            def _back_to_hand(g, perm, _prev=(card.triggers or {}).get("self_to_gy"), **_kw):
+                if _prev:
+                    _prev(g, perm, **_kw)
+                for pl in g.players:
+                    if perm.card in pl.graveyard:
+                        pl.graveyard.remove(perm.card)
+                        pl.hand.append(perm.card)
+                        g.log(f"{perm.name} vuelve a la mano de {pl.name}")
+                        break
+            card.triggers = dict(card.triggers or {}, self_to_gy=_back_to_hand)
+    # hechizo que se exilia a sí mismo al resolver ("Exile Avatar's Wrath.")
+    if _spell and card.on_cast_resolve is not None and any(
+            re.fullmatch(r"exile (?:~|this spell|" + "|".join(re.escape(n) for n in _names if n)
+                         + r")\.?", _strip_reminder(_l).strip().lower())
+            for _l in _ability_lines(data.get("oracle_text", ""))):
+        def _self_exile(g, ctrl, tg, _base=card.on_cast_resolve, _c=card):
+            _base(g, ctrl, tg)
+            _c._exile_after_cast = True
+        card.on_cast_resolve = _self_exile
+
     # costes alternativos: coste adicional al lanzar y reducción "cuesta {N} menos"
     if {"instant", "sorcery", "creature", "artifact", "enchantment", "planeswalker"} & types:
         add = {}
@@ -8472,6 +8631,14 @@ def _build_card_from_data_impl(data: dict) -> Card:
                 add["discard"] = nd
             if "sacrifice a creature" in seg or "sacrifice another creature" in seg:
                 add["sacrifice"] = True
+            else:
+                msk = re.search(r"sacrifice (?:a|an|another) ((?:artifact|creature|enchantment|land|"
+                                r"permanent|token|planeswalker)(?:,? (?:or|and/or) (?:an? )?"
+                                r"(?:artifact|creature|enchantment|land|planeswalker|token))*)", seg)
+                if msk:
+                    add["sacrifice"] = "|".join(re.findall(
+                        r"artifact|creature|enchantment|land|permanent|token|planeswalker",
+                        msk.group(1)))
         if add:
             card.additional_cost = add
         mr = re.search(r"this spell costs \{(\d+)\} less to cast(?: for each ([^.]+))?", _ot)

@@ -34,6 +34,8 @@ class Policy:
             s += 3
         if "removal" in tags and opp_creatures:
             s += 4
+        if "polymorph" in tags:
+            s += 2 + sum(1 for pm in me.creatures() if pm.is_token)
         if "wipe" in tags:
             mine = len(me.creatures())
             if any(len(o.creatures()) >= 3 and len(o.creatures()) > mine for o in opps):
@@ -203,6 +205,14 @@ class Policy:
             if (not nov and "removal" in card.tags
                     and not any(o.creatures() for o in game.opponents(me))):
                 continue
+            # Mass Polymorph: solo si cambio fichas/criaturas chicas por criaturas
+            # del mazo (y el mazo tiene criaturas suficientes)
+            if "polymorph" in card.tags:
+                mine = [pm for pm in me.creatures() if not me.is_commander(pm.card)]
+                cheap = [pm for pm in mine if pm.is_token or pm.power + pm.toughness <= 4]
+                lib_cr = sum(1 for c in me.library if c.is_creature())
+                if len(mine) < 2 or len(cheap) * 2 < len(mine) or lib_cr < len(mine):
+                    continue
             # novato: a veces se olvida de jugar algo
             if nov and game.rng.random() < 0.22:
                 continue
@@ -938,7 +948,8 @@ class Policy:
         # solo atacar con criaturas que hacen daño (>0): mandar una 0/x no aporta
         # y solo la expone a morir.
         forced = [p for p in me.creatures() if p.can_attack()
-                  and (p.goaded or p.must_attack)]
+                  and (p.goaded or p.must_attack
+                       or getattr(p.card, "attacks_each_combat", False))]
         attackers = [p for p in me.creatures() if p.can_attack() and p.power > 0]
         for p in forced:               # goad/obligación: deben atacar aunque no convenga
             if p not in attackers:

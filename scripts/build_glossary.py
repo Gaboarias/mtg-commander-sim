@@ -35,7 +35,10 @@ _DECK_RULES = {"partner", "partner with", "choose a background", "doctor's compa
                # de saga (read ahead: el bot empieza en I), coste por objetivo extra
                # (strive: el bot elige un objetivo)
                "hidden agenda", "double agenda", "assist", "compleated", "read ahead",
-               "strive"}
+               "strive",
+               # las arma el motor por el TIPO de la carta (Equipo / Vehículo): la sonda
+               # de una línea suelta no las distingue de la carta sin texto
+               "equip", "crew"}
 
 
 # mecánicas que se definen con la carta ENTERA (no con su línea suelta): se mide
