@@ -360,9 +360,10 @@ export default function Play() {
           if (!nm) continue;
           const iu = c.image_uris || (c.card_faces && c.card_faces[0] && c.card_faces[0].image_uris) || {};
           const url = iu.art_crop || iu.normal || iu.small;
-          if (url) seedArt[nm] = url;
           seedInfo[nm] = { art: url, type: c.type_line || "", oracle: c.oracle_text || (c.card_faces && c.card_faces[0] && c.card_faces[0].oracle_text) || "" };
-          infoReq.current.add(nm);
+          // solo se da por resuelta si trajo foto: los datos de la base local (sin
+          // image_uris) dejaban la carta marcada y nunca se pedía su arte
+          if (url) { seedArt[nm] = url; infoReq.current.add(nm); }
         }
         setArt((p) => ({ ...seedArt, ...p }));
         setInfo((p) => ({ ...seedInfo, ...p }));
