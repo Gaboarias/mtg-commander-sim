@@ -1893,7 +1893,8 @@ class Game:
                 if cb:
                     self.stack.append(StackObject(
                         source.controller,
-                        (lambda g, _cb=cb, _p=source: _cb(g, _p)),
+                        (lambda g, _cb=cb, _p=source, _t=target:
+                         g._run_trigger(_cb, _p, {"defender": _t})),
                         source=source, label=f"cdmg:{source.name}"))
                     self.note_ability(source.card, "daño de combate a un jugador",
                                       controller=source.controller)

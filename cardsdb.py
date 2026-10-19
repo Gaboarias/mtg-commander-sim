@@ -2273,7 +2273,7 @@ def _event_trigger_effect_impl(oracle: str):
         eff = _effect_any(mcd.group(1))
         if eff is not None:
             def cb_cd(game, perm, _e=eff, *_a, **_kw):
-                _e(game, perm.controller)
+                _e(game, perm.controller, perm)
             out["combat_damage_to_player"] = cb_cd
 
     # disparo GLOBAL al atacar: "whenever a creature you control attacks, <efecto>"
@@ -4759,6 +4759,64 @@ def _atomic_effect(text):
 
     if t in ("the ring tempts you", "the ring tempts you again"):
         return lambda game, ctrl, *a, **kw: game.ring_tempt(ctrl)
+    # ── batch 10: acciones sobre la propia carta / el sujeto del disparo ──
+    _SELF10 = r"(?:~|this creature|this permanent|this enchantment|this artifact|this land)"
+    if re.fullmatch(r"transform " + _SELF10, t):
+        def eff_tf_self(game, ctrl, *a, **kw):
+            src = _src_perm(game, a)
+            if src is not None and src in src.controller.battlefield:
+                game.transform(src)
+        return eff_tf_self
+    if re.fullmatch(r"sacrifice (?:" + _SELF10[3:-1] + r"|it)", t):
+        def eff_sac_self(game, ctrl, *a, **kw):
+            src = _src_perm(game, a)
+            subj = getattr(game, "_trigger_subject", None)
+            if t.endswith(" it") and subj is not None and subj is not src and hasattr(subj, "card"):
+                src = subj if subj.controller is ctrl else src
+            if src is not None and src in src.controller.battlefield:
+                game.to_graveyard(src, "sacrificio")
+        return eff_sac_self
+    if re.fullmatch(r"return " + _SELF10 + r" to its owner's hand", t):
+        def eff_bounce_self(game, ctrl, *a, **kw):
+            src = _src_perm(game, a)
+            if src is None or src not in src.controller.battlefield:
+                return
+            pl = src.controller
+            pl.battlefield.remove(src)
+            if src.card.on_leave:
+                src.card.on_leave(game, pl, src)
+            if not src.is_token:
+                real = getattr(src.card, "_real", None) or src.card
+                owner = game.commander_owner(real)
+                (owner.command if owner else pl.hand).append(real)
+            game.log(f"{src.name} vuelve a la mano")
+        return eff_bounce_self
+    m = re.fullmatch(r"(?:~|this creature|it) deals (\w+) damage to that player", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff_dmg_that(game, ctrl, *a, _n=n, **kw):
+            pl = _that_player(game, ctrl)
+            if pl is not None:
+                game.deal_damage(_src_perm(game, a), pl, _n)
+        return eff_dmg_that
+    if t in ("destroy it", "destroy that creature", "destroy that permanent"):
+        def eff_destroy_subj(game, ctrl, *a, **kw):
+            subj = getattr(game, "_trigger_subject", None)
+            if subj is not None and hasattr(subj, "card") and subj in subj.controller.battlefield:
+                game.destroy(subj, "disparo")
+        return eff_destroy_subj
+    if re.fullmatch(r"put that many \+1/\+1 counters on " + _SELF10, t):
+        def eff_that_many(game, ctrl, *a, **kw):
+            src = _src_perm(game, a)
+            k = getattr(game, "_trigger_kw", None) or {}
+            n = k.get("amount") or k.get("n") or k.get("damage") or 0
+            if src is not None and isinstance(n, int) and n > 0:
+                game.add_counters(src, "+1/+1", n)
+        return eff_that_many
+    if t == "put the top card of your library into your graveyard":
+        def eff_mill1(game, ctrl, *a, **kw):
+            if ctrl.library:
+                ctrl.graveyard.append(ctrl.library.pop())
+        return eff_mill1
     # ── batch 8: efectos simples frecuentes en ETB / upkeep / ataque ──
     m = re.fullmatch(r"each player loses (\w+) life", t)
     if m and (n := _count_word(m.group(1))):
@@ -4838,10 +4896,15 @@ def _atomic_effect(text):
             pool = [pm for pm in ctrl.battlefield if ok(pm)]
             if not pool:
                 return
-            # bot: devuelve lo que más valga re-jugar (ETB) o lo más barato
-            pool.sort(key=lambda pm: (pm.card.on_etb is None, pm.is_token,
-                                      ctrl.is_commander(pm.card),
-                                      (pm.card.cost.cmc if pm.card.cost else 0)))
+            # bot: no se devuelve a sí misma si hay otra opción; prefiere re-jugar un
+            # ETB barato (no la fuente), después una tierra ya girada, después lo más
+            # barato; nunca el comandante si se puede evitar
+            def _worth(pm):
+                cmc = pm.card.cost.cmc if pm.card.cost else 0
+                return (pm is src, ctrl.is_commander(pm.card), pm.is_token,
+                        not (pm.card.on_etb is not None and cmc <= 3),
+                        not (pm.card.is_land() and pm.tapped), cmc)
+            pool.sort(key=_worth)
 
             def _do(pm):
                 if pm not in ctrl.battlefield:
