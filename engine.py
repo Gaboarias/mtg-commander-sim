@@ -501,6 +501,11 @@ class Player:
             if self.library:
                 self.hand.append(self.library.pop())
 
+    def has_hexproof(self) -> bool:
+        """'You have hexproof' (Leyline of Sanctity, Aegis of the Gods…)."""
+        return any(getattr(pm.card, "player_hexproof", False) and not pm.abilities_off()
+                   for pm in self.battlefield)
+
     def draw(self, n: int, game: "Game"):
         for _ in range(n):
             if not self.library:
@@ -1062,6 +1067,12 @@ class Game:
                     continue                    # lord por subtipo: solo ese tipo
                 if not (getattr(src.card, "anthem_others", False) and src is perm):
                     return True
+        # "All creatures have haste" / "All Sliver creatures have flying": globales
+        for src in self.all_permanents():
+            for gk, gsub in (getattr(src.card, "global_keywords", None) or ()):
+                if gk == kw and (gsub is None or perm.has_subtype(gsub)) \
+                        and not src.abilities_off():
+                    return True
         for card in ctrl.graveyard:
             g = getattr(card, "gy_grant", None)
             if not g or g.get("keyword") != kw:
@@ -1078,6 +1089,10 @@ class Game:
         return False
 
     # -- objetivos (P2.2) ------------------------------------------------- #
+    def targetable_opponents(self, p: "Player") -> list:
+        """Rivales que pueden ser objetivo (sin 'you have hexproof')."""
+        return [o for o in self.opponents(p) if not o.has_hexproof()]
+
     def can_target(self, caster: "Player", perm: "Permanent") -> bool:
         """Reglas de objetivo. hexproof/protección: no puede ser objetivo de un
         OPONENTE. shroud: nadie. ward NO bloquea el objetivo (es un impuesto que se
@@ -1289,6 +1304,9 @@ class Game:
             if b and not pm.abilities_off():
                 bonus += b
         n += bonus
+        for pm in player.battlefield:          # "gain twice that much life instead"
+            if getattr(pm.card, "life_gain_double", False) and not pm.abilities_off():
+                n *= 2
         player.life += n
         player.gained_turn = self.turn
         self.emit("gain_life", player=player, amount=n)
@@ -1413,6 +1431,10 @@ class Game:
             self.set_day_night("day")
         # disparadores "cuando entra una criatura (que controlás)": necesitan la
         # criatura que entró, así que se despachan aparte (emit no la pasa).
+        if card.is_creature() and any(getattr(pm.card, "opp_creatures_enter_tapped", False)
+                                      and not pm.abilities_off()
+                                      for o in self.opponents(player) for pm in o.battlefield):
+            perm.tapped = True
         if card.is_creature():
             for w in self.all_permanents():
                 cb = w.card.triggers.get("creature_enters")
@@ -1963,6 +1985,16 @@ class Game:
                             self.log(f"{p.name} crea {tok['name']} "
                                      f"{tok['power']}/{tok['toughness']}")
                         changed = True
+            # Eldrazi: "when ~ is put into a graveyard from anywhere, shuffle it into its
+            # owner's library" (Ulamog, Kozilek, Emrakul, Progenitus…)
+            for p in self.players:
+                back = [c for c in p.graveyard if getattr(c, "shuffle_from_gy", False)]
+                if back:
+                    for c in back:
+                        p.graveyard.remove(c)
+                        p.library.append(c)
+                    self.rng.shuffle(p.library)
+                    self.log(f"{', '.join(c.name for c in back)} se baraja en la biblioteca de {p.name}")
             # "When you control no Islands, sacrifice this creature" (Dandân, Serpents)
             for p in self.players:
                 for perm in list(p.battlefield):
@@ -2842,7 +2874,7 @@ class Game:
         "opp_creature": lambda o: isinstance(o, Permanent) and o.is_creature(),
         "own_creature": lambda o: isinstance(o, Permanent) and o.is_creature(),
         "any_creature": lambda o: isinstance(o, Permanent) and o.is_creature(),
-        "opp_player": lambda o: isinstance(o, Player),
+        "opp_player": lambda o: isinstance(o, Player) and not o.has_hexproof(),
         "any_artifact": lambda o: isinstance(o, Permanent) and "artifact" in o.card.types,
         "any_enchantment": lambda o: isinstance(o, Permanent) and "enchantment" in o.card.types,
         "any_art_ench": lambda o: isinstance(o, Permanent)
@@ -4700,6 +4732,8 @@ class Game:
             return False
         if attacker.has("skulk") and blocker.power > attacker.power:
             return False
+        if getattr(attacker.card, "unblock_by_walls", False) and blocker.has_subtype("wall"):
+            return False
         ub = getattr(attacker.card, "unblock_power_le", None)
         if ub is not None and blocker.power <= ub:
             return False             # "can't be blocked by creatures with power N or less"
@@ -4789,6 +4823,11 @@ class Game:
     def _finish_combat(self, declared: list):
         """Valida amenaza, aplica daño (primer golpe + normal) y limpia."""
         for a in declared:
+            mn = getattr(a.card, "min_blockers", 0)
+            if mn and 0 < len(a.blocked_by) < mn:
+                for b in a.blocked_by:
+                    b.blocking.remove(a)
+                a.blocked_by = []
             if a.has("menace") and 0 < len(a.blocked_by) < 2:
                 for b in a.blocked_by:
                     b.blocking.remove(a)
@@ -4960,7 +4999,9 @@ class Game:
         # DRAW (el jugador inicial no roba en el turno 1)
         if not (self.turn == 1 and self.active_index == 0) and not any(
                 getattr(pm.card, "skip_draw", False) for pm in p.battlefield):
-            p.draw(1, self)
+            extra = sum(1 for pl in self.players for pm in pl.battlefield
+                        if getattr(pm.card, "each_draw_extra", False) and not pm.abilities_off())
+            p.draw(1 + extra, self)
             self.resolve_stack()
         self.sba()
 

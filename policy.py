@@ -542,7 +542,7 @@ class Policy:
             if spec == "opp_creature":
                 ok = bool(game.legal_creature_targets(me))
             elif spec == "opp_player":
-                ok = bool(game.opponents(me))
+                ok = bool(game.targetable_opponents(me))
             scored.append((1 if ok else -1, i))
         scored.sort(reverse=True)
         return sorted(i for _s, i in scored[:pick])
@@ -641,7 +641,7 @@ class Policy:
             pool.sort(key=lambda p: self._threat_value(p), reverse=True)
             return pool[:max(1, count)]
         if spec == "opp_player":
-            opps = game.opponents(me)
+            opps = game.targetable_opponents(me)
             return [min(opps, key=lambda o: o.life)] if opps else []
         if spec == "own_perm":
             if not me.battlefield:
@@ -754,7 +754,7 @@ class Policy:
             pool.sort(key=lambda p: self._threat_value(p), reverse=True)
             return pool[:n]           # las N más amenazantes (no solo las más grandes)
         if spec == "opp_player":
-            opps = game.opponents(me)
+            opps = game.targetable_opponents(me)
             return [min(opps, key=lambda o: o.life)] if opps else []
         if spec == "own_perm":
             mine = [pm for pm in me.battlefield if pm.card.on_etb] or me.battlefield

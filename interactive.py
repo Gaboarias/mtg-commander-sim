@@ -667,7 +667,7 @@ class InteractiveGame:
             pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
             return pool[:n]
         if ts == "opp_player":
-            opps = self.g.opponents(p)
+            opps = self.g.targetable_opponents(p)
             return [min(opps, key=lambda o: o.life)] if opps else []
         if ts == "own_perm":
             mine = [pm for pm in p.battlefield if pm.card.on_etb] or p.battlefield
@@ -705,7 +705,7 @@ class InteractiveGame:
         if ts == "opp_player":
             return [{"idx": self.players.index(o), "name": o.name,
                      "from": f"{o.life} de vida"}
-                    for o in self.g.opponents(self.human())]
+                    for o in self.g.targetable_opponents(self.human())]
         if ts == "own_perm":
             return [{"uid": pm.uid, "name": pm.name,
                      "power": pm.power if pm.is_creature() else None,
@@ -793,7 +793,7 @@ class InteractiveGame:
                     out.append(pm)
             return out
         if ts == "opp_player":
-            opps = self.g.opponents(self.human())
+            opps = self.g.targetable_opponents(self.human())
             out = []
             for uid in uids:
                 if isinstance(uid, int) and 0 <= uid < len(self.players):

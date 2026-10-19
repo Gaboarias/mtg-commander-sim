@@ -1528,7 +1528,7 @@ def _modal_targets_for(game, ctrl, spec):
         return []
     perms = [p for pl in game.players for p in pl.battlefield]
     if spec == "opp_player":
-        return [(f"{o.name} ({o.life} de vida)", o) for o in game.opponents(ctrl)]
+        return [(f"{o.name} ({o.life} de vida)", o) for o in game.targetable_opponents(ctrl)]
     if spec == "opp_creature":
         pool = [pm for pm in perms if pm.is_creature()
                 and pm.controller is not ctrl and game.can_target(ctrl, pm)]
@@ -3129,6 +3129,10 @@ def _parse_static_condition(cond_text: str):
         return lambda p: getattr(p, "saddled_turn", None) == p.game.turn
     if re.fullmatch(r"(?:it'?s|this creature is|~ is) tapped", c):
         return lambda p: p.tapped
+    if re.fullmatch(r"(?:it'?s|it is|this creature is|~ is) attacking", c):
+        return lambda p: getattr(p, "attacking", None) is not None
+    if re.fullmatch(r"(?:it'?s|it is|this creature is|~ is) blocking", c):
+        return lambda p: bool(getattr(p, "blocking", None))
     if re.fullmatch(r"(?:this case|~|it) is solved", c):
         return lambda p: bool(getattr(p, "solved", False))
     gc = _cond_gc(c)
@@ -3641,7 +3645,7 @@ def _saga_candidates(game, ctrl, spec):
         return [(cl(p), p) for p in pool]
     if spec == "opp_player":
         return [(f"{o.name} ({o.life} de vida)", o)
-                for o in sorted(game.opponents(ctrl), key=lambda o: o.life)]
+                for o in sorted(game.targetable_opponents(ctrl), key=lambda o: o.life)]
     if spec == "own_perm":
         return [(cl(p), p) for p in ctrl.battlefield]
     typ_pred = {
@@ -4081,7 +4085,7 @@ def _choose_loyalty_targets(game, ctrl, spec, n, apply_targets):
     elif spec == "own_creature":
         pool = list(ctrl.creatures())
     elif spec == "opp_player":
-        pool = list(game.opponents(ctrl))
+        pool = list(game.targetable_opponents(ctrl))
     else:
         pool = []
     if not pool or (n or 1) > 1:
@@ -4163,7 +4167,7 @@ def _auto_loyalty_targets(game, ctrl, spec, n):
         mine.sort(key=lambda x: (x.power, x.toughness), reverse=True)
         return mine[:n]
     if spec == "opp_player":
-        opps = game.opponents(ctrl)
+        opps = game.targetable_opponents(ctrl)
         return [min(opps, key=lambda o: o.life)] if opps else []
     return []
 
@@ -4457,6 +4461,23 @@ def _each_count_fn(phrase: str):
         return lambda g, c: len(g.opponents(c))
     if re.match(r"cards? in your hand", p):
         return lambda g, c: len(c.hand)
+    if re.fullmatch(r"instant and(?:/or)? sorcery cards? in your graveyard", p):
+        return lambda g, c: sum(1 for x in c.graveyard if {"instant", "sorcery"} & x.types)
+    mgy = re.fullmatch(r"(creature|artifact|land|enchantment|instant|sorcery) cards? in your "
+                       r"graveyard", p)
+    if mgy:
+        return lambda g, c, _k=mgy.group(1): sum(1 for x in c.graveyard if _k in x.types)
+    if re.fullmatch(r"creatures? in your party", p):
+        def _party(g, c):
+            used, n = set(), 0
+            for cl in ("Cleric", "Rogue", "Warrior", "Wizard"):
+                for pm in c.creatures():
+                    if pm.uid not in used and pm.has_subtype(cl):
+                        used.add(pm.uid)
+                        n += 1
+                        break
+            return n
+        return _party
     mk = re.match(r"creatures? with ([a-z ]+?) (on the battlefield|you control|"
                   r"your opponents control)$", p)
     if mk and mk.group(1).replace(" ", "_") in KEYWORDS:
@@ -4631,6 +4652,44 @@ def _atomic_effect(text):
     t = re.sub(r"\s+", " ", _strip_reminder(text or "")).strip().rstrip(".").lower()
     t = re.sub(r"^(?:then |and )", "", t)
 
+    # ── batch 7: daño dividido ("deals N damage divided as you choose among …") ──
+    m = re.fullmatch(r"(?:[\w,' -]+?) deals (\w+) damage divided (?:as you choose |evenly )?among "
+                     r"(any number of targets|any number of target creatures(?: and/or "
+                     r"planeswalkers)?|one or two targets|one, two, or three targets|"
+                     r"one or two target creatures(?: and/or planeswalkers)?|up to (\w+) targets|"
+                     r"(\w+) targets|any number of target creatures your opponents control)", t)
+    if m and (n := _count_word(m.group(1))):
+        who = m.group(2)
+        cr_only = "creature" in who
+        cap = (99 if "any number" in who else 2 if "one or two" in who else
+               3 if "one, two, or three" in who else
+               (_count_word(m.group(3) or m.group(4) or "") or 99))
+
+        def eff_divided(game, ctrl, *a, _n=n, _c=cr_only, _cap=cap, **kw):
+            src = getattr(game, "_trigger_source", None)
+            left, hits = _n, 0
+            pool = sorted([pm for o in game.opponents(ctrl) for pm in o.creatures()
+                           if game.can_target(ctrl, pm)],
+                          key=lambda x: (x.power + x.toughness), reverse=True)
+            for pm in pool:                      # matar lo más grande que alcance
+                need = max(1, pm.toughness - pm.damage)
+                if pm.has("indestructible") or need > left or hits >= _cap:
+                    continue
+                game.deal_damage(src, pm, need)
+                left -= need
+                hits += 1
+            if left > 0 and hits < _cap:
+                if not _c:
+                    opps = [o for o in game.opponents(ctrl) if not o.lost and not o.has_hexproof()]
+                    if opps:
+                        game.deal_damage(src, min(opps, key=lambda o: o.life), left)
+                elif pool:
+                    alive = [pm for pm in pool if pm in pm.controller.battlefield]
+                    if alive:
+                        game.deal_damage(src, alive[0], left)
+            game.log(f"{ctrl.name} reparte {_n} de daño")
+            game.sba()
+        return eff_divided
     # ── batch 6: debuffs / pumps en masa y dirigidos, top of library ──
     m = re.fullmatch(r"creatures your opponents control get ([+-]\d+)/([+-]\d+) until end of turn", t)
     if m:
@@ -8208,6 +8267,8 @@ def _build_card_from_data_impl(data: dict) -> Card:
                 card.bargain = True
                 card.bargain_instead = _inst
                 card.bargain_effect = (lambda g, ctrl, tg, _e=_beff: _e(g, ctrl, *tg))
+    if _spell and card.on_cast_resolve is not None and "damage divided" in _lt:
+        card.tags = set(card.tags) | {"removal"}     # la IA lo valora como remoción
     if _cond_bonus is not None:
         def _cb_resolve(g, ctrl, tg, _base=card.on_cast_resolve, _cb=_cond_bonus):
             if _base is not None:
@@ -8904,6 +8965,52 @@ def _build_card_from_data_impl(data: dict) -> Card:
         elif re.fullmatch(_subj5 + r" must be blocked if able", _l5) or \
                 re.fullmatch(_subj5 + r" must be blocked each combat if able", _l5):
             card.must_be_blocked = True
+        elif _l5 == "you have hexproof":
+            card.player_hexproof = True
+        elif _l5 == "if you would gain life, you gain twice that much life instead":
+            card.life_gain_double = True
+        elif re.fullmatch(r"(?:when " + _subj5 + r" is put into a graveyard from anywhere, shuffle "
+                          r"it into its owner's library|if " + _subj5 + r" would be put into a "
+                          r"graveyard from anywhere, (?:reveal " + _subj5 + r" and )?shuffle it "
+                          r"into its owner's library instead)", _l5):
+            card.shuffle_from_gy = True
+        elif re.fullmatch(r"creatures (?:your opponents control|your opponents control and "
+                          r"lands your opponents control) enter(?: the battlefield)? tapped", _l5):
+            card.opp_creatures_enter_tapped = True
+        elif _l5 == "at the beginning of each player's draw step, that player draws an additional card":
+            card.each_draw_extra = True
+        elif re.fullmatch(_subj5 + r" can't block", _l5):
+            card.cant_block_static = True
+        elif re.fullmatch(_subj5 + r" can't block and can't be blocked", _l5):
+            card.cant_block_static = True
+            card.keywords = set(card.keywords) | {"unblockable"}
+        elif (m7 := re.fullmatch(_subj5 + r" can't be blocked except by (\w+) or more creatures",
+                                 _l5)) and (_count_word(m7.group(1)) or 0) >= 3:
+            card.min_blockers = _count_word(m7.group(1))
+        elif re.fullmatch(_subj5 + r" can't be blocked by walls", _l5):
+            card.unblock_by_walls = True
+        elif (m7 := re.fullmatch(r"all (?:([a-z]+) )?creatures have ([a-z ,]+?)", _l5)):
+            _gk = [k.strip().replace(" ", "_") for k in re.split(r",\s*(?:and\s+)?|\s+and\s+",
+                                                                  m7.group(2)) if k.strip()]
+            if _gk and all(k in KEYWORDS for k in _gk):
+                _gs = m7.group(1).capitalize() if m7.group(1) else None
+                card.global_keywords = tuple(getattr(card, "global_keywords", None) or ()) + \
+                    tuple((k, _gs) for k in _gk)
+        elif (m7 := re.fullmatch(r"(?:all ([a-z]+) creatures|(creature tokens)(?: you control)?) "
+                                 r"get ([+-]\d+)/([+-]\d+)", _l5)):
+            _gsub = m7.group(1).capitalize() if m7.group(1) else None
+            _toks = bool(m7.group(2))
+            _mine = "you control" in _l5
+
+            def _sm7(src, target, _a=int(m7.group(3)), _b=int(m7.group(4)), _s=_gsub, _t=_toks,
+                     _m=_mine, _p=card.static_mod):
+                base = _p(src, target) if _p else (0, 0)
+                if _m and target.controller is not src.controller:
+                    return base
+                if (_s and target.has_subtype(_s)) or (_t and target.is_token):
+                    return (base[0] + _a, base[1] + _b)
+                return base
+            card.static_mod = _sm7
         elif _l5 == "you have no maximum hand size":
             card.no_max_hand = True
         elif _l5 == "skip your draw step":
