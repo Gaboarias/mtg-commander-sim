@@ -363,6 +363,9 @@ class Permanent:
         return ks
 
     def is_creature(self) -> bool:
+        dv = getattr(self.card, "devotion_req", None)
+        if dv and self.controller is not None and self.controller.devotion(dv[0]) < dv[1]:
+            return False                 # dioses de Theros: no es criatura sin devoción
         if getattr(self.card, "impending_n", 0) and getattr(self, "_impending", False) \
                 and self.counters.get("time", 0) > 0:
             return False                 # impending: todavía no es criatura
@@ -463,6 +466,7 @@ class Player:
         self.cmdr_taxes: list = [0] * len(self.commanders)
         self.life = 40
         self.poison = 0
+        self.rad = 0                 # contadores rad (Fallout)
         self.library: list = []
         self.hand: list = []
         self.graveyard: list = []
@@ -500,6 +504,16 @@ class Player:
         for _ in range(7):
             if self.library:
                 self.hand.append(self.library.pop())
+
+    def devotion(self, colors) -> int:
+        """Devoción: símbolos de maná de esos colores entre los costes de tus
+        permanentes (un híbrido cuenta una vez)."""
+        n = 0
+        for pm in self.battlefield:
+            for pp in (getattr(pm.card.cost, "pips", None) or ()):
+                if set(str(pp).upper()) & set(colors):
+                    n += 1
+        return n
 
     def has_hexproof(self) -> bool:
         """'You have hexproof' (Leyline of Sanctity, Aegis of the Gods…)."""
@@ -1419,6 +1433,10 @@ class Game:
             if n:
                 perm.counters[kind] = perm.counters.get(kind, 0) + n
         player.battlefield.append(perm)
+        self._etb_seq = getattr(self, "_etb_seq", 0) + 1
+        perm._etb_seq = self._etb_seq            # "it" de "… onto the battlefield. It gains haste"
+        perm._etb_turn = self.turn
+        self._last_entered = perm
         if not card.is_land():                # celebration: permanentes no tierra que entraron
             if getattr(player, "_entered_turn", None) != self.turn:
                 player._entered_turn, player.entered_nonland = self.turn, 0
@@ -1969,8 +1987,8 @@ class Game:
                 if cb:
                     self.stack.append(StackObject(
                         source.controller,
-                        (lambda g, _cb=cb, _p=source, _t=target:
-                         g._run_trigger(_cb, _p, {"defender": _t})),
+                        (lambda g, _cb=cb, _p=source, _t=target, _n=amount:
+                         g._run_trigger(_cb, _p, {"defender": _t, "amount": _n})),
                         source=source, label=f"cdmg:{source.name}"))
                     self.note_ability(source.card, "daño de combate a un jugador",
                                       controller=source.controller)
@@ -2281,6 +2299,11 @@ class Game:
             x = (x_value if x_value is not None
                  else max(0, (player.available_mana() - base.cmc) // xc))
             x = max(0, x)
+            _ad = getattr(card, "additional_cost", None) or {}
+            if _ad.get("pay_life_x"):
+                x = min(x, max(0, player.life - 1))        # pagar X vida
+            if _ad.get("discard_x"):
+                x = min(x, sum(1 for c in player.hand if c is not card))
             if x:
                 cast_x = x
                 pay_cost = Cost(generic=base.generic + x * xc, pips=base.pips)
@@ -2525,7 +2548,9 @@ class Game:
         if add:
             if add.get("pay_life"):
                 player.life -= add["pay_life"]
-            for _ in range(add.get("discard", 0) or 0):
+            if add.get("pay_life_x") and cast_x:
+                player.life -= cast_x
+            for _ in range((add.get("discard", 0) or 0) + (cast_x if add.get("discard_x") else 0)):
                 if player.hand:
                     player.graveyard.append(player.hand.pop())
             if victim is not None and victim in player.battlefield:
@@ -5288,6 +5313,17 @@ class Game:
             self.resolve_stack()
         self.sba()
         # comienzo de la PRIMERA fase principal ("at the beginning of your first main phase")
+        rad = getattr(p, "rad", 0)
+        if rad > 0:                      # contadores rad: muele N; por cada no-tierra, -1 vida y -1 rad
+            top = p.library[-rad:][::-1] if p.library else []
+            for c in top:
+                p.library.remove(c)
+                p.graveyard.append(c)
+                if not c.is_land():
+                    p.life -= 1
+                    p.rad -= 1
+            if top:
+                self.log(f"{p.name} muele {len(top)} por rad (quedan {p.rad})")
         self.emit("main1", player=p)
         self.resolve_stack()
 
