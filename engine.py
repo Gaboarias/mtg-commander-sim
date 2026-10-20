@@ -758,7 +758,7 @@ class StackObject:
 class Game:
     SELF_SCOPED = {"upkeep", "end_step", "draw", "landfall", "cast", "begin_combat",
                    "gain_life", "token_created", "cards_exiled", "main2", "scry", "surveil",
-                   "ring_tempts"}
+                   "ring_tempts", "you_attack", "main1", "discarded", "crime"}
     # descripción amigable de cada evento, para el resumen de habilidades
     EVENT_KIND = {
         "etb": "cuando algo entra al campo", "landfall": "al jugar una tierra",
@@ -1611,6 +1611,13 @@ class Game:
         if dies:
             self.death_turn = self.turn       # morbid: murió una criatura este turno
             self.emit("death", player=ctrl, perm=perm)
+            # "when enchanted creature dies, …" de las auras anexadas (mirando atrás)
+            for pl in self.players:
+                for src in pl.battlefield:
+                    if getattr(src, "enchanting", None) is perm and \
+                            (src.card.triggers or {}).get("enchanted_dies"):
+                        self._push_self_trigger(src, "enchanted_dies", "muere la encantada",
+                                                subject=perm)
         # disparo de muerte PROPIA: emit() escanea el campo y la carta ya no está,
         # así que su propio triggers["death"] (aristócratas "this creature or ...",
         # criaturas que vuelven al morir) se despacha aparte.
@@ -1696,6 +1703,7 @@ class Game:
         madness; si no lo hace, va al cementerio. El humano elige; los bots la
         lanzan si pueden pagarla."""
         card._discarded_turn = self.turn
+        self.emit("discarded", player=ctrl, card=card)    # "whenever you discard a card"
         mad = getattr(card, "madness", None)
         if mad is None:
             ctrl.graveyard.append(card)
@@ -1915,6 +1923,10 @@ class Game:
             if amount > 0:
                 self._push_self_trigger(target, "dealt_damage", "recibe daño (enrage)",
                                         amount=amount)
+                if combat and src_perm:
+                    self._push_self_trigger(source, "combat_damage_creature",
+                                            "daño de combate a una criatura",
+                                            subject=target, amount=amount)
         # lifelink: la fuente gana vida = daño hecho, contra CUALQUIER objetivo
         if src_perm and source.has("lifelink"):
             self.gain_life(source.controller, amount)
@@ -2052,6 +2064,8 @@ class Game:
             # owner's library" (Ulamog, Kozilek, Emrakul, Progenitus…)
             for p in self.players:
                 back = [c for c in p.graveyard if getattr(c, "shuffle_from_gy", False)]
+                if any(getattr(c, "shuffle_from_gy", None) == "all" for c in back):
+                    back = list(p.graveyard)          # Kozilek/Ulamog: todo el cementerio
                 if back:
                     for c in back:
                         p.graveyard.remove(c)
@@ -2563,12 +2577,21 @@ class Game:
                              g._auto_targets(player, _c) or []) if _c.on_cast_resolve
                              else None, player.graveyard.append(_c))),
                     source=c, label=f"ripple:{c.name}", kind="trigger"))
+        # "When you cast this spell, <efecto>" (Eldrazi, Bloodbraid…): disparo propio
+        # encima del hechizo (resuelve antes que él)
+        ct = getattr(card, "cast_trigger", None)
+        if ct is not None:
+            self.stack.append(StackObject(
+                player, (lambda g, _e=ct, _p=player: _e(g, _p)),
+                source=card, label=f"cast-self:{card.name}", kind="trigger"))
+            self.note_ability(card, "al lanzarlo", controller=player)
         # disparos "cuando lanzás un hechizo" DESPUÉS de apilar el hechizo: quedan
         # encima y resuelven antes que él (magecraft, "copiá ese hechizo"...).
         self.emit("cast", player=player, card=card)
         # disparos "cuando un RIVAL lanza un hechizo": evento sin scope; el callback
         # sólo actúa si el permanente que observa NO es del que lanzó.
         self.emit("opp_cast", caster=player, card=card)
+        self.emit("any_cast", caster=player, card=card)  # "whenever a player casts a spell"
         # prowess: al lanzar un hechizo no-criatura, +1/+1 a las criaturas con prowess
         if {"instant", "sorcery"} & card.types:
             for perm in player.battlefield:
@@ -2630,6 +2653,9 @@ class Game:
     def _targeted_triggers(self, caster, targets, spell=True):
         """Heroic ('whenever you cast a spell that targets ~') y valiant ('becomes
         the target of a spell or ability you control for the first time each turn')."""
+        if any((isinstance(t, Player) and t is not caster) or
+               (isinstance(t, Permanent) and t.controller is not caster) for t in (targets or [])):
+            self.emit("crime", player=caster)        # "whenever you commit a crime"
         for t in (targets or []):
             if isinstance(t, Permanent) and getattr(t.card, "sac_when_targeted", False) \
                     and t in t.controller.battlefield:
@@ -3467,6 +3493,11 @@ class Game:
         self.log(f"{p.name} cicla {card.name}")
         self.discard_card(p, card)     # respeta madness
         p.draw(1, self)
+        ct = getattr(card, "cycle_trigger", None)       # "when you cycle this card, …"
+        if ct is not None:
+            self.stack.append(StackObject(p, (lambda g, _e=ct, _p=p: _e(g, _p)),
+                                          source=card, label=f"cycle:{card.name}", kind="trigger"))
+            self.resolve_stack()
         return True
 
     def cast_alt_haste(self, p: "Player", card: Card, mode: str) -> bool:
@@ -4607,6 +4638,7 @@ class Game:
 
     def _begin_combat(self, p: "Player"):
         self.emit("begin_combat", player=p)
+        self.emit("each_combat", active=p)       # "at the beginning of each combat"
         self.resolve_stack()
 
     def _declare_attackers(self, p: "Player", attackers: list) -> list:
@@ -4708,6 +4740,8 @@ class Game:
         if declared:
             self._combat_declare_triggers(p, declared)
         self.resolve_stack()
+        if declared:
+            self.emit("you_attack", player=p)    # "whenever you attack"
         return declared
 
     def _combat_declare_triggers(self, p: "Player", declared: list):
@@ -5109,6 +5143,9 @@ class Game:
             p.draw(1 + extra, self)
             self.resolve_stack()
         self.sba()
+        # comienzo de la PRIMERA fase principal ("at the beginning of your first main phase")
+        self.emit("main1", player=p)
+        self.resolve_stack()
 
     def set_monarch(self, player):
         """Monarca (regla de Commander Legends): roba una carta extra al final de su

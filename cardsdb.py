@@ -2699,6 +2699,18 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
             ("main2", r"at the beginning of your second main phase, (?:if " + me_re +
              r" is tapped, )?(.+)$"),
             ("scry", r"whenever you scry,\s*(.+)$"),
+            ("you_attack", r"whenever you attack,\s*(.+)$"),
+            ("each_combat", r"at the beginning of each combat,\s*(.+)$"),
+            ("main1", r"at the beginning of (?:your )?(?:first|precombat) main phase,\s*(.+)$"),
+            ("discarded", r"whenever you (?:cycle or )?discard (?:a|one or more) cards?"
+             r"(?: for the first time each turn)?,\s*(.+)$"),
+            ("crime", r"whenever you commit a crime,\s*(.+)$"),
+            ("any_cast", r"whenever a player casts a spell,\s*(.+)$"),
+            ("enchanted_dies", r"when(?:ever)? enchanted creature dies,\s*(.+)$"),
+            ("combat_damage_creature", r"whenever " + me_re + r" deals combat damage to a "
+             r"creature,\s*(.+)$"),
+            ("leaves_graveyard", r"whenever one or more (?:other )?cards leave your graveyard,"
+             r"\s*(.+)$"),
             ("ring_tempts", r"whenever the ring tempts you,\s*(.+)$"),
             ("surveil", r"whenever you surveil,\s*(.+)$"),
             ("blocks_or_blocked", r"whenever " + me_re + r" blocks or becomes blocked"
@@ -2720,9 +2732,21 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
                 continue
             need_tapped = key == "main2" and " is tapped," in l.lower()
 
-            def cb_s(game, perm, _e=eff, _nt=need_tapped, **_kw):
+            _own = key in ("leaves_graveyard",)
+            _once = bool(re.search(r"(?:triggers only once each turn|for the first time each "
+                                   r"turn)", l, re.I))
+
+            def cb_s(game, perm, _e=eff, _nt=need_tapped, _ow=_own, _o1=_once, _k=key, **_kw):
                 if _nt and not perm.tapped:
                     return
+                if _ow and _kw.get("player") is not perm.controller:
+                    return
+                if _o1:
+                    if getattr(perm, "_once_turn", {}).get(_k) == game.turn:
+                        return
+                    if not hasattr(perm, "_once_turn"):
+                        perm._once_turn = {}
+                    perm._once_turn[_k] = game.turn
                 _e(game, perm.controller, perm)
             out[key] = cb_s
         if "blocks_or_blocked" in out:
@@ -8716,6 +8740,22 @@ def _build_card_from_data_impl(data: dict) -> Card:
         card.on_leave = _exile_until_leave
         card.tags = set(card.tags) | {"removal"}
 
+    # "When you cycle this card, <efecto>"
+    for _lc in _ability_lines(data.get("oracle_text", "")):
+        mcy = re.match(r"(?i)when you cycle (?:this card|~|" + "|".join(
+            re.escape(x) for x in _self_names(name) if x) + r"),\s*(.+)$", _lc.strip())
+        if mcy and (_cye := _effect_any(mcy.group(1))) is not None:
+            card.cycle_trigger = (lambda g, p, _e=_cye: _e(g, p))
+            break
+    # "When you cast this spell, <efecto>" (Kozilek: robar 4, Ulamog: destruir, …)
+    for _lc in _ability_lines(data.get("oracle_text", "")):
+        mcs = re.match(r"(?i)when you cast (?:this spell|~|" + "|".join(
+            re.escape(x) for x in _self_names(name) if x) + r"),\s*(.+)$", _lc.strip())
+        if mcs:
+            _ce = _effect_any(mcs.group(1))
+            if _ce is not None:
+                card.cast_trigger = (lambda g, p, _e=_ce: _e(g, p))
+            break
     # werewolves: "At the beginning of each upkeep, if <hechizos del turno anterior>,
     # transform this creature." (cada cara trae su propia condición)
     mww = re.search(r"at the beginning of each upkeep, if (no spells were cast last turn|a "
@@ -9342,6 +9382,9 @@ def _build_card_from_data_impl(data: dict) -> Card:
                           r"graveyard from anywhere, (?:reveal " + _subj5 + r" and )?shuffle it "
                           r"into its owner's library instead)", _l5):
             card.shuffle_from_gy = True
+        elif re.fullmatch(r"when " + _subj5 + r" is put into a graveyard from anywhere, its owner "
+                          r"shuffles their graveyard into their library", _l5):
+            card.shuffle_from_gy = "all"
         elif re.fullmatch(r"creatures (?:your opponents control|your opponents control and "
                           r"lands your opponents control) enter(?: the battlefield)? tapped", _l5):
             card.opp_creatures_enter_tapped = True
