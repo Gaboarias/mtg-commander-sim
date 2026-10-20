@@ -1547,6 +1547,38 @@ class Game:
             self.log(f"El Anillo tienta a {p.name} (nivel {p.ring_level})")
         self.emit("ring_tempts", player=p)
 
+    def combat_power(self, perm) -> int:
+        """Daño de combate que asigna: su fuerza, o su resistencia con Doran
+        ('each creature assigns combat damage equal to its toughness'), para todas
+        o solo las tuyas / las que tienen más resistencia que fuerza."""
+        for pl in self.players:
+            for src in pl.battlefield:
+                k = getattr(src.card, "toughness_damage", None)
+                if not k or src.abilities_off():
+                    continue
+                if k == "you" and perm.controller is not pl:
+                    continue
+                if k == "you_tough" and (perm.controller is not pl or perm.toughness <= perm.power):
+                    continue
+                return max(0, perm.toughness)
+        return max(0, perm.power)
+
+    def extra_land_plays(self, p: "Player") -> list:
+        """Tierras jugables fuera de la mano: del cementerio (Crucible of Worlds) y
+        la de arriba de la biblioteca (Courser of Kruphix, Oracle of Mul Daya)."""
+        out = []
+        if any(getattr(pm.card, "play_lands_gy", False) for pm in p.battlefield):
+            out += [c for c in p.graveyard if c.is_land()]
+        if p.library and p.library[-1].is_land() and any(
+                getattr(pm.card, "play_lands_top", False) for pm in p.battlefield):
+            out.append(p.library[-1])
+        return out
+
+    def attack_tax(self, defender) -> int:
+        """Ghostly Prison / Propaganda: cuánto cuesta atacar a `defender` por criatura."""
+        return sum(getattr(pm.card, "attack_tax", 0) for pm in defender.battlefield
+                   if not pm.abilities_off())
+
     def _etb_extra(self, player, perm) -> int:
         """Copias extra de los disparos de entrada (Panharmonicon: artefacto o
         criatura; Yarok: cualquier permanente) que controla `player`."""
@@ -1829,7 +1861,9 @@ class Game:
             amount *= mult
         # "el daño no se puede prevenir este turno" (Skullcrack, Flames of the Blood
         # Hand…): ignora todos los escudos de prevención.
-        no_prev = getattr(self, "no_prevention_turn", False)
+        no_prev = getattr(self, "no_prevention_turn", False) or any(
+            getattr(pm.card, "no_prevention_static", False) for pl in self.players
+            for pm in pl.battlefield)
         # prevención de daño (escudos "hasta el fin del turno")
         if not no_prev and isinstance(target, Player):
             if getattr(target, "prevent_all", False):
@@ -1998,7 +2032,13 @@ class Game:
             for p in self.players:
                 if p.lost:
                     continue
-                if p.life <= 0 or p.poison >= 10:
+                _cant = any(getattr(pm.card, "cant_lose", False) and not pm.abilities_off()
+                            for pm in p.battlefield)
+                _life_ok = _cant or any(getattr(pm.card, "no_life_loss", False)
+                                        and not pm.abilities_off() for pm in p.battlefield)
+                if _cant:
+                    continue                      # Platinum Angel: no puede perder
+                if (p.life <= 0 and not _life_ok) or p.poison >= 10:
                     p.lost = True
                     changed = True
                     self.log(f"{p.name} pierde (vida {p.life}, veneno {p.poison})")
@@ -3231,6 +3271,10 @@ class Game:
             return False
         if card in player.hand:
             player.hand.remove(card)
+        elif card in player.graveyard:            # Crucible of Worlds / Ramunap
+            player.graveyard.remove(card)
+        elif player.library and player.library[-1] is card:   # Courser / Oracle of Mul Daya
+            player.library.pop()
         player.lands_played += 1
         self.log(f"{player.name} juega tierra {card.name}")
         self.move_to_battlefield(card, player)
@@ -4673,6 +4717,20 @@ class Game:
         """Marca los atacantes válidos, los tapea (sin vigilancia) y dispara
         'attacks'. Devuelve la lista de Permanent que efectivamente atacan."""
         declared = []
+        # "can't attack alone": fuera si sería la única atacante
+        if sum(1 for pm, _d in attackers if pm.can_attack()) <= 1:
+            attackers = [(pm, d) for pm, d in attackers
+                         if not getattr(pm.card, "attack_not_alone", False)]
+        # Ghostly Prison / Propaganda: pagar {N} por cada criatura que ataca a ese jugador
+        _paid = []
+        for perm, defender in attackers:
+            dpl = defender if isinstance(defender, Player) else getattr(defender, "controller", None)
+            tax = self.attack_tax(dpl) if dpl is not None else 0
+            if tax and not p.pay(Cost(tax, ())):
+                self.log(f"{p.name} no puede pagar el impuesto para atacar con {perm.name}")
+                continue
+            _paid.append((perm, defender))
+        attackers = _paid
         for perm, defender in attackers:
             if not perm.can_attack():
                 continue
@@ -5053,10 +5111,10 @@ class Game:
                 # sin bloquear pega directo; si fue bloqueado pero el bloqueador
                 # murió (p. ej. en el primer golpe), no pasa daño salvo arrolladora
                 if not a.blocked_by or a.has("trample"):
-                    self.deal_damage(a, a.attacking, a.power, combat=True)
+                    self.deal_damage(a, a.attacking, self.combat_power(a), combat=True)
                 continue
             dt = a.has("deathtouch")
-            remaining = a.power
+            remaining = self.combat_power(a)
             for b in blockers:
                 if remaining <= 0:
                     break
@@ -5073,7 +5131,7 @@ class Game:
                 continue
             for b in list(a.blocked_by):
                 if deals_now(b) and alive(b):
-                    self.deal_damage(b, a, b.power, combat=True)
+                    self.deal_damage(b, a, self.combat_power(b), combat=True)
 
     # -- turno ------------------------------------------------------------ #
     def _opening_leylines(self):

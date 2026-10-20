@@ -683,6 +683,11 @@ class Policy:
         # jugar hasta el límite del turno (1 + 'additional land' de Exploration/Azusa…)
         while me.lands_played < game.land_limit(me):
             lands = [c for c in me.hand if c.is_land()]
+            # tierras del cementerio / de la cima (Crucible, Courser): primero esas,
+            # así la mano guarda sus tierras para después
+            extra = game.extra_land_plays(me) if hasattr(game, "extra_land_plays") else []
+            if extra:
+                lands = extra + lands
             if not lands:
                 return
             if self.level == "novato":
@@ -698,7 +703,7 @@ class Policy:
                 adds_new = 1 if (self._land_colors(c, me) - have) else 0
                 untapped = 0 if c.enters_tapped else 1
                 return (adds_new, untapped)
-            lands.sort(key=key, reverse=True)
+            lands.sort(key=lambda c: (key(c), c in extra), reverse=True)
             if game.play_land(me, lands[0]) is False:
                 return
 

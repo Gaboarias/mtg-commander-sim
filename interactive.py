@@ -947,6 +947,13 @@ class InteractiveGame:
             if i is not None and 0 <= i < len(p.hand):
                 self.g.cast_alt_haste(p, p.hand[i], zone)
             return self.state()
+        if zone == "land_extra":  # tierra del cementerio / de la cima
+            extra = self.g.extra_land_plays(p)
+            if i is not None and 0 <= i < len(extra):
+                self.g.play_land(p, extra[i])
+                self.g.resolve_stack()
+                self.g.sba()
+            return self.state()
         if zone == "cycle":       # ciclar una carta de la mano
             if i is not None and 0 <= i < len(p.hand):
                 self.g.cycle_card(p, p.hand[i])
@@ -1545,6 +1552,13 @@ class InteractiveGame:
                             "index": self.players.index(f), "pw_uid": pm.uid,
                             "name": f"{pm.name} (PW de {f.name})",
                             "life": pm.counters.get("loyalty", 0)})
+        # tierras jugables fuera de la mano (Crucible of Worlds, Courser of Kruphix)
+        if p.lands_played < self.g.land_limit(p):
+            for k, c in enumerate(self.g.extra_land_plays(p)):
+                src = "cementerio" if c in p.graveyard else "biblioteca"
+                casts.append({"i": k, "name": f"{c.name} (jugar desde {src})", "zone": "land_extra",
+                              "cost": "", "target_spec": None, "target_count": 1, "targets": [],
+                              "modes": [], "mode_pick": 1})
         return {"lands": lands, "casts": casts, "attackers": attackers,
                 "face_up": self._face_up_opts(),
                 "activatables": activatables, "abilities": abilities,

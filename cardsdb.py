@@ -9487,6 +9487,55 @@ def _build_card_from_data_impl(data: dict) -> Card:
         elif re.fullmatch(r"if you tap a permanent for mana, it produces (twice|three times) as "
                           r"much of that mana instead", _l5):
             card.mana_mult = 2 if "twice" in _l5 else 3
+        elif re.fullmatch(r"each creature (?:you control )?assigns combat damage equal to its toughness "
+                          r"rather than its power", _l5):
+            card.toughness_damage = "you" if "you control" in _l5 else "all"
+        elif re.fullmatch(r"each creature you control with toughness greater than its power assigns "
+                          r"combat damage equal to its toughness rather than its power", _l5):
+            card.toughness_damage = "you_tough"
+        elif (m13 := re.fullmatch(r"creatures can't attack you(?: or planeswalkers you control)? unless "
+                                  r"their controller pays \{(\d+)\} for each (?:creature they control "
+                                  r"that's attacking you|of those creatures)", _l5)):
+            card.attack_tax = int(m13.group(1))
+        elif re.fullmatch(_subj5 + r" can't attack(?: or block)? alone", _l5):
+            card.attack_not_alone = True
+        elif _l5 in ("you can't lose the game and your opponents can't win the game",
+                     "you can't lose the game"):
+            card.cant_lose = True
+        elif re.fullmatch(r"you don't lose the game for having 0 or less life", _l5):
+            card.no_life_loss = True
+        elif _l5 == "damage can't be prevented":
+            card.no_prevention_static = True
+        elif (m13 := re.fullmatch(r"(white|blue|black|red|green|nonwhite|nonblue|nonblack|nonred|"
+                                  r"nongreen|multicolored|colorless) creatures(?: you control)? get "
+                                  r"([+-]\d+)/([+-]\d+)", _l5)):
+            _col13 = m13.group(1)
+            _mine13 = "you control" in _l5
+
+            def _sm13(src, target, _c=_col13, _m=_mine13, _a=int(m13.group(2)), _b=int(m13.group(3)),
+                      _p=card.static_mod):
+                base = _p(src, target) if _p else (0, 0)
+                if _m and target.controller is not src.controller:
+                    return base
+                cols = set()
+                for pp in (getattr(target.card.cost, "pips", None) or ()):
+                    cols |= {x for x in str(pp).upper() if x in "WUBRG"}
+                cm = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
+                if _c in cm:
+                    ok = cm[_c] in cols
+                elif _c.startswith("non") and _c[3:] in cm:
+                    ok = cm[_c[3:]] not in cols
+                elif _c == "multicolored":
+                    ok = len(cols) >= 2
+                else:
+                    ok = not cols
+                return (base[0] + _a, base[1] + _b) if ok else base
+            card.static_mod = _sm13
+        elif re.fullmatch(r"you may play lands from your graveyard", _l5):
+            card.play_lands_gy = True
+        elif re.fullmatch(r"you may play lands from the top of your library", _l5) or \
+                re.fullmatch(r"you may play the top card of your library if it's a land", _l5):
+            card.play_lands_top = True
         elif _l5 == "you have hexproof":
             card.player_hexproof = True
         elif _l5 == "if you would gain life, you gain twice that much life instead":
