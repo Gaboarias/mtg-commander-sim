@@ -865,7 +865,7 @@ def test_modal_keeps_unmodeled_mode_so_picker_shows():
     c = cardsdb.build_card_from_data({
         "name": "Charm", "type_line": "Instant", "mana_cost": "{1}{U}",
         "color_identity": ["U"],
-        "oracle_text": "Choose one —\n• You may play an additional land this turn.\n• Draw two cards."})
+        "oracle_text": "Choose one —\n• Target creature attacks this turn if able.\n• Draw two cards."})
     assert len(c.modes) == 2                       # no se descartó por el modo no modelado
     me = Player("yo", [cards.creature("X", "1U", 1, 1) for _ in range(10)],
                 cards.creature("Cmd", "2U", 3, 3, legendary=True))

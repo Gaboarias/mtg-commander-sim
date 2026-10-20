@@ -947,6 +947,10 @@ class InteractiveGame:
             if i is not None and 0 <= i < len(p.hand):
                 self.g.cast_alt_haste(p, p.hand[i], zone)
             return self.state()
+        if zone == "top_cast":    # lanzar la carta de arriba de la biblioteca (Future Sight)
+            self.g.cast_from_top(p)
+            self.g.sba()
+            return self.state()
         if zone == "land_extra":  # tierra del cementerio / de la cima
             extra = self.g.extra_land_plays(p)
             if i is not None and 0 <= i < len(extra):
@@ -1559,6 +1563,11 @@ class InteractiveGame:
                 casts.append({"i": k, "name": f"{c.name} (jugar desde {src})", "zone": "land_extra",
                               "cost": "", "target_spec": None, "target_count": 1, "targets": [],
                               "modes": [], "mode_pick": 1})
+        _top = self.g.castable_from_top(p) if self._my_turn() else None
+        if _top is not None and _top.cost is not None and p.can_pay(self.g.effective_cost(p, _top)):
+            casts.append({"i": 0, "name": f"{_top.name} (lanzar desde la biblioteca)", "zone": "top_cast",
+                          "cost": _cost_str_cost(self.g.effective_cost(p, _top)), "target_spec": None,
+                          "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
         return {"lands": lands, "casts": casts, "attackers": attackers,
                 "face_up": self._face_up_opts(),
                 "activatables": activatables, "abilities": abilities,

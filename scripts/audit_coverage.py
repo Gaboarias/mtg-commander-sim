@@ -8,6 +8,7 @@ maná -> {M}) y las ordena por cuántas cartas las usan.
 
     python3 scripts/audit_coverage.py            # resumen + docs/coverage_report.md
     python3 scripts/audit_coverage.py --json out.json
+    python3 scripts/audit_coverage.py --full --jobs 4   # en paralelo
 """
 import collections
 import gzip
@@ -174,9 +175,37 @@ def write_report(res, path=REPORT, top=150):
     open(path, "w", encoding="utf-8").write("\n".join(out) + "\n")
 
 
+def _audit_chunk(items):
+    return audit(dict(items))
+
+
+def audit_parallel(db, jobs):
+    """Igual que audit() pero repartiendo la base en `jobs` procesos (tramos
+    contiguos: el orden de ejemplos y listas queda igual que en secuencial)."""
+    import multiprocessing as mp
+    items = list(db.items())
+    k = max(1, -(-len(items) // jobs))
+    chunks = [items[i:i + k] for i in range(0, len(items), k)]
+    with mp.get_context("fork").Pool(jobs) as pool:
+        parts = pool.map(_audit_chunk, chunks)
+    res = {"lines_total": 0, "lines_bad": 0, "by_tpl": collections.Counter(), "examples": {},
+           "vanilla": [], "partial": [], "full": []}
+    for r in parts:
+        res["lines_total"] += r["lines_total"]
+        res["lines_bad"] += r["lines_bad"]
+        res["by_tpl"].update(r["by_tpl"])
+        for t, ex in r["examples"].items():
+            res["examples"].setdefault(t, ex)
+        for key in ("vanilla", "partial", "full"):
+            res[key] += r[key]
+    return res
+
+
 def main(argv):
     full = "--full" in argv
-    res = audit(load_db(full))
+    jobs = int(argv[argv.index("--jobs") + 1]) if "--jobs" in argv else 1
+    db = load_db(full)
+    res = audit_parallel(db, jobs) if jobs > 1 else audit(db)
     write_report(res, path=REPORT.replace(".md", "_full.md") if full else REPORT)
     n = len(res["vanilla"]) + len(res["partial"]) + len(res["full"])
     print(f"cartas={n} completas={len(res['full'])} parciales={len(res['partial'])} "

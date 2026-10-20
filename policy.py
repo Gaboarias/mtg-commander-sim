@@ -445,6 +445,17 @@ class Policy:
                 break
             if game.play_from_exile(me, c):
                 used += 1
+        # lanzar desde la cima de la biblioteca (Future Sight, Elven Chorus…)
+        for _ in range(3):
+            top = game.castable_from_top(me) if hasattr(game, "castable_from_top") else None
+            if top is None or top.cost is None or not me.can_pay(game.effective_cost(me, top)):
+                break
+            if {"instant", "sorcery"} & top.types and not top.is_creature() and \
+                    getattr(top, "on_cast_resolve", None) is None:
+                break
+            if not game.cast_from_top(me):
+                break
+            used += 1
         # habilidades activadas DESDE el cementerio
         for c in list(me.graveyard):
             if used >= 3:
@@ -986,7 +997,8 @@ class Policy:
         # y solo la expone a morir.
         forced = [p for p in me.creatures() if p.can_attack()
                   and (p.goaded or p.must_attack
-                       or getattr(p.card, "attacks_each_combat", False))]
+                       or getattr(p.card, "attacks_each_combat", False)
+                       or p.aura_flag("aura_must_attack"))]
         attackers = [p for p in me.creatures() if p.can_attack() and p.power > 0]
         for p in forced:               # goad/obligación: deben atacar aunque no convenga
             if p not in attackers:

@@ -598,6 +598,12 @@ class Player:
         opts = p.card.produces(p, self)
         if not opts or getattr(p, "game", None) is None:
             return opts
+        if p.card.is_land():
+            for pl in p.game.players:
+                for src in pl.battlefield:
+                    lt = getattr(src.card, "aura_land_type", None)
+                    if lt and getattr(src, "enchanting", None) is p:
+                        return {lt: 1}            # "enchanted land is a Swamp"
         mult = 1
         for src in self.battlefield:                # Mana Reflection / Nyxbloom Ancient
             mult *= getattr(src.card, "mana_mult", 1) or 1
@@ -1204,10 +1210,11 @@ class Game:
                 continue
             if event in self.SELF_SCOPED and who is not None and pl is not who:
                 continue
-            for perm in list(pl.battlefield):
-                cb = perm.card.triggers.get(event)
-                if cb is None:
-                    continue
+            # además del disparo principal, cada carta puede tener disparos EXTRA
+            # para el mismo evento ("__x_<evento>") sin pisar al principal
+            for perm, cb in [(p_, c_) for p_ in list(pl.battlefield)
+                             for c_ in (p_.card.triggers.get(event),
+                                        p_.card.triggers.get("__x_" + event)) if c_ is not None]:
                 # El callback recibe (game, perm, **kw): `perm` es el permanente que
                 # OBSERVA; el permanente SUJETO del evento (el que entra/muere) llega
                 # como `subject` (antes se descartaba y Hofri nunca sabía quién murió).
@@ -1598,6 +1605,48 @@ class Game:
             out.append(p.library[-1])
         return out
 
+    def _pay_alt_nonmana(self, player, card, ak):
+        """Paga un coste alternativo no de maná: ('sac', tipo, n) / ('bounce', tipo, n) /
+        ('exile_hand', color, n)."""
+        kind, what, n = ak
+        if kind in ("sac", "bounce"):
+            pool = [pm for pm in player.battlefield if pm.has_subtype(what) or what in pm.card.types]
+            pool.sort(key=lambda pm: (not pm.tapped,))
+            for pm in pool[:n]:
+                if kind == "sac":
+                    self.to_graveyard(pm, "coste alternativo: sacrificio")
+                else:
+                    player.battlefield.remove(pm)
+                    player.hand.append(getattr(pm.card, "_real", None) or pm.card)
+        elif kind == "exile_hand":
+            pool = [c for c in player.hand if c is not card and what in {
+                x for pp in (getattr(c.cost, "pips", None) or ()) for x in str(pp).upper()}]
+            pool.sort(key=lambda c: c.cost.cmc if c.cost else 0)
+            for c in pool[:n]:
+                player.hand.remove(c)
+                player.exile.append(c)
+        self.log(f"{player.name} paga el coste alternativo de {card.name}")
+
+    def max_hand_size(self, p: "Player") -> int:
+        """Tamaño máximo de mano: 7 ± modificadores ('your maximum hand size is
+        reduced by N', 'each opponent's …', 'no maximum hand size')."""
+        if any(getattr(pm.card, "no_max_hand", False) for pm in p.battlefield) or any(
+                getattr(pm.card, "no_max_hand_all", False) for pl in self.players for pm in pl.battlefield):
+            return 10 ** 6
+        n, fixed = 7, None
+        for pl in self.players:
+            for pm in pl.battlefield:
+                hm = getattr(pm.card, "hand_size_mod", None)
+                if not hm or pm.abilities_off():
+                    continue
+                scope, kind, v = hm
+                if (scope == "you" and pl is p) or (scope == "opp" and pl is not p) or scope == "all":
+                    if kind == "set":
+                        fixed = v
+                    else:
+                        n += v
+        return max(0, fixed if fixed is not None else n)
+
     def attack_tax(self, defender) -> int:
         """Ghostly Prison / Propaganda: cuánto cuesta atacar a `defender` por criatura."""
         return sum(getattr(pm.card, "attack_tax", 0) for pm in defender.battlefield
@@ -1692,6 +1741,9 @@ class Game:
         if not perm.card.is_land():
             self.nonland_left_turn = self.turn   # void
         if dies:
+            if getattr(self, "_deaths_turn", None) != self.turn:
+                self._deaths_turn, self.deaths_count = self.turn, 0
+            self.deaths_count += 1
             self.death_turn = self.turn       # morbid: murió una criatura este turno
             self.emit("death", player=ctrl, perm=perm)
             # "when enchanted creature dies, …" de las auras anexadas (mirando atrás)
@@ -1909,6 +1961,21 @@ class Game:
                 if amount <= 0:
                     return
         src_perm = isinstance(source, Permanent)
+        if combat and isinstance(target, Permanent) and getattr(target.card, "prevent_combat_to", False) \
+                and not no_prev:
+            return
+        if not no_prev and src_perm and (source.aura_flag("aura_no_dmg_out") or (
+                combat and source.aura_flag("aura_no_combat_dmg_out"))):
+            return                    # "prevent all damage that would be dealt by enchanted creature"
+        if not no_prev and combat and isinstance(target, Permanent) and target.aura_flag("aura_no_combat_dmg_out"):
+            return
+        if src_perm and isinstance(target, Permanent):
+            # "whenever a creature dealt damage by this creature this turn dies"
+            if getattr(target, "_dmg_by_turn", None) != self.turn:
+                target._dmg_by_turn, target._dmg_by = self.turn, set()
+            target._dmg_by.add(id(source))
+        if self._x_listen("damage"):
+            self.emit("damage", source=source, target=target, amount=amount, combat=combat)
         if isinstance(target, Player):
             if amount > 0:
                 self.damaged_players.add(target)   # bloodthirst: rival dañado este turno
@@ -2254,11 +2321,13 @@ class Game:
             return None
         # surge / spectacle / prowl: coste alternativo si se cumple la condición
         # (solo sobre el coste impreso: no cuando ya se lanza por otro coste)
+        card._alt_kind = None
         for _kind, alt, cond in (getattr(card, "alt_costs", None) or ()):
             if card.cost is getattr(card, "_printed_cost", None) and alt.cmc < cost.cmc:
                 try:
                     if cond(self, player, card):
                         cost = alt
+                        card._alt_kind = _kind
                 except Exception:  # noqa: BLE001
                     pass
         # "si controlás un comandante, podés lanzarlo sin pagar su coste de maná"
@@ -2283,6 +2352,17 @@ class Game:
                 if getattr(pm.card, "spell_limit", 0) and not pm.abilities_off()]
         if _lim and getattr(player, "spells_cast_turn", 0) >= min(_lim):
             return False                 # Rule of Law / Arcane Laboratory
+        if any(getattr(pm.card, "self_spell_limit", 0) and not pm.abilities_off()
+               and getattr(player, "spells_cast_turn", 0) >= pm.card.self_spell_limit
+               for pm in player.battlefield):
+            return False                 # "you can't cast more than one spell each turn"
+        _act = self.players[self.active_index] if self.players else None
+        for _o in self.opponents(player):
+            if getattr(_o, "silence_turn", None) == self.turn:
+                return False             # "your opponents can't cast spells this turn"
+            if _o is _act and any(getattr(pm.card, "opp_no_cast_your_turn", False)
+                                  and not pm.abilities_off() for pm in _o.battlefield):
+                return False             # "your opponents can't cast spells during your turn"
         cost = card.cost
         # impuesto de comandante + reducciones + stax
         pay_cost = self.effective_cost(player, card, from_command)
@@ -2482,6 +2562,9 @@ class Game:
         # maná primero: una fuente girada (p. ej. un elfo) igual puede sacrificarse
         if not player.pay(pay_cost, exclude=excl):
             return False
+        _ak = getattr(card, "_alt_kind", None)
+        if isinstance(_ak, tuple):               # coste alternativo NO de maná
+            self._pay_alt_nonmana(player, card, _ak)
         if add.get("exile_gy"):                  # "exile N (creature) cards from your graveyard"
             _n, _k = add["exile_gy"]
             gy_ok = [c for c in player.graveyard if (not _k or
@@ -2573,6 +2656,9 @@ class Game:
         storm_copies += 1 if getattr(card, "_conspired", False) else 0
         self.spells_this_turn += 1
         player.spells_cast_turn = getattr(player, "spells_cast_turn", 0) + 1
+        if card.is_creature():
+            _ct = getattr(player, "_cr_cast", None)
+            player._cr_cast = (self.turn, (_ct[1] if _ct and _ct[0] == self.turn else 0) + 1)
         # Buyback: si se pagó el coste adicional de buyback, la carta vuelve a la mano.
         buyback_used = bool(getattr(card, "_buyback_used", False))
         card._cast_x = cast_x            # las copias del hechizo conservan su X
@@ -2805,6 +2891,12 @@ class Game:
                     (t.card.triggers or {}).get("targeted_first"):
                 t._valiant_turn = self.turn
                 self._push_self_trigger(t, "targeted_first", "valiente")
+
+    def _x_listen(self, event) -> bool:
+        """¿Algún permanente escucha este evento como disparo extra? (evita recorrer
+        la pila de disparos en cada daño)."""
+        k = "__x_" + event
+        return any(k in (pm.card.triggers or {}) for pl in self.players for pm in pl.battlefield)
 
     def _push_self_trigger(self, perm, key, label, **kw):
         """Encola el disparo `key` del propio permanente (enrage, inspired,
@@ -3219,7 +3311,10 @@ class Game:
             if not disc:
                 continue
             amt, filt = disc
-            ok = filt(card) if callable(filt) else (filt == "any"
+            if getattr(filt, "_wp", False):          # filtro que mira al jugador (orden del hechizo)
+                ok = filt(card, player, self)
+            else:
+                ok = filt(card) if callable(filt) else (filt == "any"
                   or (filt == "creature" and "creature" in types)
                   or (filt == "noncreature" and "creature" not in types)
                   or (filt == "instant_sorcery" and ({"instant", "sorcery"} & types))
@@ -3227,6 +3322,40 @@ class Game:
             if ok:
                 total += amt
         return total
+
+    def castable_from_top(self, p: "Player"):
+        """Carta de arriba de la biblioteca lanzable ('you may cast creature spells
+        from the top of your library': Future Sight, Elven Chorus…), o None."""
+        if not p.library:
+            return None
+        top = p.library[-1]
+        if top.is_land():
+            return None
+        for pm in p.battlefield:
+            k = getattr(pm.card, "cast_top", None)
+            if not k or pm.abilities_off():
+                continue
+            if k == "any" or (k == "creature" and top.is_creature()) or (
+                    k in top.types):
+                return top
+        return None
+
+    def cast_from_top(self, p: "Player") -> bool:
+        top = self.castable_from_top(p)
+        if top is None:
+            return False
+        p.library.pop()
+        p.hand.append(top)
+        ok = False
+        try:
+            ok = self.cast(p, top)
+        finally:
+            if not ok and top in p.hand:
+                p.hand.remove(top)
+                p.library.append(top)
+        if ok:
+            self.log(f"{p.name} lanza {top.name} desde la cima de la biblioteca")
+        return ok
 
     def _static_cost_increase(self, player: "Player", card: Card) -> int:
         """Impuesto de coste (stax) que dan permanentes EN JUEGO a los hechizos que
@@ -3331,6 +3460,9 @@ class Game:
         le den sus permanentes en juego (Exploration, Azusa, etc.)."""
         extra = sum(getattr(pm.card, "extra_land", 0) or 0
                     for pm in player.battlefield)
+        elt = getattr(player, "extra_land_turn", None)
+        if elt and elt[0] == self.turn:          # "you may play an additional land this turn"
+            extra += elt[1]
         return 1 + extra
 
     def play_land(self, player: "Player", card: Card) -> bool:
@@ -3631,6 +3763,8 @@ class Game:
         p.hand.remove(card)
         self.log(f"{p.name} cicla {card.name}")
         self.discard_card(p, card)     # respeta madness
+        if self._x_listen("cycled"):
+            self.emit("cycled", player=p, card=card)
         p.draw(1, self)
         ct = getattr(card, "cycle_trigger", None)       # "when you cycle this card, …"
         if ct is not None:
@@ -5023,6 +5157,20 @@ class Game:
             return False
         if getattr(attacker, "_ring_bearer", False) and blocker.power > attacker.power:
             return False             # portador del Anillo: no la bloquean las de más fuerza
+        ue = getattr(attacker.card, "unblock_except", None)
+        if ue and not any(blocker.has(k) for k in ue):
+            return False             # "can't be blocked except by creatures with flying"
+        uk = getattr(attacker.card, "unblock_by_kind", None)
+        if uk:
+            _kind, _v = uk
+            if _kind == "color":
+                _pips = set()
+                for _pp in (getattr(blocker.card.cost, "pips", None) or ()):
+                    _pips |= set(str(_pp).upper())
+                if _v & _pips:
+                    return False     # "can't be blocked by white creatures"
+            elif _kind == "type" and _v in blocker.card.types:
+                return False         # "can't be blocked by artifact creatures"
         ub = getattr(attacker.card, "unblock_power_le", None)
         if ub is not None and blocker.power <= ub:
             return False             # "can't be blocked by creatures with power N or less"
@@ -5378,8 +5526,7 @@ class Game:
         for perm in p.battlefield:
             perm.goaded = False
             perm.must_attack = False
-        while len(p.hand) > 7 and not any(getattr(pm.card, "no_max_hand", False)
-                                           for pm in p.battlefield):
+        while len(p.hand) > self.max_hand_size(p):
             if p.policy and hasattr(p.policy, "choose_discard"):
                 card = p.policy.choose_discard(self, p)
             else:
