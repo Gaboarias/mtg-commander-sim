@@ -1547,9 +1547,10 @@ def _rem_card(oracle, kws, tl="Creature — Spirit", no_rem=False):
 
 
 def test_reminder_fallback_reads_unknown_keyword():
-    txt = ("Soulshift 3 (When this creature dies, you may return target Spirit card "
-           "with mana value 3 or less from your graveyard to your hand.)")
-    assert _rem_card(txt, ["Soulshift"]) != _rem_card(txt, ["Soulshift"], no_rem=True)
+    # (Soulshift pasó a ser nativo en el batch 14; Graft sigue leyéndose del recordatorio)
+    txt = ("Graft 2 (This creature enters with two +1/+1 counters on it. Whenever another "
+           "creature enters, you may move a +1/+1 counter from this creature onto it.)")
+    assert _rem_card(txt, ["Graft"]) != _rem_card(txt, ["Graft"], no_rem=True)
 
 
 def test_reminder_fallback_skips_native_keywords():

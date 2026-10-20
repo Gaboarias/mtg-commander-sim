@@ -16,6 +16,20 @@ from engine import Cost
 LEVELS = ("novato", "intermedio", "avanzado")
 
 
+class _BlockUses:
+    """Cuántos atacantes bloquea cada criatura: 1, o más si 'can block an additional
+    creature' / 'can block any number of creatures'."""
+    def __init__(self):
+        self.n = {}
+
+    def free(self, b):
+        cap = 1 + (getattr(b.card, "extra_blocks", 0) or 0)
+        return self.n.get(b.uid, 0) < cap
+
+    def add(self, b):
+        self.n[b.uid] = self.n.get(b.uid, 0) + 1
+
+
 class Policy:
     def __init__(self, level: str = "intermedio"):
         self.level = level if level in LEVELS else "intermedio"
@@ -204,6 +218,13 @@ class Policy:
             # criaturas: no hay a qué apuntarla.
             if (not nov and "removal" in card.tags
                     and not any(o.creatures() for o in game.opponents(me))):
+                continue
+            # Pactos: solo si el próximo mantenimiento se puede pagar (tierras suficientes)
+            pc = getattr(card, "pact_cost", None)
+            if pc is not None and sum(1 for pm in me.battlefield if pm.card.is_land()) < pc.cmc:
+                continue
+            # "cast this spell only during combat": no se lanza en la fase principal
+            if getattr(card, "combat_only", False):
                 continue
             # Mass Polymorph: solo si cambio fichas/criaturas chicas por criaturas
             # del mazo (y el mazo tiene criaturas suficientes)
@@ -1130,7 +1151,7 @@ class Policy:
             return b.toughness > atk.power and not atk.has("deathtouch")
 
         result = []
-        used = set()
+        used = _BlockUses()
         threats = sorted(incoming, key=lambda a: -a.power)
         lethal = life_incoming >= me.life
         # golpe serio aunque no letal: te saca >=1/3 de la vida, o te deja bajo (<=12)
@@ -1141,7 +1162,7 @@ class Policy:
             return b.is_token or (b.power <= 1 and not b.card.keywords)
 
         for atk in threats:
-            avail = [b for b in blockers if b.uid not in used and can_block(b, atk)]
+            avail = [b for b in blockers if used.free(b) and can_block(b, atk)]
             need = 2 if atk.has("menace") else 1     # amenaza: hacen falta 2+
             if len(avail) < need:
                 continue
@@ -1149,7 +1170,7 @@ class Policy:
             safe = next((b for b in avail if kills(b, atk) and survives(b, atk)), None)
             if safe is not None and need == 1:
                 result.append((atk, safe))
-                used.add(safe.uid)
+                used.add(safe)
                 continue
             big = atk.power >= 3 or atk.has("flying") or atk.has("trample")
             # 2) GANG para MATAR una amenaza grande, perdiendo lo mínimo (fodder primero).
@@ -1167,7 +1188,7 @@ class Policy:
                         all(expendable(b) or survives(b, atk) for b in pick) or pressured):
                     for b in pick:
                         result.append((atk, b))
-                        used.add(b.uid)
+                        used.add(b)
                     continue
             # 3) CHUMP con fodder (tokens) ante una amenaza grande bajo presión/letal.
             #    con arrolladora, el chump no frena el derrame salvo que lo mate.
@@ -1178,7 +1199,7 @@ class Policy:
                         atk.has("trample") and sum(b.power for b in chump) < atk.toughness):
                     for b in chump:
                         result.append((atk, b))
-                        used.add(b.uid)
+                        used.add(b)
 
         # 4) SUPERVIVENCIA: si lo que queda sin bloquear me mata (vida, daño de
         #    comandante o veneno), chump-bloquear lo que más pega hasta no morir.
@@ -1190,7 +1211,7 @@ class Policy:
                 if id(atk) in blocked:
                     continue
                 need = 2 if atk.has("menace") else 1
-                avail = [b for b in blockers if b.uid not in used and can_block(b, atk)]
+                avail = [b for b in blockers if used.free(b) and can_block(b, atk)]
                 if len(avail) < need:
                     continue
                 if atk.has("trample") and sum(b.toughness for b in avail[:need]) <= 0:
@@ -1198,7 +1219,7 @@ class Policy:
                 avail.sort(key=lambda x: (not expendable(x), x.power + x.toughness))
                 for b in avail[:need]:
                     result.append((atk, b))
-                    used.add(b.uid)
+                    used.add(b)
                 blocked.add(id(atk))
                 if not self._unblocked_lethal(game, me, incoming, blocked):
                     break

@@ -861,6 +861,7 @@ class Game:
         self.dash_return: list = [] # criaturas jugadas por dash a devolver al fin de turno
         self.blitz_sac: list = []   # criaturas jugadas por blitz a sacrificar al fin de turno
         self.delayed_end: list = []  # fn(game): "at the beginning of the next end step"
+        self.pact_due: list = []     # (jugador, Cost): pactos a pagar en su próximo mantenimiento
         self.no_prevention_turn = False   # "el daño no se puede prevenir este turno"
         self.no_block_turn = False        # "las criaturas no pueden bloquear este turno"
         # última habilidad activada resuelta (para copiarla: Strionic Resonator):
@@ -1095,6 +1096,11 @@ class Game:
                     continue                    # lord por subtipo: solo ese tipo
                 if not (getattr(src.card, "anthem_others", False) and src is perm):
                     return True
+        # "each creature you control with a +1/+1 counter on it has trample"
+        for src in ctrl.battlefield:
+            cg = getattr(src.card, "counter_grants", None)
+            if cg and kw in cg[1] and perm.counters.get(cg[0], 0) > 0 and not src.abilities_off():
+                return True
         # "All creatures have haste" / "All Sliver creatures have flying": globales
         for src in self.all_permanents():
             for gk, gsub in (getattr(src.card, "global_keywords", None) or ()):
@@ -1978,6 +1984,12 @@ class Game:
                 self.add_counters(target, "-1/-1", amount)
                 if source.has("deathtouch") and target.toughness > 0:
                     self.add_counters(target, "-1/-1", target.toughness)
+            elif getattr(target.card, "phantom", False):
+                # Phantom: se previene el daño y pierde un contador +1/+1
+                if target.counters.get("+1/+1", 0) > 0:
+                    target.counters["+1/+1"] -= 1
+                self.log(f"{target.name} previene el daño y pierde un contador")
+                amount = 0
             else:
                 target.damage += amount
                 if src_perm and source.has("deathtouch") and amount > 0:
@@ -2249,6 +2261,10 @@ class Game:
              targets=None, chosen_modes=None, x_value=None):
         if getattr(player, "epic_locked", False):
             return False                 # epic: no podés lanzar hechizos por el resto
+        _lim = [getattr(pm.card, "spell_limit", 0) for pl in self.players for pm in pl.battlefield
+                if getattr(pm.card, "spell_limit", 0) and not pm.abilities_off()]
+        if _lim and getattr(player, "spells_cast_turn", 0) >= min(_lim):
+            return False                 # Rule of Law / Arcane Laboratory
         cost = card.cost
         # impuesto de comandante + reducciones + stax
         pay_cost = self.effective_cost(player, card, from_command)
@@ -2412,6 +2428,18 @@ class Game:
             n_disc = add.get("discard", 0) or 0
             if n_disc and sum(1 for c in player.hand if c is not card) < n_disc:
                 return False
+            exg = add.get("exile_gy")
+            if exg:
+                _n, _k = exg
+                gy_ok = [c for c in player.graveyard if (not _k or
+                         (_k == "creature" and c.is_creature()) or
+                         (_k == "instant or sorcery" and {"instant", "sorcery"} & c.types))]
+                if len(gy_ok) < _n:
+                    return False
+            if add.get("sacrifice_n"):
+                if sum(1 for pm in player.creatures() if pm.card is not card
+                       and not player.is_commander(pm.card)) < add["sacrifice_n"]:
+                    return False
             if add.get("sacrifice"):
                 sk = add["sacrifice"]
                 kinds = {"creature"} if sk is True else set(str(sk).split("|"))
@@ -2431,6 +2459,20 @@ class Game:
         # maná primero: una fuente girada (p. ej. un elfo) igual puede sacrificarse
         if not player.pay(pay_cost, exclude=excl):
             return False
+        if add.get("exile_gy"):                  # "exile N (creature) cards from your graveyard"
+            _n, _k = add["exile_gy"]
+            gy_ok = [c for c in player.graveyard if (not _k or
+                     (_k == "creature" and c.is_creature()) or
+                     (_k == "instant or sorcery" and {"instant", "sorcery"} & c.types))]
+            for c in sorted(gy_ok, key=lambda c: c.cost.cmc if c.cost else 0)[:_n]:
+                player.graveyard.remove(c)
+                player.exile.append(c)
+        if add.get("sacrifice_n"):               # "sacrifice N creatures"
+            vs = sorted([pm for pm in player.creatures() if pm.card is not card
+                         and not player.is_commander(pm.card)],
+                        key=lambda pm: (not pm.is_token, pm.power + pm.toughness))[:add["sacrifice_n"]]
+            for v in vs:
+                self.to_graveyard(v, "coste: sacrificio")
         # Conspire: girar dos criaturas que compartan color -> copia
         card._conspired = False
         if getattr(card, "conspire", False):
@@ -4921,6 +4963,8 @@ class Game:
                 continue
             if blocker.tapped or not blocker.is_creature() or blocker.attacking:
                 continue
+            if len(blocker.blocking) >= 1 + (getattr(blocker.card, "extra_blocks", 0) or 0):
+                continue                 # ya bloquea todo lo que puede
             if blocker.cant_block:              # "can't block" (propia o este turno)
                 continue
             # evasión: un atacante con volar solo puede bloquearse con volar o alcance
@@ -5113,6 +5157,9 @@ class Game:
                 if not a.blocked_by or a.has("trample"):
                     self.deal_damage(a, a.attacking, self.combat_power(a), combat=True)
                 continue
+            if getattr(a.card, "unblocked_damage", False) and isinstance(a.attacking, Player):
+                self.deal_damage(a, a.attacking, self.combat_power(a), combat=True)
+                continue                 # Thorn Elemental: asigna como si no la bloquearan
             dt = a.has("deathtouch")
             remaining = self.combat_power(a)
             for b in blockers:
@@ -5198,6 +5245,17 @@ class Game:
         self.no_block_turn = False        # "las criaturas no pueden bloquear" se agota
 
         # UPKEEP
+        # Pactos: pagar o perder la partida
+        for due in [d for d in self.pact_due if d[0] is p]:
+            self.pact_due.remove(due)
+            if p.can_pay(due[1]):
+                p.pay(due[1])
+                self.log(f"{p.name} paga el pacto")
+            else:
+                p.lost = True
+                self.log(f"{p.name} no puede pagar el pacto y pierde la partida")
+        if p.lost:
+            return
         self._tick_suspended(p)          # quita contadores de tiempo (suspend)
         self._tick_rebound(p)            # rebound: relanzar gratis desde el exilio
         for owner, card in list(self.epic):          # épico: copia en tu mantenimiento
