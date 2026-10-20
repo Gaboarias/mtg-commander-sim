@@ -2133,6 +2133,10 @@ def _spell_filter(words):
     parts = [x for x in re.split(r",\s*(?:and |or )?|\s+(?:and|or)\s+", w) if x]
     if len(parts) > 1 and all(x in _SPELL_TYPES for x in parts):
         return lambda c, _ts=frozenset(parts): bool(_ts & c.types)
+    # tipos y subtipos mezclados: "Spirit or Arcane", "Dragon or Wizard"
+    if len(parts) > 1 and all(re.fullmatch(r"[a-z]+", x) for x in parts):
+        _ps = frozenset(x[:-1] if x.endswith("s") and not x.endswith("ss") else x for x in parts)
+        return lambda c, _p=_ps: bool(_p & c.types) or any(x.lower() in _p for x in c.subtypes)
     if " " in w or w in _UNKNOWN_SPELL_QUALS or w.startswith("non"):
         return None
     sub = w[:-1] if w.endswith("s") and not w.endswith("ss") else w
@@ -2705,6 +2709,7 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
             ("discarded", r"whenever you (?:cycle or )?discard (?:a|one or more) cards?"
              r"(?: for the first time each turn)?,\s*(.+)$"),
             ("crime", r"whenever you commit a crime,\s*(.+)$"),
+            ("opp_discarded", r"whenever an opponent discards a card,\s*(.+)$"),
             ("any_cast", r"whenever a player casts a spell,\s*(.+)$"),
             ("enchanted_dies", r"when(?:ever)? enchanted creature dies,\s*(.+)$"),
             ("combat_damage_creature", r"whenever " + me_re + r" deals combat damage to a "
@@ -2715,7 +2720,7 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
             ("surveil", r"whenever you surveil,\s*(.+)$"),
             ("blocks_or_blocked", r"whenever " + me_re + r" blocks or becomes blocked"
              r"(?: by a creature)?,\s*(.+)$"),
-            ("blocks", r"whenever " + me_re + r" blocks(?: a creature)?,\s*(.+)$"),
+            ("blocks", r"whenever " + me_re + r" blocks(?: a creature)?(?: with flying)?,\s*(.+)$"),
             ("becomes_blocked", r"whenever " + me_re + r" becomes blocked(?: by a creature)?,"
              r"\s*(.+)$"),
         ]
@@ -2733,13 +2738,20 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
             need_tapped = key == "main2" and " is tapped," in l.lower()
 
             _own = key in ("leaves_graveyard",)
+            _fly = key == "blocks" and "with flying" in l.lower()
             _once = bool(re.search(r"(?:triggers only once each turn|for the first time each "
                                    r"turn)", l, re.I))
 
-            def cb_s(game, perm, _e=eff, _nt=need_tapped, _ow=_own, _o1=_once, _k=key, **_kw):
+            def cb_s(game, perm, _e=eff, _nt=need_tapped, _ow=_own, _o1=_once, _k=key, _fl=_fly,
+                     **_kw):
                 if _nt and not perm.tapped:
                     return
+                if _fl and not (_kw.get("subject") is not None and _kw["subject"].has("flying")):
+                    return
                 if _ow and _kw.get("player") is not perm.controller:
+                    return
+                if _k == "opp_discarded" and (_kw.get("player") is None
+                                              or _kw.get("player") is perm.controller):
                     return
                 if _o1:
                     if getattr(perm, "_once_turn", {}).get(_k) == game.turn:
@@ -3376,6 +3388,8 @@ def _wire_aura(card, oracle):
                       ("reach", "reach"), ("haste", "haste")):
         if "enchanted creature" in t and re.search(r"\b" + re.escape(name) + r"\b", t):
             kws.add(key)
+    if re.search(r"whenever enchanted creature deals damage, you gain that much life", t):
+        kws.add("lifelink")
     bad = dp < 0 or dt < 0 or bool(re.search(
         r"enchanted creature (?:can't|doesn't|does not)", t))
     card.aura_keywords = kws
@@ -3428,7 +3442,22 @@ def _wire_aura(card, oracle):
         bad = True                     # es removal: se anexa a criatura rival
         card.tags = card.tags | {"removal"}   # la IA la valora y la juega como tal
 
-    def _attach(game, ctrl, perm, _bad=bad):
+    _mland = re.search(r"enchant (land|forest|plains|island|swamp|mountain|nonbasic land)\b", t)
+    _land_sub = _mland.group(1) if _mland else None
+
+    def _attach(game, ctrl, perm, _bad=bad, _ls=_land_sub):
+        if _ls is not None:                       # aura de TIERRA (Wild Growth, Utopia Sprawl)
+            lands = [pm for pm in (game.opponents(ctrl)[0].battlefield if (_bad and game.opponents(ctrl))
+                                   else ctrl.battlefield)
+                     if pm.card.is_land() and (_ls in ("land", "nonbasic land")
+                                               or pm.has_subtype(_ls.capitalize()))]
+            taken = {id(getattr(x, "enchanting", None)) for x in ctrl.battlefield}
+            free = [pm for pm in lands if id(pm) not in taken] or lands
+            if free:
+                host = free[0]
+                perm.enchanting = host
+                game.log(f"{ctrl.name}: {perm.name} se anexa a {host.name}")
+            return
         if _bad:
             pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield if pm.is_creature()]
         else:
@@ -4783,6 +4812,74 @@ def _atomic_effect(text):
 
     if t in ("the ring tempts you", "the ring tempts you again"):
         return lambda game, ctrl, *a, **kw: game.ring_tempt(ctrl)
+    # ── batch 12: criatura encantada, "that much", fin de combate ──
+    m = re.fullmatch(r"put (a|an|one|two|three|\w+) \+1/\+1 counters? on enchanted creature", t)
+    if m and (k := _count_word(m.group(1))):
+        def eff_ench_ctr(game, ctrl, *a, _k=k, **kw):
+            src = _src_perm(game, a)
+            host = getattr(src, "enchanting", None) if src is not None else None
+            if host is not None and host in host.controller.battlefield:
+                game.add_counters(host, "+1/+1", _k)
+        return eff_ench_ctr
+    if t in ("return that card to the battlefield under your control",
+             "return that card to the battlefield under its owner's control"):
+        def eff_return_subj(game, ctrl, *a, _own="owner" in t, **kw):
+            subj = getattr(game, "_trigger_subject", None)
+            c = getattr(getattr(subj, "card", None), "_real", None) or getattr(subj, "card", None)
+            if c is None:
+                return
+            for pl in game.players:
+                if c in pl.graveyard:
+                    pl.graveyard.remove(c)
+                    game.move_to_battlefield(c, pl if _own else ctrl)
+                    game.log(f"{c.name} vuelve al campo")
+                    break
+        return eff_return_subj
+    m = re.fullmatch(r"(target opponent|each opponent) loses that much life", t)
+    if m:
+        def eff_that_much(game, ctrl, *a, _each=m.group(1) == "each opponent", **kw):
+            k = getattr(game, "_trigger_kw", None) or {}
+            n = k.get("amount") or 0
+            if not isinstance(n, int) or n <= 0:
+                return
+            opps = [o for o in game.opponents(ctrl) if not o.lost]
+            for o in (opps if _each else opps[:1] and [min(opps, key=lambda x: x.life)]):
+                o.life -= n
+        return eff_that_much
+    if t == "draw that many cards":
+        def eff_draw_that(game, ctrl, *a, **kw):
+            k = getattr(game, "_trigger_kw", None) or {}
+            n = k.get("amount") or 0
+            if isinstance(n, int) and n > 0:
+                ctrl.draw(min(n, 10), game)
+        return eff_draw_that
+    if t == "discard your hand":
+        def eff_discard_hand(game, ctrl, *a, **kw):
+            for c in list(ctrl.hand):
+                ctrl.hand.remove(c)
+                game.discard_card(ctrl, c)
+        return eff_discard_hand
+    m = re.fullmatch(r"(sacrifice it|return it to its owner's hand) at end of combat", t)
+    if m:
+        def eff_eoc_self(game, ctrl, *a, _sac=m.group(1).startswith("sac"), **kw):
+            src = _src_perm(game, a)
+            if src is None:
+                return
+
+            def _later(g, _s=src):
+                if _s not in _s.controller.battlefield:
+                    return
+                if _sac:
+                    g.to_graveyard(_s, "sacrificio (fin del combate)")
+                else:
+                    pl = _s.controller
+                    pl.battlefield.remove(_s)
+                    if not _s.is_token:
+                        real = getattr(_s.card, "_real", None) or _s.card
+                        owner = g.commander_owner(real)
+                        (owner.command if owner else pl.hand).append(real)
+            game.delayed_end.append(_later)
+        return eff_eoc_self
     # ── batch 10: acciones sobre la propia carta / el sujeto del disparo ──
     _SELF10 = r"(?:~|this creature|this permanent|this enchantment|this artifact|this land)"
     if re.fullmatch(r"transform " + _SELF10, t):
@@ -9373,6 +9470,23 @@ def _build_card_from_data_impl(data: dict) -> Card:
         elif re.fullmatch(r"if a creature dying causes a triggered ability of a permanent you "
                           r"control to trigger, that ability triggers an additional time", _l5):
             card.death_double = True
+        elif (m12 := re.fullmatch(r"whenever enchanted (?:land|forest|plains|island|swamp|mountain) "
+                                  r"is tapped for mana, its controller adds an additional "
+                                  r"(.+?)(?: of any color| of the chosen color| in any combination "
+                                  r"of colors| of any type that land produced)?", _l5)):
+            _amt = m12.group(1)
+            _syms = re.findall(r"\{[wubrgc]\}", _amt)
+            mn = re.match(r"(one|two|three|\w+) mana", _amt)
+            card.land_mana_bonus = len(_syms) or (_count_word(mn.group(1)) if mn else 1) or 1
+        elif re.fullmatch(r"whenever you tap a land for mana, add (?:one|an additional) mana of any "
+                          r"type that land produced", _l5):
+            card.your_land_bonus = 1
+        elif re.fullmatch(r"whenever a player taps a land for mana, that player adds (?:one|an "
+                          r"additional) mana of any type that land produced", _l5):
+            card.any_land_bonus = 1
+        elif re.fullmatch(r"if you tap a permanent for mana, it produces (twice|three times) as "
+                          r"much of that mana instead", _l5):
+            card.mana_mult = 2 if "twice" in _l5 else 3
         elif _l5 == "you have hexproof":
             card.player_hexproof = True
         elif _l5 == "if you would gain life, you gain twice that much life instead":

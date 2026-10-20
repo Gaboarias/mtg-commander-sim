@@ -577,11 +577,38 @@ class Player:
                 and not (exclude and p in exclude)
                 and not (p.is_creature() and p.summoning_sick and not p.has("haste"))]
 
+    def produced(self, p) -> dict:
+        """Opciones de maná de la fuente `p`, con los bonos por tierra: auras de
+        tierra (Wild Growth, Utopia Sprawl), 'whenever you tap a land for mana, add
+        one more' (Mana Reflection/Zendikar Resurgent) y los globales (Mana Flare)."""
+        opts = p.card.produces(p, self)
+        if not opts or getattr(p, "game", None) is None:
+            return opts
+        mult = 1
+        for src in self.battlefield:                # Mana Reflection / Nyxbloom Ancient
+            mult *= getattr(src.card, "mana_mult", 1) or 1
+        if mult > 1:
+            opts = {k: v * mult for k, v in opts.items()}
+        if not p.card.is_land():
+            return opts
+        bonus = 0
+        for pl in p.game.players:
+            for src in pl.battlefield:
+                c = src.card
+                if getattr(src, "enchanting", None) is p:
+                    bonus += getattr(c, "land_mana_bonus", 0)
+                if pl is self:
+                    bonus += getattr(c, "your_land_bonus", 0)
+                bonus += getattr(c, "any_land_bonus", 0)
+        if bonus:
+            opts = {k: v + bonus for k, v in opts.items()}
+        return opts
+
     def available_mana(self) -> int:
         """Cota superior: suma de max(opciones) por fuente sin tapear + pool flotante."""
         total = self.mana_pool
         for p in self.mana_sources():
-            opts = p.card.produces(p, self)
+            opts = self.produced(p)
             if opts:
                 total += max(opts.values())
         return total
@@ -600,7 +627,7 @@ class Player:
         """
         sources = []
         for p in self.mana_sources(exclude):
-            opts = p.card.produces(p, self)
+            opts = self.produced(p)
             if opts:
                 sources.append((p, dict(opts)))
         plan = self._assign_greedy(cost, sources)
@@ -1704,6 +1731,7 @@ class Game:
         lanzan si pueden pagarla."""
         card._discarded_turn = self.turn
         self.emit("discarded", player=ctrl, card=card)    # "whenever you discard a card"
+        self.emit("opp_discarded", player=ctrl, card=card)
         mad = getattr(card, "madness", None)
         if mad is None:
             ctrl.graveyard.append(card)
