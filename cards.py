@@ -139,7 +139,25 @@ def make_copy_token(game, player, src_card):
     return last
 
 
-def make_resource_token(game, player, kind):
+_RESOURCE_ABILITIES = {
+    "clue": "{2}, Sacrifice this artifact: Draw a card.",
+    "food": "{2}, {T}, Sacrifice this artifact: You gain 3 life.",
+    "blood": "{1}, {T}, Discard a card, Sacrifice this artifact: Draw a card.",
+}
+_RES_CACHE = {}
+
+
+def _resource_abilities(kind):
+    """Habilidades reales de Clue/Food/Blood (antes eran fichas sin habilidades)."""
+    if kind not in _RESOURCE_ABILITIES:
+        return ()
+    if kind not in _RES_CACHE:
+        import cardsdb
+        _RES_CACHE[kind] = tuple(cardsdb._parse_activated(_RESOURCE_ABILITIES[kind], kind.capitalize()))
+    return _RES_CACHE[kind]
+
+
+def make_resource_token(game, player, kind, _extra=True):
     """Treasure/Clue/Food/Blood como fichas-artefacto VISIBLES en el tablero.
     Treasure funciona como fuente de maná (aproximación de 'sacrificar por maná');
     las demás quedan en el campo (su sacrificio no se simula al detalle)."""
@@ -160,9 +178,16 @@ def make_resource_token(game, player, kind):
         tags={"token", k} if k else {"token"},
         produces=produces,
     )
+    tok.activated_abilities = _resource_abilities(k)
     last = None
     for _ in range(game.token_multiplier(player)):     # dobladores de fichas
         last = game.move_to_battlefield(_copy.deepcopy(tok), player, is_token=True)
+    # Academy Manufactor: crear un Clue, Food o Treasure crea uno de cada
+    if _extra and k in ("clue", "food", "treasure") and any(
+            getattr(pm.card, "manufactor", False) for pm in player.battlefield):
+        for other in ("clue", "food", "treasure"):
+            if other != k:
+                make_resource_token(game, player, other, _extra=False)
     return last
 
 

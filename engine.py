@@ -589,7 +589,8 @@ class Player:
         return [p for p in self.battlefield
                 if p.card.produces is not None and not p.tapped
                 and not (exclude and p in exclude)
-                and not (p.is_creature() and p.summoning_sick and not p.has("haste"))]
+                and not (p.is_creature() and p.summoning_sick and not p.has("haste"))
+                and (not getattr(p.card, "_cond_mana", False) or self.produced(p))]
 
     def produced(self, p) -> dict:
         """Opciones de maná de la fuente `p`, con los bonos por tierra: auras de
@@ -1441,6 +1442,20 @@ class Game:
                 n = max(0, getattr(self, "spell_x", 0) or 0)
             if n:
                 perm.counters[kind] = perm.counters.get(kind, 0) + n
+        if card.is_creature() or "creature" in card.types:
+            for src in player.battlefield:
+                eb = getattr(src.card, "etb_counter_bonus", None)
+                if eb is None or src.abilities_off():
+                    continue
+                kind, val = eb
+                if kind == "power":                       # Master Biomancer
+                    n = max(0, src.power)
+                elif kind == "nonhuman":                  # Grumgully
+                    n = 0 if "human" in {x.lower() for x in card.subtypes} else val
+                else:
+                    n = val
+                if n:
+                    perm.counters["+1/+1"] = perm.counters.get("+1/+1", 0) + n
         player.battlefield.append(perm)
         self._etb_seq = getattr(self, "_etb_seq", 0) + 1
         perm._etb_seq = self._etb_seq            # "it" de "… onto the battlefield. It gains haste"
@@ -2859,6 +2874,9 @@ class Game:
         vez por turno. 'Activate only if …': la condición."""
         if perm.aura_flag("aura_no_activate"):
             return False                 # "its activated abilities can't be activated"
+        gb = ab.get("granted_by")
+        if gb is not None and (gb not in gb.controller.battlefield or getattr(gb, "enchanting", None) is not perm):
+            return False                 # habilidad otorgada por un aura/equipo que ya no está anexado
         used = getattr(perm, "_abil_used", None) or {}
         if ab.get("once") and used.get(index):
             return False
