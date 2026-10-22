@@ -39,6 +39,10 @@ _STRUCTURAL = re.compile(
 
 FULL = os.path.join(ROOT, "data", "cards_full.json.gz")
 
+# tipos que NO van en un mazo de Commander: se excluyen de la auditoría
+_NON_DECK = re.compile(r"\b(?:Plane|Phenomenon|Scheme|Vanguard|Dungeon|Stickers|Attraction|Conspiracy|"
+                       r"Emblem)\b")
+
 
 def load_db(full=False):
     with gzip.open(FULL if full else DB, "rt", encoding="utf-8") as f:
@@ -50,7 +54,13 @@ def _sig(card):
     for k, v in vars(card).items():
         if k in ("name",):
             continue
-        if callable(v):
+        if k == "produces" and callable(v):
+            # maná de tierras: comparar lo que produce de verdad (no solo "fn")
+            try:
+                out[k] = repr(sorted((v(None, None) or {}).items()))
+            except Exception:  # noqa: BLE001
+                out[k] = "fn"
+        elif callable(v):
             out[k] = "fn"
         elif isinstance(v, dict):
             out[k] = tuple(sorted(map(str, v.keys())))
@@ -89,6 +99,57 @@ def _is_keyword_line(line):
     return bool(words) and all(re.sub(r"\s+\{.*|\s+\d+$", "", w) in kws for w in words)
 
 
+_MANA_LINE = re.compile(r"^\{T\}: Add ((?:\{[WUBRGC]\})+|one mana of any color)\.?$", re.I)
+
+
+def _mana_line_ok(line, row):
+    """'{T}: Add {B}.' en una carta cuyo maná ya sale de su identidad/produced_mana
+    (tierras, artefactos de maná): la línea no cambia la firma pero el motor SÍ
+    produce ese maná. Cuenta como cubierta si la carta completa lo produce."""
+    m = _MANA_LINE.match(line.strip())
+    if not m:
+        return False
+    try:
+        c = cardsdb.build_card_from_data(row)
+        got = c.produces(None, None) if callable(c.produces) else (c.produces or {})
+    except Exception:  # noqa: BLE001
+        return False
+    if not got:
+        return False
+    if m.group(1).lower().startswith("one mana"):
+        return len(got) >= 3
+    need = set(re.findall(r"[WUBRGC]", m.group(1).upper()))
+    return need <= set(got)
+
+
+# keywords cuyo cableado depende de la carta ENTERA (caras, otra línea): la línea
+# sola no cambia la firma. Se cuenta cubierta solo si la carta completa tiene el
+# atributo que la implementa.
+_KW_WIRED = {
+    "daybound": lambda c: getattr(c, "daybound", False),
+    "nightbound": lambda c: getattr(c, "nightbound", False),
+    "if it's neither day nor night, it becomes day as this creature enters.":
+        lambda c: getattr(c, "daybound", False),
+    "bargain": lambda c: getattr(c, "bargain", False),
+    "haunt": lambda c: getattr(c, "haunt", False),
+    "storm": lambda c: "storm" in (getattr(c, "tags", None) or ()),
+    "this creature enters prepared.": lambda c: any(
+        ab.get("prepared") for ab in (getattr(c, "activated_abilities", None) or ())),
+    "~ enters prepared.": lambda c: any(
+        ab.get("prepared") for ab in (getattr(c, "activated_abilities", None) or ())),
+}
+
+
+def _kw_wired(tpl, row):
+    fn = _KW_WIRED.get(tpl)
+    if fn is None:
+        return False
+    try:
+        return bool(fn(cardsdb.build_card_from_data(row)))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def audit(db):
     lines_total = lines_bad = 0
     by_tpl = collections.Counter()
@@ -96,6 +157,8 @@ def audit(db):
     vanilla, partial, full = [], [], []
     for name, raw in db.items():
         row = _front(raw)
+        if _NON_DECK.search(row.get("type_line") or raw.get("type_line") or ""):
+            continue                  # no son cartas de un mazo de Commander (planos, stickers…)
         oracle = cardsdb._strip_reminder(row.get("oracle_text") or "")
         if not oracle.strip():
             continue
@@ -132,6 +195,8 @@ def audit(db):
                     handled = _sig(c2) != full_sig
             except Exception:  # noqa: BLE001
                 handled = False
+            if not handled and (_mana_line_ok(ln, row) or _kw_wired(_template(ln, name), raw)):
+                handled = True
             if not handled:
                 bad_here.append(ln)
         if not n_here:
