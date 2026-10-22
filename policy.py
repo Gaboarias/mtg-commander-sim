@@ -42,6 +42,8 @@ class Policy:
         opp_creatures = any(o.creatures() for o in opps)
         if "engine" in tags:
             s += 5
+        if "curse" in tags:
+            s += 3                          # curses: valor por cada ataque/mantenimiento
         if "ramp" in tags:
             s += 4 if game.turn <= 4 else 1
         if "draw" in tags:
@@ -995,8 +997,11 @@ class Policy:
             return []
         # solo atacar con criaturas que hacen daño (>0): mandar una 0/x no aporta
         # y solo la expone a morir.
+        _fa = any(getattr(pm.card, "forced_attack", None) == "all" or (
+            getattr(pm.card, "forced_attack", None) == "opp" and pl is not me)
+            for pl in game.players for pm in pl.battlefield)
         forced = [p for p in me.creatures() if p.can_attack()
-                  and (p.goaded or p.must_attack
+                  and (p.goaded or p.must_attack or _fa
                        or getattr(p.card, "attacks_each_combat", False)
                        or p.aura_flag("aura_must_attack"))]
         attackers = [p for p in me.creatures() if p.can_attack() and p.power > 0]

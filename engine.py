@@ -1603,7 +1603,7 @@ class Game:
         if any(getattr(pm.card, "play_lands_gy", False) for pm in p.battlefield):
             out += [c for c in p.graveyard if c.is_land()]
         if p.library and p.library[-1].is_land() and any(
-                getattr(pm.card, "play_lands_top", False) for pm in p.battlefield):
+                getattr(pm.card, "play_lands_top", False) and self._top_ok(pm, p) for pm in p.battlefield):
             out.append(p.library[-1])
         return out
 
@@ -2266,6 +2266,12 @@ class Game:
                             changed = True
                         continue
                     if "aura" in subs:
+                        ep = getattr(perm, "enchanting_player", None)
+                        if ep is not None:          # aura de JUGADOR (curse): vive mientras no pierda
+                            if ep.lost:
+                                self.to_graveyard(perm, "su jugador perdió")
+                                changed = True
+                            continue
                         if host is None or host not in host.controller.battlefield:
                             self.to_graveyard(perm, "aura sin objetivo")
                             changed = True
@@ -3345,12 +3351,21 @@ class Game:
             return None
         for pm in p.battlefield:
             k = getattr(pm.card, "cast_top", None)
-            if not k or pm.abilities_off():
+            if not k or pm.abilities_off() or not self._top_ok(pm, p):
                 continue
             if k == "any" or (k == "creature" and top.is_creature()) or (
                     k in top.types):
                 return top
         return None
+
+    def _top_ok(self, pm, p) -> bool:
+        cond = getattr(pm.card, "cast_top_cond", None)
+        if cond is None:
+            return True
+        try:
+            return bool(cond(self, p))
+        except Exception:  # noqa: BLE001
+            return False
 
     def cast_from_top(self, p: "Player") -> bool:
         top = self.castable_from_top(p)
@@ -5043,7 +5058,36 @@ class Game:
         self.resolve_stack()
         if declared:
             self.emit("you_attack", player=p)    # "whenever you attack"
+            self._curse_attack_triggers(p, declared)
         return declared
+
+    def _curse_attack_triggers(self, p: "Player", declared: list):
+        """Curses (auras de jugador): 'whenever enchanted player is attacked' y
+        'whenever a creature attacks enchanted player'."""
+        by_def = {}
+        for a in declared:
+            d = a.attacking
+            if isinstance(d, Player):
+                by_def.setdefault(id(d), (d, []))[1].append(a)
+        if not by_def:
+            return
+        for src in self.all_permanents():
+            ep = getattr(src, "enchanting_player", None)
+            if ep is None or id(ep) not in by_def:
+                continue
+            _d, atks = by_def[id(ep)]
+            pa = getattr(src.card, "curse_attacked", None)
+            if pa is not None:
+                self.stack.append(StackObject(
+                    src.controller, (lambda g, _f=pa, _s=src, _p=p: _f(g, _s, _p)),
+                    source=src, label=f"curse:{src.name}", kind="trigger"))
+            ca = getattr(src.card, "curse_creature_attacks", None)
+            if ca is not None:
+                for a in atks:
+                    self.stack.append(StackObject(
+                        src.controller, (lambda g, _f=ca, _s=src, _a=a: _f(g, _s, _a)),
+                        source=src, label=f"curse:{src.name}", kind="trigger"))
+        self.resolve_stack()
 
     def _combat_declare_triggers(self, p: "Player", declared: list):
         """Disparos al declarar atacantes que necesitan la lista completa de

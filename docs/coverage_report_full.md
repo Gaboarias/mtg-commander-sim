@@ -1,10 +1,10 @@
 # Cobertura del parser (base local de cartas)
 
 - Cartas con texto: **31124**
-- Todas sus habilidades con efecto: **22288** (71.6%)
-- Parciales (alguna habilidad sin efecto): **4763** (15.3%)
-- Vainilla (ninguna habilidad con efecto): **4073** (13.1%)
-- Líneas de habilidad sin efecto: **10413 / 54827**
+- Todas sus habilidades con efecto: **22395** (72.0%)
+- Parciales (alguna habilidad sin efecto): **4723** (15.2%)
+- Vainilla (ninguna habilidad con efecto): **4006** (12.9%)
+- Líneas de habilidad sin efecto: **10271 / 54827**
 
 ## Patrones sin efecto más frecuentes (top 150)
 
@@ -13,7 +13,7 @@
 | 1 | 202 | {M}: add {M}. | Abandoned Outpost |
 | 2 | 42 | {M}{M} — N/N | Ancestral Hot Dog Minotaur |
 | 3 | 35 | this creature enters prepared. | Adventurous Eater // Have a Bite |
-| 4 | 28 | daybound | Ballista Watcher // Ballista Wielder |
+| 4 | 28 | daybound | Baneblade Scoundrel // Baneclaw Marauder |
 | 5 | 24 | exile ~. | Avatar's Wrath |
 | 6 | 21 | {M}{M}{M} — N/N | Contortionist Otter Storm |
 | 7 | 19 | bargain | Agatha's Champion |
@@ -21,13 +21,13 @@
 | 9 | 17 | teamwork N | Atlantis Attacks |
 | 10 | 16 | strive — this spell costs {M}{M} more to cast for each target beyond the first. | Aerial Formation |
 | 11 | 16 | fuse | Alive // Well |
-| 12 | 15 | assist | Bloodborn Scoundrels |
-| 13 | 15 | {M}, {M}: add N mana of any color. | Capital City |
+| 12 | 16 | {M}, {M}: add N mana of any color. | Capital City |
+| 13 | 15 | assist | Bloodborn Scoundrels |
 | 14 | 14 | hidden agenda | Adriana's Valor |
 | 15 | 14 | {M}{M}{M}{M} — N/N | Cool Fluffy Loxodon |
 | 16 | 13 | {M}{M}{M}{M}{M} — N/N | Ancestral Hot Dog Minotaur |
-| 17 | 12 | {M}: add N mana of any color. | Archway Commons |
-| 18 | 12 | {M}: add N mana of the chosen color. | Crossroads Village |
+| 17 | 13 | {M}: add N mana of the chosen color. | Crossroads Village |
+| 18 | 12 | {M}: add N mana of any color. | Archway Commons |
 | 19 | 11 | draft this card face up. | Agent of Acquisitions |
 | 20 | 11 | as this creature enters, choose a color. | Alloy Golem |
 | 21 | 10 | {M}: add {M} or N mana of the chosen color. | Black Dragon Gate |
@@ -51,16 +51,16 @@
 | 39 | 7 | sneak {M}{M} | Kitsune's Technique |
 | 40 | 6 | {M}, sacrifice this land: add N mana of any color. | Abandoned Outpost |
 | 41 | 6 | as an additional cost to cast this spell, you may collect evidence N. | Analyze the Pollen |
-| 42 | 6 | when this creature enters, sacrifice it unless {M} was spent to cast it. | Azorius Herald |
-| 43 | 6 | as this enchantment enters, choose a color. | Circle of Affliction |
-| 44 | 6 | when enchanted land dies, return that card to its owner's hand. | Corrupted Zendikon |
-| 45 | 6 | as an additional cost to cast this spell, you may reveal a dragon card from your hand. | Draconic Roar |
-| 46 | 6 | whenever this creature attacks, you may pay {M}{M}. if you do, put a ±N/±N counter on it. | Scrapper Champion |
-| 47 | 6 | {M}, remove a charge counter from this land: add N mana of any color. | Tendo Ice Bridge |
-| 48 | 5 | when this creature is turned face up, put a ±N/±N counter on each other dragon creature you control. | Acid-Spewer Dragon |
-| 49 | 5 | when ~ enters, you get {M}, then you may put a sticker on a nonland permanent you own. | Aerialephant |
-| 50 | 5 | remove this card from your deck before playing if you're not playing for ante. | Amulet of Quoz |
-| 51 | 5 | if you control a plains, you may tap an untapped creature you control rather than pay this spell's mana cost. | Angelic Favor |
+| 42 | 6 | as this enchantment enters, choose a color. | Circle of Affliction |
+| 43 | 6 | when enchanted land dies, return that card to its owner's hand. | Corrupted Zendikon |
+| 44 | 6 | as an additional cost to cast this spell, you may reveal a dragon card from your hand. | Draconic Roar |
+| 45 | 6 | whenever this creature attacks, you may pay {M}{M}. if you do, put a ±N/±N counter on it. | Scrapper Champion |
+| 46 | 6 | {M}, remove a charge counter from this land: add N mana of any color. | Tendo Ice Bridge |
+| 47 | 5 | when this creature is turned face up, put a ±N/±N counter on each other dragon creature you control. | Acid-Spewer Dragon |
+| 48 | 5 | when ~ enters, you get {M}, then you may put a sticker on a nonland permanent you own. | Aerialephant |
+| 49 | 5 | remove this card from your deck before playing if you're not playing for ante. | Amulet of Quoz |
+| 50 | 5 | if you control a plains, you may tap an untapped creature you control rather than pay this spell's mana cost. | Angelic Favor |
+| 51 | 5 | when this creature enters, empower jace N. | Arcane Amphisbaena |
 | 52 | 5 | you may exert this creature as it attacks. | Battlefield Scavenger |
 | 53 | 5 | as an additional cost to cast this spell, waterbend {M}. | Benevolent River Spirit |
 | 54 | 5 | you may choose not to untap this land during your untap step. | Bottomless Vault |
@@ -82,14 +82,14 @@
 | 70 | 4 | storm | Aeve, Progenitor Ooze |
 | 71 | 4 | as long as enchanted permanent is a creature, it gets ±N/±N. | Akki War Paint |
 | 72 | 4 | as this enchantment enters, choose a creature type. | Arcane Adaptation |
-| 73 | 4 | when this creature enters, empower jace N. | Arcane Amphisbaena |
-| 74 | 4 | strive — this spell costs {M} more to cast for each target beyond the first. | Blinding Flare |
-| 75 | 4 | sacrifice this creature: add {M}{M}. | Blood Vassal |
-| 76 | 4 | put any number of target creature cards from your graveyard on top of your library. | Bone Harvest |
-| 77 | 4 | ~ is also a cleric, rogue, warrior, and wizard. | Burakos, Party Leader |
-| 78 | 4 | as an additional cost to cast this spell, you may blight N. | Burning Curiosity |
-| 79 | 4 | as an additional cost to cast this spell, reveal a creature card from your hand. | Charge of the Forever-Beast |
-| 80 | 4 | this creature escapes with a ±N/±N counter on it. | Charred Graverobber |
+| 73 | 4 | strive — this spell costs {M} more to cast for each target beyond the first. | Blinding Flare |
+| 74 | 4 | sacrifice this creature: add {M}{M}. | Blood Vassal |
+| 75 | 4 | put any number of target creature cards from your graveyard on top of your library. | Bone Harvest |
+| 76 | 4 | ~ is also a cleric, rogue, warrior, and wizard. | Burakos, Party Leader |
+| 77 | 4 | as an additional cost to cast this spell, you may blight N. | Burning Curiosity |
+| 78 | 4 | as an additional cost to cast this spell, reveal a creature card from your hand. | Charge of the Forever-Beast |
+| 79 | 4 | this creature escapes with a ±N/±N counter on it. | Charred Graverobber |
+| 80 | 4 | craft with artifact {M}{M}{M} | Clay-Fired Bricks // Cosmium Kiln |
 | 81 | 4 | activated abilities of sources with the chosen name can't be activated unless they're mana abilities. | Disruptor Flute |
 | 82 | 4 | when a creature with mana value N or greater enters, you may return this card from your graveyard to the battlefield attached to that creature. | Dragon Fangs |
 | 83 | 4 | ~ enters with a number of ±N/±N counters on it equal to the amount of mana spent to cast it. | Dyadrine, Synthesis Amalgam |
@@ -122,41 +122,41 @@
 | 110 | 3 | target creature attacks this turn if able. | Boiling Blood |
 | 111 | 3 | this creature escapes with N ±N/±N counters on it. | Chainweb Aracnir |
 | 112 | 3 | enchanted creature has protection from the chosen color. this effect doesn't remove this aura. | Cho-Manno's Blessing |
-| 113 | 3 | craft with artifact {M}{M}{M} | Clay-Fired Bricks // Cosmium Kiln |
-| 114 | 3 | when this enchantment enters, it becomes an aura with enchant creature. manifest the top card of your library and attach this enchantment to it. | Cloudform |
-| 115 | 3 | while an opponent is choosing targets as part of casting a spell they control or activating an ability they control, that player must choose at least N flagbear | Coalition Flag |
-| 116 | 3 | during your turn, ~ has indestructible. | Colossus, Steel Stalwart |
-| 117 | 3 | {M}{M}, discard this card: create a treasure token. | Creative Outburst |
-| 118 | 3 | whenever this creature attacks and isn't blocked, defending player gets a poison counter. | Crypt Cobra |
-| 119 | 3 | whenever this creature blocks or becomes blocked by a nonblack creature, destroy that creature at end of combat. | Deathgazer |
-| 120 | 3 | change the target of target spell with a single target. | Deflection |
-| 121 | 3 | cards in graveyards can't be the targets of spells or abilities. | Dennick, Pious Apprentice // Dennick, Pious Apparition |
-| 122 | 3 | end the turn. | Discontinuity |
-| 123 | 3 | as an additional cost to cast this spell, you may behold a dragon. | Dispelling Exhale |
-| 124 | 3 | sneak {M} | Donatello's Technique |
-| 125 | 3 | enchanted creature has "{M}: this creature gets ±N/±N until end of turn." | Dragon Mantle |
-| 126 | 3 | this creature gets ±N/±N for each card in your hand. | Dread Slag |
-| 127 | 3 | equip abilities you activate that target this creature cost {M} less to activate. | Dwarven Mauler |
-| 128 | 3 | each player shuffles their hand and graveyard into their library, then draws N cards. exile ~. | Emergency Powers |
-| 129 | 3 | spells you cast from your graveyard cost {M} less to cast. | Emet-Selch of the Third Seat |
-| 130 | 3 | kicker—sacrifice a land. | Falling Timber |
-| 131 | 3 | ~ deals N damage divided as you choose among any number of target creatures. | Fire Covenant |
-| 132 | 3 | you may pay {M}{M}{M}{M}{M} rather than pay the mana cost for spells you cast. | Fist of Suns |
-| 133 | 3 | when this creature attacks or blocks, sacrifice it at end of combat. | Fog Elemental |
-| 134 | 3 | reveal this card as you draft it and note how many cards you've drafted this draft round, including this card. | Garbage Fire |
-| 135 | 3 | whenever this creature becomes the target of a spell or ability for the first time each turn, counter that spell or ability. | Glyph Keeper |
-| 136 | 3 | enchanted creature has "{M}: this creature deals N damage to any target." | Hermetic Study |
-| 137 | 3 | cast this spell only if you've cast another spell this turn. | Hewed Stone Retainers |
-| 138 | 3 | if you would lose unspent mana, that mana becomes colorless instead. | Horizon Stone |
-| 139 | 3 | creatures entering don't cause abilities to trigger. | Hushwing Gryff |
-| 140 | 3 | you may cast sorcery spells as though they had flash. | Hypersonic Dragon |
-| 141 | 3 | when ~ enters, sacrifice it unless it escaped. | Kroxa, Titan of Death's Hunger |
-| 142 | 3 | if a spell or ability an opponent controls causes you to discard this card, put it onto the battlefield instead of putting it into your graveyard. | Loxodon Smiter |
-| 143 | 3 | spells with the chosen name can't be cast. | Meddling Mage |
-| 144 | 3 | when this creature attacks or blocks, return it to its owner's hand at end of combat. | Phantom Whelp |
-| 145 | 3 | you may cast creature spells as though they had flash. | Prophet of Kruphix |
-| 146 | 3 | this creature blocks each combat if able. | Razorgrass Screen |
-| 147 | 3 | players play with their hands revealed. | Revelation |
-| 148 | 3 | as this creature enters, choose a player. | Sawhorn Nemesis |
-| 149 | 3 | when you cast a creature spell, sacrifice this creature. | Skittering Horror |
-| 150 | 2 | target blocking creature you control gets ±N/±N until end of turn. | Aang's Defense |
+| 113 | 3 | when this enchantment enters, it becomes an aura with enchant creature. manifest the top card of your library and attach this enchantment to it. | Cloudform |
+| 114 | 3 | while an opponent is choosing targets as part of casting a spell they control or activating an ability they control, that player must choose at least N flagbear | Coalition Flag |
+| 115 | 3 | during your turn, ~ has indestructible. | Colossus, Steel Stalwart |
+| 116 | 3 | {M}{M}, discard this card: create a treasure token. | Creative Outburst |
+| 117 | 3 | whenever this creature attacks and isn't blocked, defending player gets a poison counter. | Crypt Cobra |
+| 118 | 3 | whenever this creature blocks or becomes blocked by a nonblack creature, destroy that creature at end of combat. | Deathgazer |
+| 119 | 3 | change the target of target spell with a single target. | Deflection |
+| 120 | 3 | cards in graveyards can't be the targets of spells or abilities. | Dennick, Pious Apprentice // Dennick, Pious Apparition |
+| 121 | 3 | end the turn. | Discontinuity |
+| 122 | 3 | as an additional cost to cast this spell, you may behold a dragon. | Dispelling Exhale |
+| 123 | 3 | sneak {M} | Donatello's Technique |
+| 124 | 3 | enchanted creature has "{M}: this creature gets ±N/±N until end of turn." | Dragon Mantle |
+| 125 | 3 | this creature gets ±N/±N for each card in your hand. | Dread Slag |
+| 126 | 3 | equip abilities you activate that target this creature cost {M} less to activate. | Dwarven Mauler |
+| 127 | 3 | each player shuffles their hand and graveyard into their library, then draws N cards. exile ~. | Emergency Powers |
+| 128 | 3 | spells you cast from your graveyard cost {M} less to cast. | Emet-Selch of the Third Seat |
+| 129 | 3 | kicker—sacrifice a land. | Falling Timber |
+| 130 | 3 | ~ deals N damage divided as you choose among any number of target creatures. | Fire Covenant |
+| 131 | 3 | you may pay {M}{M}{M}{M}{M} rather than pay the mana cost for spells you cast. | Fist of Suns |
+| 132 | 3 | when this creature attacks or blocks, sacrifice it at end of combat. | Fog Elemental |
+| 133 | 3 | reveal this card as you draft it and note how many cards you've drafted this draft round, including this card. | Garbage Fire |
+| 134 | 3 | whenever this creature becomes the target of a spell or ability for the first time each turn, counter that spell or ability. | Glyph Keeper |
+| 135 | 3 | enchanted creature has "{M}: this creature deals N damage to any target." | Hermetic Study |
+| 136 | 3 | cast this spell only if you've cast another spell this turn. | Hewed Stone Retainers |
+| 137 | 3 | if you would lose unspent mana, that mana becomes colorless instead. | Horizon Stone |
+| 138 | 3 | creatures entering don't cause abilities to trigger. | Hushwing Gryff |
+| 139 | 3 | you may cast sorcery spells as though they had flash. | Hypersonic Dragon |
+| 140 | 3 | when ~ enters, sacrifice it unless it escaped. | Kroxa, Titan of Death's Hunger |
+| 141 | 3 | if a spell or ability an opponent controls causes you to discard this card, put it onto the battlefield instead of putting it into your graveyard. | Loxodon Smiter |
+| 142 | 3 | spells with the chosen name can't be cast. | Meddling Mage |
+| 143 | 3 | when this creature attacks or blocks, return it to its owner's hand at end of combat. | Phantom Whelp |
+| 144 | 3 | you may cast creature spells as though they had flash. | Prophet of Kruphix |
+| 145 | 3 | this creature blocks each combat if able. | Razorgrass Screen |
+| 146 | 3 | players play with their hands revealed. | Revelation |
+| 147 | 3 | as this creature enters, choose a player. | Sawhorn Nemesis |
+| 148 | 3 | when you cast a creature spell, sacrifice this creature. | Skittering Horror |
+| 149 | 2 | target blocking creature you control gets ±N/±N until end of turn. | Aang's Defense |
+| 150 | 2 | up to N target creatures each get ±N/±N and gain first strike until end of turn. | Abandon Reason |

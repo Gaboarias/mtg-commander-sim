@@ -93,6 +93,10 @@ def _token_cap(game, player) -> bool:
 
 
 def make_token(game, player, name, power, toughness, kw=(), subtypes=(), counters=0):
+    if any(getattr(pm.card, "token_angels", False) for pm in player.battlefield):
+        # Divine Visitation: las fichas de criatura son Ángeles 4/4 con vuelo y vigilancia
+        name, power, toughness = "Angel", 4, 4
+        kw, subtypes = tuple(set(kw) | {"flying", "vigilance"}), ("Angel",)
     tok = Card(
         name=name,
         types={"creature"},
