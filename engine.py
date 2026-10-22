@@ -277,7 +277,18 @@ class Permanent:
                     and self.counters.get("+1/+1", 0) > 0)
                 or getattr(self, "_detained_by", None) is not None
                 or getattr(self, "suspected", False)
-                or self.aura_flag("aura_no_block"))
+                or self.aura_flag("aura_no_block")
+                or self._color_cant_block())
+
+    def _color_cant_block(self) -> bool:
+        if self.game is None:
+            return False
+        bans = [getattr(pm.card, "no_block_color", None) for pl in self.game.players for pm in pl.battlefield]
+        bans = [b for b in bans if b]
+        if not bans:
+            return False
+        pips = {x for pp in (getattr(self.card.cost, "pips", None) or ()) for x in str(pp).upper()}
+        return any(b in pips for b in bans)
 
     @cant_block.setter
     def cant_block(self, v):
@@ -1563,6 +1574,10 @@ class Game:
         """Respeta indestructible y umbra armor."""
         if perm.has("indestructible"):
             return
+        if perm.counters.get("shield", 0) > 0:          # contador escudo: se quita en su lugar
+            perm.counters["shield"] -= 1
+            self.log(f"{perm.name} pierde un contador escudo en vez de ser destruida")
+            return
         if self._umbra_save(perm):
             return
         self.to_graveyard(perm, reason)
@@ -1668,8 +1683,14 @@ class Game:
 
     def attack_tax(self, defender) -> int:
         """Ghostly Prison / Propaganda: cuánto cuesta atacar a `defender` por criatura."""
-        return sum(getattr(pm.card, "attack_tax", 0) for pm in defender.battlefield
-                   if not pm.abilities_off())
+        tot = 0
+        for pm in defender.battlefield:
+            if pm.abilities_off():
+                continue
+            tot += getattr(pm.card, "attack_tax", 0) or 0
+            if getattr(pm.card, "attack_tax_ench", False):     # Sphere of Safety: X = tus encantamientos
+                tot += sum(1 for x in defender.battlefield if "enchantment" in x.card.types)
+        return tot
 
     def _etb_extra(self, player, perm) -> int:
         """Copias extra de los disparos de entrada (Panharmonicon: artefacto o
@@ -1982,6 +2003,10 @@ class Game:
                 if amount <= 0:
                     return
         src_perm = isinstance(source, Permanent)
+        if isinstance(target, Permanent) and target.counters.get("shield", 0) > 0 and not no_prev:
+            target.counters["shield"] -= 1           # contador escudo: previene el daño
+            self.log(f"{target.name} pierde un contador escudo (daño prevenido)")
+            return
         if combat and isinstance(target, Permanent) and getattr(target.card, "prevent_combat_to", False) \
                 and not no_prev:
             return
@@ -5236,6 +5261,10 @@ class Game:
         if any(getattr(pm.card, "lambholt", False) and blocker.power < pm.power
                for pm in attacker.controller.battlefield):
             return False             # Champion of Lambholt
+        if any((n := getattr(pm.card, "global_unblock_small", None)) is not None
+               and (attacker.power <= n or attacker.toughness <= n)
+               for pm in attacker.controller.battlefield):
+            return False             # Tetsuko Umezawa
         ue = getattr(attacker.card, "unblock_except", None)
         if ue and not any(blocker.has(k) for k in ue):
             return False             # "can't be blocked except by creatures with flying"
