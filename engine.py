@@ -598,6 +598,8 @@ class Player:
         opts = p.card.produces(p, self)
         if not opts or getattr(p, "game", None) is None:
             return opts
+        if p.card.is_land() and any(getattr(src.card, "all_basic_types", False) for src in self.battlefield):
+            opts = {c: max(opts.values()) for c in ("W", "U", "B", "R", "G")}   # Dryad of the Ilysian Grove
         if p.card.is_land():
             for pl in p.game.players:
                 for src in pl.battlefield:
@@ -1618,6 +1620,8 @@ class Game:
                 else:
                     player.battlefield.remove(pm)
                     player.hand.append(getattr(pm.card, "_real", None) or pm.card)
+        elif kind == "life":
+            player.life -= n
         elif kind == "exile_hand":
             pool = [c for c in player.hand if c is not card and what in {
                 x for pp in (getattr(c.cost, "pips", None) or ()) for x in str(pp).upper()}]
@@ -1820,7 +1824,9 @@ class Game:
                 return pm.is_token
             if typ in ("artifact", "enchantment"):
                 return typ in t
-            return True   # "permanent"
+            if typ == "permanent":
+                return True
+            return pm.has_subtype(typ)        # "Sacrifice a Goblin / Food / Desert"
         pool = [pm for pm in ctrl.battlefield if match(pm)]
         # valor aproximado: comandante y tokens/criaturas fuertes valen más; ofrecemos
         # primero lo más barato de perder.
@@ -1964,6 +1970,8 @@ class Game:
         if combat and isinstance(target, Permanent) and getattr(target.card, "prevent_combat_to", False) \
                 and not no_prev:
             return
+        if not no_prev and combat and src_perm and getattr(source.card, "prevent_combat_from", False):
+            return                    # Fog Bank: no hace daño de combate
         if not no_prev and src_perm and (source.aura_flag("aura_no_dmg_out") or (
                 combat and source.aura_flag("aura_no_combat_dmg_out"))):
             return                    # "prevent all damage that would be dealt by enchanted creature"
@@ -2766,6 +2774,10 @@ class Game:
                     card._exile_after_cast = False
                     player.exile.append(card)
                     g.log(f"{card.name} se exilia tras lanzarse desde el cementerio")
+                elif getattr(card, "_shuffle_after_cast", False):   # "shuffle ~ into its owner's library"
+                    card._shuffle_after_cast = False
+                    player.library.append(card)
+                    g.rng.shuffle(player.library)
                 # Buyback: vuelve a la mano en vez de al cementerio.
                 elif buyback_used:
                     player.hand.append(card)
@@ -3460,6 +3472,8 @@ class Game:
         le den sus permanentes en juego (Exploration, Azusa, etc.)."""
         extra = sum(getattr(pm.card, "extra_land", 0) or 0
                     for pm in player.battlefield)
+        extra += sum(getattr(pm.card, "extra_land_all", 0) or 0
+                     for pl in self.players for pm in pl.battlefield)      # Rites of Flourishing
         elt = getattr(player, "extra_land_turn", None)
         if elt and elt[0] == self.turn:          # "you may play an additional land this turn"
             extra += elt[1]
@@ -5157,6 +5171,9 @@ class Game:
             return False
         if getattr(attacker, "_ring_bearer", False) and blocker.power > attacker.power:
             return False             # portador del Anillo: no la bloquean las de más fuerza
+        if any(getattr(pm.card, "lambholt", False) and blocker.power < pm.power
+               for pm in attacker.controller.battlefield):
+            return False             # Champion of Lambholt
         ue = getattr(attacker.card, "unblock_except", None)
         if ue and not any(blocker.has(k) for k in ue):
             return False             # "can't be blocked except by creatures with flying"
@@ -5376,6 +5393,11 @@ class Game:
         # UNTAP (antes: phasing — lo que estaba fuera de fase entra, y lo que
         # tiene phasing sale)
         self._phase_step(p)
+        for _q in self.players:                  # Seedborn Muse: enderezar en el turno de otro
+            if _q is not p and not _q.lost and any(getattr(pm.card, "seedborn", False) for pm in _q.battlefield):
+                for pm in _q.battlefield:
+                    if not pm.aura_flag("aura_no_untap") and not getattr(pm.card, "no_untap_self", False):
+                        pm.tapped = False
         _was_tapped = [pm for pm in p.battlefield if pm.tapped]
         for perm in p.battlefield:
             if perm.aura_flag("aura_no_untap") or getattr(perm.card, "no_untap_self", False):
