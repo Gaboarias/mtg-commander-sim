@@ -187,3 +187,17 @@ def test_two_upkeep_triggers_on_one_card_both_fire():
     g.begin_turn(me)
     run(g)
     assert me.life == life + 1 and len(me.hand) >= h + 1
+
+
+def test_rhythm_of_the_wild_grants_riot_and_uncounterable():
+    g, me, ops = new_game()
+    rw = build("Rhythm of the Wild", "{1}{R}{G}", "Enchantment",
+               "Creature spells you control can't be countered.\nNontoken creatures you control have riot.")
+    assert rw.grant_riot == "nontoken" and rw.grants_uncounterable == "creature"
+    put(g, rw, me)
+    g.active_index = g.players.index(me)
+    x = put(g, creature("Bear", "1G", 2, 2), me)
+    assert x.has("haste")
+    g.active_index = g.players.index(ops[0])
+    y = put(g, creature("Bear2", "1G", 2, 2), me)
+    assert y.counters.get("+1/+1") == 1 and not y.has("haste")

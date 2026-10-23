@@ -6079,9 +6079,14 @@ def test_modular_moves_counters_on_death():
 
 
 def test_riot_enters_with_counter():
+    # riot: en tu turno elige prisa (puede atacar ya); fuera de tu turno, +1/+1
     g, me, op = _duel()
+    g.active_index = g.players.index(op)
     c = g.move_to_battlefield(_bcreature("Rioter", "2R", 2, 2, oracle="Riot"), me)
     assert c.counters.get("+1/+1", 0) == 1
+    g.active_index = g.players.index(me)
+    h = g.move_to_battlefield(_bcreature("Rioter2", "2R", 2, 2, oracle="Riot"), me)
+    assert h.has("haste") and not h.counters.get("+1/+1")
 
 
 def test_toxic_n_adds_poison_on_combat_only():

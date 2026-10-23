@@ -982,6 +982,21 @@ class Game:
             "turn": self.turn, "controller": who, "card": name, "kind": kind,
         })
 
+    def apply_riot(self, perm):
+        """Riot: entra con prisa O con un contador +1/+1. En el turno de su
+        controlador conviene la prisa (puede atacar ya); si no, el contador."""
+        if getattr(perm, "_riot_done", False):
+            return
+        perm._riot_done = True
+        ctrl = perm.controller
+        mine = bool(self.players) and self.players[self.active_index] is ctrl
+        if mine and not perm.has("defender") and perm.summoning_sick and perm.power >= 1:
+            perm.perma_keywords.add("haste")
+            self.log(f"Motín (riot): {perm.name} entra con prisa")
+        else:
+            self.add_counters(perm, "+1/+1", 1)
+            self.log(f"Motín (riot): {perm.name} entra con un +1/+1")
+
     def note_departure(self, perm, kind: str):
         """Registra que `perm` dejó el campo (kind: destroyed/died/sacrificed/
         exiled/bounced/library) y quién lo causó, para la UI."""
@@ -1523,6 +1538,10 @@ class Game:
             if n:
                 perm.counters[kind] = perm.counters.get(kind, 0) + n
         if card.is_creature() or "creature" in card.types:
+            # "nontoken creatures you control have riot" (Rhythm of the Wild)
+            if any((gr := getattr(src.card, "grant_riot", None)) and src is not perm and not src.abilities_off()
+                   and not (("nontoken" in gr) and perm.is_token) for src in player.battlefield):
+                self.apply_riot(perm)
             for src in player.battlefield:
                 eb = getattr(src.card, "etb_counter_bonus", None)
                 if eb is None or src.abilities_off():

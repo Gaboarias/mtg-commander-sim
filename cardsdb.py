@@ -13291,11 +13291,10 @@ def _build_card_from_data_impl(data: dict) -> Card:
                 return False
             if card.on_death is None:
                 card.on_death = _afterlife_death
-        # Riot: entra con prisa O un contador +1/+1 (el bot elige +1/+1).
-        if "riot" in _kws_lc or re.search(r"\briot\b", _lt):
+        # Riot: entra con prisa O un contador +1/+1 (motor: apply_riot elige).
+        if "creature" in types and ("riot" in _kws_lc or re.search(r"(?:^|\n)riot\b", _lt)):
             def _riot_etb(g, ctrl, perm):
-                g.add_counters(perm, "+1/+1", 1)   # bot: +1/+1 por defecto
-                g.log(f"Motín (riot): {perm.name} entra con un +1/+1")
+                g.apply_riot(perm)
             _prev_ri = card.on_etb
             card.on_etb = (lambda g, ctrl, perm, _d=_riot_etb, _p=_prev_ri:
                            (_d(g, ctrl, perm), _p(g, ctrl, perm) if _p else None))
@@ -14480,6 +14479,8 @@ def _build_card_from_data_impl(data: dict) -> Card:
         elif re.fullmatch(r"if you would get (?:one or more|\w+ or more) \{e\}(?: \(energy counters\))?, you get twice "
                           r"that many \{e\} instead", _l5):
             card.energy_double = True
+        elif (m6 := re.fullmatch(r"(nontoken |other |other nontoken |)creatures you control have riot", _l5)):
+            card.grant_riot = m6.group(1).strip() or "all"
         elif _l5 == "you can't cast noncreature spells":
             card.self_no_noncreature_cast = True
         elif (m6 := re.fullmatch(r"your maximum hand size is (\w+)", _l5)) and _count_word(m6.group(1)):
