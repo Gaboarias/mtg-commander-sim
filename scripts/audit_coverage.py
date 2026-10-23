@@ -49,6 +49,9 @@ def load_db(full=False):
         return json.load(f)["cards"]
 
 
+_ADDR = re.compile(r" at 0x[0-9a-f]+")
+
+
 def _sig(card):
     out = {}
     for k, v in vars(card).items():
@@ -65,9 +68,11 @@ def _sig(card):
         elif isinstance(v, dict):
             out[k] = tuple(sorted(map(str, v.keys())))
         elif isinstance(v, (set, frozenset, list, tuple)):
-            out[k] = tuple(sorted(map(str, v)))
+            # sin direcciones de memoria ("<function … at 0x…>"): hacían que dos
+            # armados idénticos difirieran y la ablación diera falsos positivos
+            out[k] = tuple(sorted(_ADDR.sub("", str(x)) for x in v))
         else:
-            out[k] = repr(v)
+            out[k] = _ADDR.sub("", repr(v))
     return out
 
 

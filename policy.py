@@ -547,6 +547,14 @@ class Policy:
                       if pm is not perm and (pm.is_token or pm.power <= 1)]
             if not fodder or len(creatures) <= 1:
                 return False
+        for kind, cls, n in (ab.get("extra_cost") or ()):
+            if kind == "bounce" and cls in ("land", "forest", "island", "swamp", "mountain", "plains") \
+                    and sum(1 for pm in me.battlefield if pm.card.is_land()) < 6:
+                return False                     # no desarmar la base de maná
+            if kind == "bounce_self" and perm.is_creature():
+                return False
+            if kind == "hand_top" and len(me.hand) < 3:
+                return False
         return True
 
     def _pick_modes(self, game, me, card):
