@@ -28,9 +28,15 @@ def _oracle(card):
 def _roles(card):
     """Conjunto de roles aproximados de una carta (dict tipo Scryfall)."""
     tl = (card.get("type_line") or "").lower()
+    if not tl and card.get("card_faces"):
+        tl = (card["card_faces"][0].get("type_line") or "").lower()
     ot = _oracle(card)
     r = set()
-    is_land = "land" in tl
+    # tierra = la CARA FRONTAL es tierra. Las de doble cara con reverso tierra
+    # (Legion's Landing, Search for Azcanta, MDFC hechizo // tierra) se juegan
+    # como hechizo: antes contaban como tierras e inflaban el conteo.
+    front = tl.split("//")[0]
+    is_land = bool(re.search(r"\bland\b", front))
     if is_land:
         r.add("land")
     if "creature" in tl:
@@ -257,8 +263,15 @@ def _judge(total, lands, ramp_eff, roles, counts, avg_cmc, curve,
     """Reglas sobre líneas base de Commander (100 cartas)."""
     S, W = [], []
 
+    # tamaño del mazo: si no son ~100 cartas, los consejos por cantidad no aplican
+    if total > 101 or total < 90:
+        W.append(f"El mazo tiene {total} cartas (Commander lleva 100 con el comandante). "
+                 "Revisá la lista: puede haber cantidades duplicadas o una sección "
+                 "(sideboard/maybeboard) mezclada.")
     # --- base de maná ---
-    if lands < 33:
+    if total > 101:
+        pass                     # conteo de tierras sin sentido con la lista inflada
+    elif lands < 33:
         W.append(f"Pocas tierras ({lands}). En Commander se apunta a ~36–38; "
                  "podés trabarte de maná.")
     elif lands > 42:
@@ -377,7 +390,7 @@ def _recommend(lands, roles, counts, avg_cmc, demand, sources, owned=None):
 
     if lands < 36:
         rec(f"Sumá {36 - lands} tierras (apuntá a ~36–38) para no trabarte.")
-    elif lands > 40:
+    elif 40 < lands <= 60:
         rec(f"Bajá ~{lands - 38} tierras y meté hechizos: te vas a inundar.")
     if roles["ramp"] < 10:
         tip(f"Sumá ~{10 - roles['ramp']} piezas de ramp", "ramp")
