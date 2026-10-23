@@ -1877,9 +1877,12 @@ class InteractiveGame:
             label = f"habilidad de {getattr(src, 'name', '?')}"
         else:
             label = getattr(src, "name", "?")
+        tg_uids = [getattr(t, "uid", None) for t in (getattr(spell, "targets", None) or [])
+                   if hasattr(t, "uid") and hasattr(t, "card")]
         return {
             "spell": label,
             "kind": kind,
+            "targets": [u for u in tg_uids if u is not None],
             "from": spell.controller.name if spell is not None else "",
             "responses": responses,
             "abilities": abilities,
@@ -1944,6 +1947,8 @@ class InteractiveGame:
             "opp_turns": self.opp_turns,
             # feed de habilidades activadas/disparadas (para avisar en pantalla)
             "ability_feed": self.g.ability_events[-10:],
+            # salidas del campo (destruida/exiliada/devuelta…): la UI las anima y avisa
+            "departures": self.g.departures[-30:],
             # datos (coste/tipo/P-T/keywords) de las cartas en cementerio/exilio/
             # comando, por nombre: así al revisar una carta del cementerio también se
             # ve cuánto maná cuesta (el motor manda solo el nombre de esas zonas).

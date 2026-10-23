@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import { listDecks, type SavedDeck } from "../localDecks";
-import { Seat, type PlayerState } from "../board";
+import { Seat, type PlayerState, type Departure } from "../board";
 import { Help } from "../Help";
 import { download, fileStamp } from "../download";
 import { Icon } from "../icons";
@@ -14,7 +14,7 @@ type MatchSpec =
   | { kind: "registered"; key: string; name: string }
   | { kind: "custom"; name: string; text: string };
 type Pickable = { id: string; label: string; tag: string; spec: MatchSpec; mine: boolean };
-type Step = { turn: number; active: number; label: string; stack: string[]; players: PlayerState[] };
+type Step = { turn: number; active: number; label: string; stack: string[]; players: PlayerState[]; gone?: Departure[] };
 type KeyPlay = { turn: number; label: string; why?: string; delta?: number; step: number; reason?: string };
 type AbilityGroup = { card: string; controller: string | null; count: number; turns: number[]; kinds: string[]; step: number };
 type MatchAnalysis = {
@@ -252,6 +252,7 @@ export default function Watch() {
               <Seat
                 key={p.name} p={p} active={i === step.active} art={replay.images} reduce={reduce}
                 variant={i === step.active ? "hero" : "mini"}
+                departures={step.gone}
               />
             ))}
           </div>

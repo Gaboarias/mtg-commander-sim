@@ -874,6 +874,11 @@ class Game:
         # registro de habilidades que se activaron (para el resumen de la partida):
         # {turn, controller, card, kind}. No crea pasos en la traza.
         self.ability_events: list = []
+        # salidas del campo (para avisar/animar en la UI): {seq, turn, uid, name,
+        # player, kind (destroyed|died|sacrificed|exiled|bounced|library), source}
+        self.departures: list = []
+        self._dep_seq = 0
+        self._dep_snap = 0
         # nombre de la carta cuyo efecto se está resolviendo ahora (ETB, disparo o
         # hechizo en la pila): se usa para ATRIBUIR en el registro quién causó una
         # pérdida de vida / daño ("cada rival pierde 2 [Fuente]").
@@ -977,6 +982,25 @@ class Game:
             "turn": self.turn, "controller": who, "card": name, "kind": kind,
         })
 
+    def note_departure(self, perm, kind: str):
+        """Registra que `perm` dejó el campo (kind: destroyed/died/sacrificed/
+        exiled/bounced/library) y quién lo causó, para la UI."""
+        self._dep_seq += 1
+        self.departures.append({
+            "seq": self._dep_seq, "turn": self.turn, "uid": perm.uid, "name": perm.name,
+            "player": perm.controller.name, "kind": kind,
+            "source": (lambda s: s if s and s != perm.name else None)(
+                self._fx_source or getattr(getattr(self, "_resolving_card", None), "name", None)),
+            "creature": perm.is_creature(), "token": perm.is_token,
+        })
+        if len(self.departures) > 80:
+            del self.departures[:-60]
+
+    def _departures_since_snapshot(self):
+        out = [d for d in self.departures if d["seq"] > self._dep_snap]
+        self._dep_snap = self._dep_seq
+        return out
+
     def src_tag(self) -> str:
         """Sufijo con la carta-fuente del efecto en curso, para atribuir en el
         registro quién causó una pérdida de vida o daño. Vacío si no se conoce."""
@@ -1015,6 +1039,7 @@ class Game:
             "active": self.active_index,
             "label": label,
             "stack": [getattr(o.source, "name", "?") for o in self.stack],
+            "gone": self._departures_since_snapshot(),
             "players": [self._player_state(p) for p in self.players],
         })
 
@@ -1636,7 +1661,11 @@ class Game:
             return
         if self._umbra_save(perm):
             return
-        self.to_graveyard(perm, reason)
+        self._dep_kind = "destroyed"
+        try:
+            self.to_graveyard(perm, reason)
+        finally:
+            self._dep_kind = None
 
     def _umbra_save(self, perm: Permanent) -> bool:
         """Umbra armor / totem armor: si la criatura encantada sería destruida, en
@@ -1778,6 +1807,7 @@ class Game:
         if perm not in ctrl.battlefield:
             return False
         ctrl.battlefield.remove(perm)
+        self.note_departure(perm, "exiled")
         if perm.card.on_leave:
             self._run_fx(f"on_leave {perm.name}",
                          lambda: perm.card.on_leave(self, ctrl, perm))
@@ -1815,6 +1845,9 @@ class Game:
             return
         ctrl.battlefield.remove(perm)
         _r = (reason or "").lower()
+        self.note_departure(perm, "sacrificed" if (any(k in _r for k in self._SAC_REASONS) or "coste" in _r)
+                            else getattr(self, "_dep_kind", None) or (
+                                "destroyed" if "destru" in _r else "died"))
         if any(k in _r for k in self._SAC_REASONS):
             self.emit("sacrificed", player=ctrl, perm=perm)   # "whenever you sacrifice ..."
         self.emit("other_leaves", perm=perm)

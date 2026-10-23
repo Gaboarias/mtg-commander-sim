@@ -899,3 +899,47 @@ h3 svg { color: currentColor; }
 .sup-no { color: #d07a7a; border-color: #6b3f3f; }
 .sup-na { color: #8a8f99; border-color: #3a3f4a; }
 .kw-help { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,.04); border: 1px solid var(--border, #2a2f3a); font-size: .8rem; display: flex; flex-direction: column; gap: 5px; text-align: left; }
+
+/* ── salida del campo: la carta se queda ~1,7 s con una etiqueta animada ── */
+.cardmini.leaving { pointer-events: none; z-index: 3; animation: lv-card 1.7s ease-in forwards; }
+.cardmini.leaving.lv-static { animation: none; opacity: .55; }
+.cardmini.lv-destroyed, .cardmini.lv-died, .cardmini.lv-sacrificed { --lv: #e0684f; }
+.cardmini.lv-exiled { --lv: #b48cf0; }
+.cardmini.lv-bounced { --lv: #5aa9e6; }
+.cardmini.lv-library, .cardmini.lv-gone { --lv: #9aa3b2; }
+@keyframes lv-card {
+  0%   { box-shadow: 0 0 0 0 var(--lv, #e0684f); filter: none; }
+  15%  { box-shadow: 0 0 0 3px var(--lv, #e0684f), 0 0 18px 2px var(--lv, #e0684f); filter: brightness(1.25); }
+  60%  { box-shadow: 0 0 0 3px var(--lv, #e0684f), 0 0 12px 1px var(--lv, #e0684f); filter: grayscale(.6) brightness(.9); }
+  100% { box-shadow: 0 0 0 0 transparent; filter: grayscale(1) brightness(.6); opacity: .15; }
+}
+.cm-leave {
+  position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2px; text-align: center;
+  background: color-mix(in srgb, var(--lv, #e0684f) 22%, rgba(0,0,0,.55));
+  animation: lv-label .35s cubic-bezier(.2,1.4,.4,1) both;
+}
+.cm-leave-k {
+  font-weight: 800; font-size: .66rem; letter-spacing: .06em; text-transform: uppercase;
+  color: #fff; background: var(--lv, #e0684f); padding: 2px 6px; border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.5);
+}
+.cm-leave-src { font-size: .58rem; color: #fff; text-shadow: 0 1px 2px #000; padding: 0 3px; line-height: 1.1; }
+@keyframes lv-label { from { opacity: 0; transform: scale(1.6); } to { opacity: 1; transform: scale(1); } }
+.lv-destroyed .cm-leave-k::before, .lv-died .cm-leave-k::before, .lv-sacrificed .cm-leave-k::before { content: "✖ "; }
+.lv-exiled .cm-leave-k::before { content: "⊘ "; }
+.lv-bounced .cm-leave-k::before { content: "↩ "; }
+
+/* objetivo de un hechizo/habilidad en la pila: aviso antes de que se resuelva */
+.cardmini.targeted { box-shadow: 0 0 0 2px #e0684f, 0 0 14px 1px rgba(224,104,79,.7); animation: tgt-pulse 1s ease-in-out infinite; }
+@keyframes tgt-pulse { 50% { box-shadow: 0 0 0 3px #ff8a6e, 0 0 22px 3px rgba(224,104,79,.9); } }
+.cm-badge.tgt { top: auto; bottom: 18px; left: 50%; transform: translateX(-50%); background: #e0684f; color: #fff; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) {
+  .cardmini.leaving { animation: none; opacity: .55; }
+  .cm-leave { animation: none; }
+  .cardmini.targeted { animation: none; }
+}
+
+/* aviso: perdiste una criatura (debajo del aviso de habilidades, no encima) */
+.ability-toast.leave-toast { top: 88px; border-color: #e0684f; background: #2a1512; }
+.ability-toast.leave-toast svg { color: #e0684f; }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Icon } from "./icons";
 
@@ -12,6 +12,17 @@ export type Perm = {
   loyalty_abilities?: { i: number; cost: number }[]; activated?: boolean;
   keywords?: string[]; types?: string[]; subtypes?: string[]; abilities?: string[];
 };
+// salida del campo registrada por el motor (destruida, exiliada, devuelta…)
+export type Departure = {
+  seq: number; turn: number; uid: number; name: string; player: string;
+  kind: string; source?: string | null; creature?: boolean; token?: boolean;
+};
+export const LEAVE_LABEL: Record<string, string> = {
+  destroyed: "destruida", died: "murió", sacrificed: "sacrificada", exiled: "exiliada",
+  bounced: "a la mano", library: "a la biblioteca", gone: "deja el campo",
+};
+const LEAVE_MS = 1700;
+
 export type PlayerState = {
   name: string; life: number; lost: boolean; hand: number; library: number;
   commander: string[]; cmdr_tax: number; cmdr_damage?: Record<string, number>;
@@ -21,11 +32,14 @@ export type PlayerState = {
 };
 
 export function CardMini({
-  perm, art, reduce, selectable, selected, onClick, onInspect, isCommander,
+  perm, art, reduce, selectable, selected, onClick, onInspect, isCommander, leaving, leaveSource, targeted,
 }: {
   perm: Perm; art?: string; reduce: boolean;
   selectable?: boolean; selected?: boolean; onClick?: () => void; onInspect?: () => void;
   isCommander?: boolean;
+  leaving?: string;            // se está yendo del campo (destroyed/exiled/…): se anima
+  leaveSource?: string | null; // carta que lo causó
+  targeted?: boolean;          // objetivo de un hechizo/habilidad en la pila
 }) {
   const plus = perm.counters["+1/+1"] || 0;
   const minus = perm.counters["-1/-1"] || 0;
@@ -49,8 +63,9 @@ export function CardMini({
       animate={{ opacity: 1, scale: 1, y: 0, rotate: perm.tapped ? 9 : 0 }}
       exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.5, y: 10 }}
       transition={{ type: "spring", stiffness: 420, damping: 30 }}
-      className={`cardmini ${perm.attacking ? "atk" : ""} ${perm.tapped ? "tapped" : ""} ${selectable ? "sel-able" : ""} ${selected ? "sel" : ""} ${doubleStrike ? "dstrike" : ""}`}
-      title={perm.tapped ? `${perm.name} (girada)` : perm.name}
+      className={`cardmini ${perm.attacking ? "atk" : ""} ${perm.tapped ? "tapped" : ""} ${selectable ? "sel-able" : ""} ${selected ? "sel" : ""} ${doubleStrike ? "dstrike" : ""} ${leaving ? `leaving lv-${leaving}${reduce ? " lv-static" : ""}` : ""} ${targeted ? "targeted" : ""}`}
+      title={leaving ? `${perm.name}: ${LEAVE_LABEL[leaving] || "deja el campo"}${leaveSource ? ` (${leaveSource})` : ""}`
+        : perm.tapped ? `${perm.name} (girada)` : perm.name}
       onClick={onClick}
       style={onClick ? { cursor: "pointer" } : undefined}
       // seleccionable con teclado (Tab + Enter/Espacio) para elegir atacantes
@@ -62,7 +77,18 @@ export function CardMini({
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
       } : undefined}
     >
-      {onInspect && (
+      {leaving && (
+        <div className={`cm-leave lv-${leaving}`} role="status">
+          <span className="cm-leave-k">{LEAVE_LABEL[leaving] || "deja el campo"}</span>
+          {leaveSource ? <span className="cm-leave-src">{leaveSource}</span> : null}
+        </div>
+      )}
+      {targeted && !leaving && (
+        <span className="cm-badge tgt" title="objetivo de un hechizo o habilidad en la pila">
+          <Icon name="target" size={10} /> objetivo
+        </span>
+      )}
+      {onInspect && !leaving && (
         <button className="cm-info" title="Ver carta" aria-label="Ver detalle de la carta"
           onClick={(e) => { e.stopPropagation(); onInspect(); }}><Icon name="info" size={14} /></button>
       )}
@@ -149,16 +175,66 @@ function TokenStack({
   );
 }
 
+type Ghost = { perm: Perm; kind: string; source?: string | null; at: number };
+
+// permanentes que acaban de dejar el campo: se siguen dibujando ~1,7 s con una
+// etiqueta animada (destruida / exiliada / a la mano…) en vez de desaparecer.
+function useGhosts(p: PlayerState, departures: Departure[] | undefined, guess: boolean): Ghost[] {
+  const prevRef = useRef<PlayerState>(p);
+  const [ghosts, setGhosts] = useState<Ghost[]>([]);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => {
+    const prev = prevRef.current;
+    prevRef.current = p;
+    if (prev === p) return;
+    const now = new Set(p.battlefield.map((x) => x.uid));
+    const gone = prev.battlefield.filter((x) => !now.has(x.uid));
+    if (gone.length === 0) return;
+    const byUid = new Map((departures || []).map((d) => [d.uid, d]));
+    const count = (arr: string[] | undefined, n: string) => (arr || []).filter((x) => x === n).length;
+    const add: Ghost[] = [];
+    const t = Date.now();
+    for (const pm of gone) {
+      const d = byUid.get(pm.uid);
+      let kind = d?.kind;
+      if (!kind) {
+        if (!guess) continue;
+        if (count(p.graveyard, pm.name) > count(prev.graveyard, pm.name)) kind = "died";
+        else if (count(p.exile, pm.name) > count(prev.exile, pm.name)) kind = "exiled";
+        else if (p.hand > prev.hand) kind = "bounced";
+        else if (p.library > prev.library) kind = "library";
+        else kind = pm.is_token ? "died" : "gone";
+      }
+      add.push({ perm: pm, kind, source: d?.source ?? null, at: t });
+    }
+    if (add.length === 0) return;
+    setGhosts((g) => [...g.filter((x) => !add.some((a) => a.perm.uid === x.perm.uid) && !now.has(x.perm.uid)), ...add]);
+    const ids = add.map((a) => a.perm.uid);
+    // el timer NO se cancela si el estado cambia de nuevo enseguida (los bots
+    // juegan rápido): si no, el fantasma quedaba pegado en la mesa
+    timers.current.push(setTimeout(() => setGhosts((g) => g.filter((x) => !ids.includes(x.perm.uid))), LEAVE_MS));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p]);
+  useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
+  // un fantasma que volvió al campo (mismo uid) deja de mostrarse
+  return ghosts.filter((g) => !p.battlefield.some((x) => x.uid === g.perm.uid));
+}
+
 export function Seat({
   p, active, art, reduce, selectableUids, selectedUids, onCard, onInspect, onZone, variant = "grid",
+  departures, guessDepartures = false, targetedUids,
 }: {
   p: PlayerState; active: boolean; art: Record<string, string>; reduce: boolean;
   selectableUids?: Set<number>; selectedUids?: Set<number>; onCard?: (uid: number) => void;
   onInspect?: (perm: Perm) => void; onZone?: (title: string, names: string[]) => void;
   variant?: "grid" | "hero" | "mini";
+  departures?: Departure[]; guessDepartures?: boolean; targetedUids?: Set<number>;
 }) {
-  const lands = p.battlefield.filter((x) => x.is_land);
-  const nonlands = p.battlefield.filter((x) => !x.is_land);
+  const ghosts = useGhosts(p, departures, guessDepartures);
+  const ghostBy = new Map(ghosts.map((g) => [g.perm.uid, g]));
+  const field = [...p.battlefield, ...ghosts.map((g) => g.perm)];
+  const lands = field.filter((x) => x.is_land);
+  const nonlands = field.filter((x) => !x.is_land);
   const maxCmdr = Math.max(0, ...Object.values(p.cmdr_damage || {}));
   return (
     <motion.div layout={!reduce} className={`seat seat-${variant} ${active ? "active" : ""} ${p.lost ? "dead" : ""}`}>
@@ -243,7 +319,8 @@ export function Seat({
         const individuals: Perm[] = [];
         const groups = new Map<string, Perm[]>();
         for (const pm of nonlands) {
-          const interactive = selectableUids?.has(pm.uid) || selectedUids?.has(pm.uid);
+          const interactive = selectableUids?.has(pm.uid) || selectedUids?.has(pm.uid)
+            || ghostBy.has(pm.uid) || targetedUids?.has(pm.uid);
           if (pm.is_token && !interactive) {
             const sig = tokenSig(pm);
             (groups.get(sig) || groups.set(sig, []).get(sig)!).push(pm);
@@ -258,11 +335,14 @@ export function Seat({
               {individuals.map((pm) => (
                 <CardMini
                   key={pm.uid} perm={pm} art={pm.is_token ? undefined : art[pm.name]} reduce={reduce}
-                  selectable={selectableUids?.has(pm.uid)}
+                  selectable={!ghostBy.has(pm.uid) && selectableUids?.has(pm.uid)}
                   selected={selectedUids?.has(pm.uid)}
                   isCommander={p.commander.includes(pm.name)}
-                  onClick={onCard && selectableUids?.has(pm.uid) ? () => onCard(pm.uid) : undefined}
-                  onInspect={onInspect ? () => onInspect(pm) : undefined}
+                  onClick={onCard && !ghostBy.has(pm.uid) && selectableUids?.has(pm.uid) ? () => onCard(pm.uid) : undefined}
+                  onInspect={onInspect && !ghostBy.has(pm.uid) ? () => onInspect(pm) : undefined}
+                  leaving={ghostBy.get(pm.uid)?.kind}
+                  leaveSource={ghostBy.get(pm.uid)?.source}
+                  targeted={targetedUids?.has(pm.uid)}
                 />
               ))}
             </AnimatePresence>
@@ -290,7 +370,9 @@ export function Seat({
             {lands.map((pm) => (
               <CardMini key={pm.uid} perm={pm} art={pm.is_token ? undefined : art[pm.name]} reduce={reduce}
                 isCommander={p.commander.includes(pm.name)}
-                onInspect={onInspect ? () => onInspect(pm) : undefined} />
+                onInspect={onInspect && !ghostBy.has(pm.uid) ? () => onInspect(pm) : undefined}
+                leaving={ghostBy.get(pm.uid)?.kind} leaveSource={ghostBy.get(pm.uid)?.source}
+                targeted={targetedUids?.has(pm.uid)} />
             ))}
           </AnimatePresence>
         </motion.div>

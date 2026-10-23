@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { Seat, type PlayerState, type Perm } from "../board";
+import { Seat, LEAVE_LABEL, type PlayerState, type Perm, type Departure } from "../board";
 import { listDecks, bumpGamesPlayed, type SavedDeck } from "../localDecks";
 import { download, fileStamp } from "../download";
 import { Icon } from "../icons";
@@ -99,7 +99,7 @@ type ChoiceOpt = { i: number; name: string; is_land?: boolean; ok?: boolean };
 type CardDetail = { name: string; cost: string; pt: string | null; type: string; keywords: string[]; is_land: boolean };
 type Choice = { kind: string; prompt: string; options: ChoiceOpt[]; allow_none: boolean; card?: string; card_detail?: CardDetail | null };
 type ReactState = {
-  spell: string; from: string; kind?: string;
+  spell: string; from: string; kind?: string; targets?: number[];
   responses: { i: number; name: string; cost: string; target_spec?: string | null }[];
   abilities: { uid: number; name: string; index: number; label: string; cost: string }[];
   gy_abilities: { i: number; index: number; name: string; label: string; cost: string }[];
@@ -110,6 +110,7 @@ type GameState = {
   react?: ReactState | null;
   choice: Choice | null; mulligan: Mulligan | null; log: string[];
   ability_feed?: AbilityEvent[];
+  departures?: Departure[];
   opp_turns?: OppTurn[];
   card_briefs?: Record<string, CardDetail>;
   engine_error?: string;
@@ -172,6 +173,10 @@ export default function Play() {
   // cae un rival), el ataque iba a otro objetivo
   const [atkAssign, setAtkAssign] = useState<Record<number, string>>({});
   const [abilityToast, setAbilityToast] = useState<AbilityEvent | null>(null);
+  // aviso: criaturas TUYAS que dejaron el campo (destruidas, exiliadas, devueltas…)
+  const [lossToast, setLossToast] = useState<Departure[] | null>(null);
+  const depSeen = useRef<number>(0);
+  const lossTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abilitySeen = useRef<number>(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [art, setArt] = useState<Record<string, string>>({});
@@ -225,6 +230,21 @@ export default function Play() {
       toastTimer.current = setTimeout(() => setAbilityToast(null), 3600);
     }
     if (feed.length < abilitySeen.current) abilitySeen.current = feed.length; // nueva partida
+  }, [state]);
+
+  useEffect(() => {
+    const deps = state?.departures || [];
+    const last = deps.length ? deps[deps.length - 1].seq : 0;
+    if (last < depSeen.current) depSeen.current = 0;          // nueva partida
+    const fresh = deps.filter((d) => d.seq > depSeen.current);
+    depSeen.current = Math.max(depSeen.current, last);
+    const me = state ? state.players[state.human_index]?.name : null;
+    const mine = fresh.filter((d) => d.player === me && d.creature && !d.token);
+    if (mine.length > 0) {
+      setLossToast(mine);
+      if (lossTimer.current) clearTimeout(lossTimer.current);
+      lossTimer.current = setTimeout(() => setLossToast(null), 4500);
+    }
   }, [state]);
 
   // Escape cierra los modales informativos/opcionales (no las decisiones forzadas)
@@ -566,6 +586,26 @@ export default function Play() {
         </div>
       )}
       <AnimatePresence>
+        {lossToast && (
+          <motion.div className="ability-toast leave-toast" role="alert"
+            initial={reduce ? false : { opacity: 0, y: -12, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, y: -12 }}
+            transition={{ type: "spring", stiffness: 400, damping: 26 }}>
+            <Icon name="warning" size={16} />
+            <span>
+              {lossToast.length === 1 ? (
+                <>Tu <b>{lossToast[0].name}</b> {lossToast[0].kind === "bounced" ? "volvió" : "fue"}{" "}
+                  {LEAVE_LABEL[lossToast[0].kind] || "sacada del campo"}
+                  {lossToast[0].source ? <span className="muted"> — por {lossToast[0].source}</span> : null}</>
+              ) : (
+                <>Perdiste {lossToast.length} criaturas: {lossToast.map((d) => `${d.name} (${LEAVE_LABEL[d.kind] || "fuera"})`).join(", ")}</>
+              )}
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
         {abilityToast && (
           <motion.div className="ability-toast" role="status"
             initial={reduce ? false : { opacity: 0, y: -12 }}
@@ -697,6 +737,8 @@ export default function Play() {
                   onCard={i === meIdx ? togglePick : undefined}
                   onInspect={(pm: Perm) => inspectCard(pm)}
                   onZone={(title, names) => setZoneView({ title, names })}
+                  departures={state.departures} guessDepartures
+                  targetedUids={state.react?.targets?.length ? new Set(state.react.targets) : undefined}
                 />
               ))}
             </div>
@@ -915,6 +957,18 @@ export default function Play() {
               <h2 style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                 <Icon name="bolt" size={18} /> {state.react.from} {state.react.kind === "ability" || state.react.kind === "trigger" ? "activa" : "lanza"} <b>{state.react.spell}</b> — ¿respondés?
               </h2>
+              {(() => {
+                const ids = new Set(state.react.targets || []);
+                const hits = state.players.flatMap((pl, k) => pl.battlefield
+                  .filter((pm) => ids.has(pm.uid)).map((pm) => ({ pm, mine: k === state.human_index })));
+                return hits.length > 0 ? (
+                  <p className="react-target" style={{ margin: "2px 0 8px", display: "flex", alignItems: "center", gap: 6, color: hits.some((h) => h.mine) ? "#e0684f" : undefined }}>
+                    <Icon name="target" size={14} />
+                    {hits.some((h) => h.mine) ? "¡Apunta a tu " : "Objetivo: "}
+                    <b>{hits.map((h) => h.pm.name).join(", ")}</b>{hits.some((h) => h.mine) ? "!" : ""}
+                  </p>
+                ) : null;
+              })()}
               {state.react.responses.length > 0 && (
                 <div className="act-block">
                   <span className="act-label">Responder (instantáneo):</span>

@@ -6145,6 +6145,8 @@ def _bounce_pm(game, pm, why="vuelve a la mano"):
     if pm not in pl.battlefield:
         return False
     pl.battlefield.remove(pm)
+    if hasattr(game, "note_departure"):
+        game.note_departure(pm, "bounced")
     if pm.card.on_leave:
         pm.card.on_leave(game, pl, pm)
     if not pm.is_token:
