@@ -466,6 +466,11 @@ class Permanent:
             return False
         if self.aura_flag("aura_no_attack") or getattr(self.card, "cant_attack_static", False):
             return False
+        _aud = getattr(self.card, "attack_unless_def", None)
+        if _aud and self.game is not None and not any(
+                (o.poison > 0 if _aud == "poisoned" else getattr(self.game, "monarch", None) is o)
+                for o in self.game.opponents(self.controller) if not o.lost):
+            return False                 # "can't attack unless defending player is poisoned / the monarch"
         if self.game is not None and getattr(self, "_no_attack_turn", None) == self.game.turn:
             return False                 # "target creature can't attack this turn"
         _cai = getattr(self.card, "cant_attack_if", None)
@@ -844,6 +849,18 @@ class Player:
             return False
         for perm, _color, _amt in plan:
             perm.tapped = True
+        self._last_plan_colors = [c for _p, c, a in plan for _ in range(max(1, a or 1))]
+        _gx = next((getattr(p, "game", None) for p, _c, _a in plan if getattr(p, "game", None) is not None), None)
+        if _gx is not None:
+            if getattr(self, "_spent_turn", None) != _gx.turn:
+                self._spent_turn, self._spent_amt = _gx.turn, 0
+            _b4 = self._spent_amt
+            self._spent_amt += cost.cmc
+            for _th in (4, 8):
+                if _b4 < _th <= self._spent_amt:
+                    for _w in self.battlefield:
+                        if f"expend{_th}" in (_w.card.triggers or {}):
+                            _gx._push_self_trigger(_w, f"expend{_th}", f"expend {_th}")
         g = next((getattr(p, "game", None) for p, _c, _a in plan if getattr(p, "game", None) is not None), None)
         if g is not None and plan:
             # girar por maná también es "becomes tapped" (Psychic Venom, Overgrowth…)
@@ -1200,7 +1217,10 @@ class Game:
 
     def _on_life_lost(self, p: "Player", n: int):
         """Encola los disparos por pérdida de vida (con amount = n)."""
+        if getattr(p, "life_lost_turn", None) != self.turn:
+            p.life_lost_amt = 0
         p.life_lost_turn = self.turn
+        p.life_lost_amt = getattr(p, "life_lost_amt", 0) + n
         for pl in self.players:
             if pl.lost:
                 continue
@@ -1470,6 +1490,30 @@ class Game:
                     resolve=(lambda g, _cb=cb, _perm=stand, _kw=inner:
                              g._run_trigger(_cb, _perm, _kw)),
                     source=stand, label=f"eminence:{event}:{card.name}", kind="trigger"))
+            # disparos de líneas que funcionan DESDE el cementerio (Ghastly Remains,
+            # Akoum Firebird, Spellpyre Phoenix…): el callback normal sobre un sustituto
+            for card in list(pl.graveyard):
+                _gpt = getattr(card, "gy_perm_triggers", None)
+                if not _gpt:
+                    continue
+                for _cb in (_gpt.get(event), _gpt.get("__x_" + event)):
+                    if _cb is None:
+                        continue
+                    stand = card.__dict__.get("_gy_stand")
+                    if stand is None:
+                        stand = Permanent(card, pl)
+                        card.__dict__["_gy_stand"] = stand
+                    stand.game = self
+                    stand.controller = pl
+                    inner = {k: v for k, v in kw.items() if k != "perm"}
+                    if "perm" in kw:
+                        inner["subject"] = kw["perm"]
+                    self.stack.append(StackObject(
+                        controller=pl,
+                        resolve=(lambda g, _c=_cb, _s=stand, _cd=card, _p=pl, _kw=inner:
+                                 g._run_trigger(_c, _s, _kw) if _cd in _p.graveyard else None),
+                        source=stand, label=f"gy_trigger:{event}:{card.name}", kind="trigger"))
+                    self.note_ability(card, "desde el cementerio", controller=pl)
             # Fase D: disparos MIENTRAS la carta está en el cementerio/exilio.
             for zone in (pl.graveyard, pl.exile):
                 for card in list(zone):
@@ -1573,6 +1617,8 @@ class Game:
             if getattr(pm.card, "life_gain_double", False) and not pm.abilities_off():
                 n *= 2
         player.life += n
+        if self._x_listen("any_gain_life"):
+            self.emit("any_gain_life", player=player, amount=n)   # "whenever an opponent gains life"
         _ga = getattr(player, "gained_amt", None)
         player.gained_amt = (self.turn, (_ga[1] if _ga and _ga[0] == self.turn else 0) + n)
         player.gained_turn = self.turn
@@ -1585,6 +1631,11 @@ class Game:
         """
         if n > 0 and getattr(perm.card, "no_counters", False) and not perm.abilities_off():
             return                      # "this creature can't have counters put on it"
+        if n > 0 and perm.is_creature():
+            perm.controller.ctr_put_turn = self.turn   # "if you put a counter on a creature this turn"
+        _cps = (perm.card.triggers or {}).get("ctr_put_self")
+        if _cps is not None and kind == "+1/+1" and n >= 1:
+            self._push_self_trigger(perm, "ctr_put_self", "recibe contadores", amount=n)
         if n > 0:
             for other in perm.controller.battlefield:
                 mod = other.card.counter_modifier
@@ -2002,6 +2053,8 @@ class Game:
         if perm not in ctrl.battlefield:
             return
         ctrl.battlefield.remove(perm)
+        if not perm.is_token:
+            ctrl.descended_turn = self.turn  # descend: una carta de permanente fue a tu cementerio
         _r = (reason or "").lower()
         self.note_departure(perm, "sacrificed" if (any(k in _r for k in self._SAC_REASONS) or "coste" in _r)
                             else getattr(self, "_dep_kind", None) or (
@@ -2034,6 +2087,7 @@ class Game:
             if getattr(self, "_deaths_turn", None) != self.turn:
                 self._deaths_turn, self.deaths_count = self.turn, 0
             self.deaths_count += 1
+            ctrl.cr_died_turn = self.turn      # "if a creature died under your control this turn"
             self.death_turn = self.turn       # morbid: murió una criatura este turno
             self.emit("death", player=ctrl, perm=perm)
             # "when enchanted creature dies, …" de las auras anexadas (mirando atrás)
@@ -2149,6 +2203,11 @@ class Game:
         madness; si no lo hace, va al cementerio. El humano elige; los bots la
         lanzan si pueden pagarla."""
         card._discarded_turn = self.turn
+        ctrl.discarded_turn = self.turn
+        if self._x_listen("any_discarded"):
+            self.emit("any_discarded", player=ctrl, card=card)   # "whenever a player discards a card"
+        if card.types & {"creature", "artifact", "enchantment", "land", "planeswalker", "battle"}:
+            ctrl.descended_turn = self.turn
         self.emit("discarded", player=ctrl, card=card)    # "whenever you discard a card"
         self.emit("opp_discarded", player=ctrl, card=card)
         mad = getattr(card, "madness", None)
@@ -2781,6 +2840,11 @@ class Game:
                 and getattr(card, "modes", None)
                 and len(set(chosen_modes)) >= len(card.modes)):
             pay_cost = Cost(generic=pay_cost.generic + ent, pips=pay_cost.pips)
+        # Strive: "cuesta {X} más por cada objetivo más allá del primero"
+        _sv = getattr(card, "strive_cost", None)
+        if _sv is not None and pay_cost is not None and targets and len(targets) > 1:
+            _ex = len(targets) - 1
+            pay_cost = Cost(generic=pay_cost.generic + _sv.generic * _ex, pips=tuple(pay_cost.pips) + tuple(_sv.pips) * _ex)
         # Kicker: coste adicional OPCIONAL; si se paga, se resuelve el bono "if kicked".
         card._kicked = False
         kick = getattr(card, "_kicker_cost", 0) or 0
@@ -2923,6 +2987,22 @@ class Game:
                 if sum(1 for pm in player.battlefield if self._addcost_kind_ok(pm, _bk, card, player)) \
                         < (add.get("bounce_n") or 1):
                     return False
+            card._beheld = False
+            card._behold_exile = None
+            if add.get("behold"):
+                _bk, _balt, _bopt, _bex = add["behold"]
+                _bh = [c for c in player.hand if c is not card and (
+                    _bk in c.types or any(s.lower() == _bk for s in c.subtypes))]
+                _bb = [pm for pm in player.battlefield if _bk in pm.card.types or pm.has_subtype(_bk)]
+                if _bh or _bb:
+                    card._beheld = True          # "a <tipo> was beheld"
+                    if _bex:
+                        card._behold_exile = _bh[0] if _bh else min(_bb, key=lambda x: _cmc_card(x.card))
+                elif _balt is not None and pay_cost is not None:
+                    pay_cost = Cost(generic=pay_cost.generic + _balt.generic,
+                                    pips=tuple(pay_cost.pips) + tuple(_balt.pips))
+                elif not _bopt:
+                    return False
             if add.get("reveal"):
                 _rk = add["reveal"]
                 if not any(c is not card and (_rk in c.types or any(s.lower() == _rk for s in c.subtypes)
@@ -2959,6 +3039,15 @@ class Game:
         if not player.pay(pay_cost, exclude=excl):
             return False
         card._mana_spent = pay_cost.cmc if pay_cost is not None else 0
+        card._colors_spent = list(getattr(player, "_last_plan_colors", []) or [])
+        _bx = getattr(card, "_behold_exile", None)
+        if _bx is not None:                       # "behold a <tipo> and exile it"
+            card._behold_exile = None
+            if _bx in player.hand:
+                player.hand.remove(_bx)
+                player.exile.append(_bx)
+            elif _bx in player.battlefield:
+                self.exile_permanent(_bx) if hasattr(self, "exile_permanent") else None
         for _v in (getattr(card, "_kick_victims", None) or ()):
             if _v in _v.controller.battlefield:
                 self.to_graveyard(_v, "kicker (sacrificio)")
@@ -4001,6 +4090,10 @@ class Game:
             return
         self.day_night = value
         self.log(f"Ahora es de {'día' if value == 'day' else 'noche'}")
+        for _pl in self.players:
+            for _pm in list(_pl.battlefield):
+                if "daynight" in (_pm.card.triggers or {}):
+                    self._push_self_trigger(_pm, "daynight", "cambia día/noche")
         for pl in self.players:
             for perm in list(pl.battlefield):
                 faces = getattr(perm, "_dfc_faces", None)
@@ -4371,8 +4464,12 @@ class Game:
         if ab.get("pay_life"):
             p.life -= ab["pay_life"]
         p.hand.remove(card)
-        self.log(f"{p.name} descarta {card.name}: {ab.get('label', '')}")
-        self.discard_card(p, card)
+        if ab.get("exile_from_hand"):
+            p.exile.append(card)
+            self.log(f"{p.name} exilia {card.name} de la mano: {ab.get('label', '')}")
+        else:
+            self.log(f"{p.name} descarta {card.name}: {ab.get('label', '')}")
+            self.discard_card(p, card)
         eff = ab.get("effect")
         tg = list(targets or [])
 
@@ -5611,14 +5708,19 @@ class Game:
                     self.log(f"{perm.name} recluta a {h.name} (enlist, +{h.power})")
             # Exert: "podés agotarla al atacar" -> no se endereza en tu próximo
             # enderezar y dispara su bono. Bots y humano la agotan (auto).
-            if getattr(perm.card, "exert_effect", None) is not None and \
+            _xw = [pm for pm in p.battlefield if "you_exert" in (pm.card.triggers or {}) and not pm.abilities_off()]
+            if (getattr(perm.card, "exert_effect", None) is not None or (
+                    getattr(perm.card, "can_exert", False) and _xw)) and \
                     not getattr(perm, "exerted", False):
                 perm.exerted = True
                 self.log(f"{p.name} agota (exert) a {perm.name}")
-                ex = perm.card.exert_effect
-                self._run_fx(f"exert {perm.name}",
-                             lambda _e=ex, _pm=perm: self._run_trigger(
-                                 lambda g, pm, **kw: _e(g, p, pm), _pm, {}, subject=_pm))
+                ex = getattr(perm.card, "exert_effect", None)
+                if ex is not None:
+                    self._run_fx(f"exert {perm.name}",
+                                 lambda _e=ex, _pm=perm: self._run_trigger(
+                                     lambda g, pm, **kw: _e(g, p, pm), _pm, {}, subject=_pm))
+                for _w in _xw:                   # "whenever you exert a creature, …"
+                    self._push_self_trigger(_w, "you_exert", "agota una criatura", subject=perm)
             # registrar el ataque para que se vea en el relato/resumen (antes no
             # quedaba nada, y los ataques a un planeswalker parecían daño de la nada)
             if isinstance(defender, Player):
@@ -5679,6 +5781,10 @@ class Game:
                 lone.temp_pt[0] += bonus
                 lone.temp_pt[1] += bonus
                 self.log(f"Exaltación: {lone.name} recibe +{bonus}/+{bonus}")
+        if len(declared) == 1:                    # "whenever a creature you control attacks alone"
+            for _w in p.battlefield:
+                if "attacks_alone" in (_w.card.triggers or {}):
+                    self._push_self_trigger(_w, "attacks_alone", "ataca sola", subject=declared[0])
         if declared:
             self._combat_declare_triggers(p, declared)
         self.resolve_stack()
@@ -5811,7 +5917,8 @@ class Game:
             if blocker.cant_block:              # "can't block" (propia o este turno)
                 continue
             # evasión: un atacante con volar solo puede bloquearse con volar o alcance
-            if attacker.has("flying") and not (blocker.has("flying") or blocker.has("reach")):
+            if attacker.has("flying") and not (blocker.has("flying") or blocker.has("reach") or (
+                    getattr(blocker.card, "reach_vs", None) and attacker.has_subtype(blocker.card.reach_vs))):
                 continue
             if not self._can_block_evasion(attacker, blocker):
                 continue
@@ -5824,7 +5931,7 @@ class Game:
     def _can_block_evasion(self, attacker, blocker) -> bool:
         """Reglas de evasión no-vuelo: fear, intimidate, shadow, horsemanship, skulk."""
         b_art = "artifact" in blocker.card.types
-        if attacker.has("shadow") and not blocker.has("shadow"):
+        if attacker.has("shadow") and not blocker.has("shadow") and not getattr(blocker.card, "block_shadow", False):
             return False
         if blocker.has("shadow") and not attacker.has("shadow"):
             return False   # las de sombra solo bloquean a las de sombra
@@ -5851,6 +5958,12 @@ class Game:
         ue = getattr(attacker.card, "unblock_except", None)
         if ue and not any(blocker.has(k) for k in ue):
             return False             # "can't be blocked except by creatures with flying"
+        _up = getattr(attacker.card, "unblock_except_pred", None)
+        if _up is not None and not attacker.abilities_off() and not _up(blocker):
+            return False             # "except by artifact creatures and/or white creatures"
+        _un = getattr(attacker.card, "unblock_by_pred", None)
+        if _un is not None and not attacker.abilities_off() and _un(blocker):
+            return False             # "can't be blocked by creatures with toughness 3 or greater"
         uk = getattr(attacker.card, "unblock_by_kind", None)
         if uk:
             _kind, _v = uk
@@ -5936,11 +6049,16 @@ class Game:
             if a.blocked_by:
                 self._push_self_trigger(a, "becomes_blocked", "es bloqueada",
                                         subject=a.blocked_by[0])
+                for _w in a.controller.battlefield:      # "whenever a creature you control becomes blocked"
+                    if "your_cr_blocked" in (_w.card.triggers or {}):
+                        self._push_self_trigger(_w, "your_cr_blocked", "tu criatura es bloqueada", subject=a)
                 if "blocked_by_each" in (a.card.triggers or {}):
                     for b in a.blocked_by:
                         self._push_self_trigger(a, "blocked_by_each", "es bloqueada", subject=b)
                 for b in a.blocked_by:
                     self._push_self_trigger(b, "blocks", "bloquea", subject=a)
+                    if self._x_listen("any_blocks"):
+                        self.emit("any_blocks", perm=b, attacker=a)   # "whenever a creature blocks"
             elif a.attacking is not None:
                 # "whenever ~ attacks and isn't blocked, …"
                 self._push_self_trigger(a, "unblocked", "no es bloqueada", defender=a.attacking)

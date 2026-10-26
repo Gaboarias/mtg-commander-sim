@@ -107,7 +107,9 @@ def _is_keyword_line(line):
     return bool(words) and all(re.sub(r"\s+\{.*|\s+\d+$", "", w) in kws for w in words)
 
 
-_MANA_LINE = re.compile(r"^\{T\}: Add ((?:\{[WUBRGC]\})+|one mana of any color)\.?$", re.I)
+# también los filtros "{1}, {T}: Add {U}{B}" / "{W/U}, {T}: Add {W}{W}": el motor los
+# modela como fuente de esos colores (mismo maná neto)
+_MANA_LINE = re.compile(r"^(?:\{[^}]+\},\s*)?\{T\}: Add ((?:\{[WUBRGC]\})+|one mana of any color)\.?$", re.I)
 
 
 def _mana_line_ok(line, row):
@@ -140,6 +142,7 @@ _KW_WIRED = {
         lambda c: getattr(c, "daybound", False),
     "bargain": lambda c: getattr(c, "bargain", False),
     "spree": lambda c: bool(getattr(c, "spree_costs", None)),
+    "read ahead": lambda c: getattr(c, "read_ahead", False),
     "haunt": lambda c: getattr(c, "haunt", False),
     "storm": lambda c: "storm" in (getattr(c, "tags", None) or ()),
     "this creature enters prepared.": lambda c: any(

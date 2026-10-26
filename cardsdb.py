@@ -1739,11 +1739,15 @@ def _parse_activated_core0(oracle: str, name: str = ""):
     name_key = re.sub(r"[^a-z]", "", (name or "").lower())
     out = []
     _fh = [0, False]                   # (inicio de la línea previa en out, ¿desde la mano?)
+    _fh_exile = [False]                # el coste de la mano es EXILIARLA (no descartarla)
     _xc = [[]]                         # costes extra de la línea previa (batch 21)
     for raw in (oracle or "").split("\n") + [""]:
         if _fh[1]:
             for _ab in out[_fh[0]:]:
                 _ab["from_hand"] = True
+                if _fh_exile[0]:
+                    _ab["exile_from_hand"] = True
+        _fh_exile[0] = False
         if _xc[0]:
             for _ab in out[_fh[0]:]:
                 _ab["extra_cost"] = list(_xc[0])
@@ -1755,6 +1759,29 @@ def _parse_activated_core0(oracle: str, name: str = ""):
         if not m:
             continue
         costtxt, body = m.group(1), m.group(2)
+        # tierras de almacenamiento: "{X}, Remove any number of storage counters from this
+        # land: Add {B} for each storage counter removed this way" -> maná flotante
+        mst = re.fullmatch(r"(?i)((?:\{[^}]+\},?\s*)*)remove any number of ([a-z]+) counters from (?:this \w+|~)",
+                           costtxt.strip())
+        mstb = re.fullmatch(r"(?i)add (\{[wubrgc]\})(?: or \{[wubrgc]\})* for each (?:storage|[a-z]+) counter removed "
+                            r"this way\.?", body.strip())
+        if mst and mstb:
+            _ssy = re.findall(r"\{([^}]+)\}", mst.group(1))
+            _stap = any(x.upper() == "T" for x in _ssy)
+            _smana = "".join("{%s}" % x for x in _ssy if x.upper() != "T")
+
+            def _st_eff(g, c, perm, tg, _k=mst.group(2).lower()):
+                n = perm.counters.get(_k, 0) if perm is not None else 0
+                if n <= 0:
+                    return
+                perm.counters[_k] = 0
+                c.mana_pool += n
+                g.log(f"{c.name} quita {n} contador(es) de {_k} y agrega {n} maná")
+            out.append({"cost": parse_cost(mana_cost_to_str(_smana)) if _smana else parse_cost("0"),
+                        "tap": _stap, "sacrifice_self": False, "sacrifice_other": None, "pay_life": 0,
+                        "discard": 0, "label": _short_label(body), "effect": _st_eff,
+                        "target_spec": None, "target_count": 1, "is_copy_ability": False, "mana_ab": True})
+            continue
         # el coste puede tener varias cláusulas separadas por comas: maná ({..}),
         # girar ({T}) y costes adicionales que sí modelamos (sacrificar esta misma
         # permanente, sacrificar OTRA permanente, pagar vida, descartar cartas).
@@ -1775,6 +1802,12 @@ def _parse_activated_core0(oracle: str, name: str = ""):
             if not rest:
                 continue
             key = re.sub(r"[^a-z]", "", rest)
+            if rest in ("exile this card from your hand", "exile ~ from your hand") or (
+                    name_key and key == "exile" + name_key + "fromyourhand"):
+                from_hand = True                 # Elvish Spirit Guide / Simian Spirit Guide
+                _fh[1] = True
+                _fh_exile[0] = True
+                continue
             if key.startswith("exile"):          # "Exile this/~/<nombre>" como coste
                 tail = key[len("exile"):]
                 if tail.startswith(("this", "it", "~")) or (name_key and tail == name_key):
@@ -1889,7 +1922,10 @@ def _parse_activated_core0(oracle: str, name: str = ""):
         is_add_mana = bool(re.search(r"\badd\b.*\bmana\b", body, re.I)) or bool(
             re.match(r"add(\s*\{[wubrgc0-9/x]+\})+\s*\.?$", body.strip(), re.I))
         if is_add_mana:
-            if not (sac_other or pay_life or discard):
+            # sin {T}: sacrificarse / exiliarse de la mano / girar otras / quitar
+            # contadores / costes extra -> maná flotante (produces no lo modela)
+            _nontap = not tap
+            if not (sac_other or pay_life or discard or _nontap):
                 continue                       # coste trivial -> produces la cubre
             amt = len(re.findall(r"\{[wubrgc]\}", body, re.I))
             if not amt:
@@ -1903,7 +1939,8 @@ def _parse_activated_core0(oracle: str, name: str = ""):
                         "discard": discard, "label": _short_label(body),
                         "effect": (lambda g, c, perm, tg, _e=eff: _e(g, c, tg)),
                         "target_spec": None, "target_count": 1,
-                        "is_copy_ability": False})
+                        "is_copy_ability": False,
+                        "mana_ab": bool(_nontap and not (sac_other or pay_life or discard))})
             continue
         # habilidad {X}: "{X}: ~ deals X damage to <objetivo>" (Crypt Rats, Fireball,
         # Comet Storm, Blaze…). El valor de X lo elige quien activa; el motor lo pasa
@@ -2337,12 +2374,39 @@ def _event_trigger_effect_impl(oracle: str):
     # muerte de criatura: distingue "a creature" (cualquiera) de "a creature you
     # control" (solo las tuyas) para no sobre-dispararse con muertes rivales.
     md = None
+    _dfilt = None
     for _ln in _ability_lines(oracle):
+        _ln = re.sub(r"(?i)(creatures?(?: you control)?) (?:is|are) put into (?:your|a) graveyard from the battlefield",
+                     r"\1 dies", _ln)
+        # filtro de la criatura que muere: "with a +1/+1 counter on it" / "with toughness N
+        # or greater" / "with power N or less" (se quita del texto y se evalúa aparte)
+        _mfd = re.search(r"(?i) with (a \+1/\+1 counter on it|a -1/-1 counter on it|one or more counters on it|"
+                         r"toughness (\d+) or greater|power (\d+) or greater|power (\d+) or less|flying)(?= dies)", _ln)
+        if _mfd:
+            _fw = _mfd.group(1).lower()
+            if "+1/+1" in _fw:
+                _dfilt = lambda sj: sj.counters.get("+1/+1", 0) > 0
+            elif "-1/-1" in _fw:
+                _dfilt = lambda sj: sj.counters.get("-1/-1", 0) > 0
+            elif "counters" in _fw:
+                _dfilt = lambda sj: sum(sj.counters.values()) > 0
+            elif _mfd.group(2):
+                _dfilt = lambda sj, _n=int(_mfd.group(2)): sj.toughness >= _n
+            elif _mfd.group(3):
+                _dfilt = lambda sj, _n=int(_mfd.group(3)): sj.power >= _n
+            elif _mfd.group(4):
+                _dfilt = lambda sj, _n=int(_mfd.group(4)): sj.power <= _n
+            else:
+                _dfilt = lambda sj: sj.has("flying")
+            _ln = _ln[:_mfd.start()] + _ln[_mfd.end():]
+        _ln = re.sub(r"(?i)(nontoken creature) (?:is|are) put into your graveyard from the battlefield",
+                     r"\1 you control dies", _ln)
         md = re.search(r"when(?:ever)? (this creature or |~ or |[\w,' -]+? or (?=another))?(a|an|another) (nontoken )?"
                        r"(creature|(?!creature)[a-z]+)( you control| an opponent controls| your opponents control| "
                        r"you don't control)? dies,?\s*(.{0,400})", _ln, re.I)
-        if md and md.group(4).lower() != "creature" and not re.search(r"another", md.group(2), re.I):
-            md = None                        # "a <subtipo> dies": solo con "another <subtipo>"
+        if md and md.group(4).lower() != "creature" and not re.search(r"another", md.group(2), re.I) \
+                and (md.group(5) or "").strip().lower() != "you control":
+            md = None                        # "a <subtipo> dies": solo con "another" o "you control"
         if md:
             break
     if md:
@@ -2361,7 +2425,7 @@ def _event_trigger_effect_impl(oracle: str):
             self_counts = bool(md.group(1)) or md.group(2).lower() in ("a", "an")
 
             def cb_death(game, perm, player=None, self_death=False, subject=None,
-                         _e=eff, _y=yours, _th=theirs, _nt=nontoken, _sc=self_counts, _sd=_sub_d, **_kw):
+                         _e=eff, _y=yours, _th=theirs, _nt=nontoken, _sc=self_counts, _sd=_sub_d, _df=_dfilt, **_kw):
                 if self_death and not _sc:
                     return                       # "another": no cuenta su propia muerte
                 if _y and player is not None and player is not perm.controller:
@@ -2372,6 +2436,8 @@ def _event_trigger_effect_impl(oracle: str):
                     return                       # "nontoken": una ficha no cuenta
                 if _sd != "creature" and (subject is None or not subject.has_subtype(_sd)):
                     return                       # "another Elemental you control dies"
+                if _df is not None and (subject is None or not _df(subject)):
+                    return                       # "with a +1/+1 counter on it" / "with toughness N…"
                 _prev_sj = getattr(game, "_trigger_subject", None)
                 if subject is not None:
                     game._trigger_subject = subject      # "it" = la criatura que murió
@@ -2691,7 +2757,7 @@ def _event_trigger_effect_impl(oracle: str):
     # "another" se calculaban sobre el oráculo entero
     me = None
     for _ln in _ability_lines(oracle):
-        me = re.search(r"whenever (?:(?:this creature|~) or )?(?:one or more|a|an|another) (?:nontoken )?creatures?"
+        me = re.search(r"when(?:ever)? (?:(?:this creature|~) or )?(?:one or more|a|an|another) (?:nontoken )?creatures?"
                        r"(?: you control)?(?: with mana value (\d+) or less)?"
                        r"[^,]*?enters?(?: the battlefield)?[^,]*,\s*(.{0,400})", _ln, re.I)
         if me:
@@ -2791,6 +2857,11 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
 
     for ln in _ability_lines(oracle):
         l = ln.strip()
+        # "When this creature blocks / When another creature enters / When you cast …":
+        # mismo disparo que "Whenever" (salvo entrar/morir/dejar el campo de sí misma)
+        if re.match(r"(?i)when (?!ever)", l) and not re.match(
+                r"(?i)when (?:~|this \w+|" + "|".join(re.escape(n) for n in names if n) + r") (?:enters|dies|leaves|is put)", l):
+            l = "Whenever " + l[5:]
         # --- entra un permanente de un tipo / subtipo
         m = re.match(r"(?i)when(?:ever)? (?:(this creature|~|" + "|".join(re.escape(n) for n in names if n)
                      + r") or )?(a|an|another|one or more) (nontoken )?(artifact|enchantment|"
@@ -2866,7 +2937,7 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
             ("main2", r"at the beginning of (?:your second main phase|your postcombat main phase|each of "
              r"your postcombat main phases), (?:if " + me_re + r" is tapped, )?(.+)$"),
             ("scry", r"whenever you scry,\s*(.+)$"),
-            ("you_attack", r"whenever you attack,\s*(.+)$"),
+            ("you_attack", r"whenever you attack(?: a player)?,\s*(.+)$"),
             ("each_combat", r"at the beginning of each combat,\s*(.+)$"),
             ("main1", r"at the beginning of (?:your )?(?:first|precombat) main phase,\s*(.+)$"),
             ("discarded", r"whenever you (?:cycle or )?discard (?:a|one or more) cards?"
@@ -2887,6 +2958,15 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
             ("ench_attacks_or_blocks", r"whenever enchanted creature attacks or blocks,\s*(.+)$"),
             ("unblocked", r"whenever " + me_re + r" attacks and isn't blocked,\s*(.+)$"),
             ("attacks_you", r"whenever a creature attacks you(?: or a planeswalker you control)?,\s*(.+)$"),
+            ("you_exert", r"whenever you exert (?:a|one or more) creatures?,\s*(.+)$"),
+            ("expend4", r"whenever you expend 4,\s*(.+)$"),
+            ("expend8", r"whenever you expend 8,\s*(.+)$"),
+            ("ctr_put_self", r"whenever (?:one|two|three|\d+) or more \+1/\+1 counters are put on " + me_any + r",\s*(.+)$"),
+            ("attacks_alone", r"whenever a creature you control attacks alone,\s*(.+)$"),
+            ("your_cr_blocked", r"whenever a creature you control becomes blocked,\s*(.+)$"),
+            ("daynight", r"whenever day becomes night or night becomes day,\s*(.+)$"),
+            ("scry_or_surveil", r"whenever you scry or surveil,\s*(.+)$"),
+            ("ench_dies_eq", r"whenever equipped creature dies,\s*(.+)$"),
             ("opp_loses_life", r"whenever an opponent loses life(?: for the first time each turn)?,\s*(.+)$"),
             ("player_loses_life", r"whenever a player loses life(?: for the first time each turn)?,\s*(.+)$"),
             ("you_lose_life", r"whenever you lose life(?: for the first time each turn)?,\s*(.+)$"),
@@ -2994,6 +3074,12 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
                     out.setdefault("blocks", cb_bf)
                 if "becomes blocked" in _how:
                     out["blocked_by_each"] = cb_bf
+        if "scry_or_surveil" in out:
+            _ss = out.pop("scry_or_surveil")
+            out.setdefault("scry", _ss)
+            out.setdefault("surveil", _ss)
+        if "ench_dies_eq" in out:
+            out.setdefault("enchanted_dies", out.pop("ench_dies_eq"))
         if "any_cast_offturn" in out:
             _ao = out.pop("any_cast_offturn")
             out["__x_any_cast"] = _ao
@@ -3277,8 +3363,47 @@ def _misc_trigger_effects(oracle: str, name: str = ""):
                 return (sj is not None and getattr(sj, "_dmg_by_turn", None) == g.turn
                         and id(pm) in getattr(sj, "_dmg_by", ()))
             _xs.append(("death", _f_dby, mx.group(1)))
+        # ── batch 23: cabezas globales nuevas ──
+        mx = re.match(r"whenever a (creature|source|permanent)( an opponent controls| you control)? deals (combat )?"
+                      r"damage to you,\s*(.+)$", _ll)
+        if mx:
+            def _f_dmg(g, pm, kw, _k=mx.group(1), _w=(mx.group(2) or "").strip(), _c=bool(mx.group(3))):
+                src, tgt = kw.get("source"), kw.get("target")
+                if tgt is not pm.controller or (_c and not kw.get("combat")):
+                    return False
+                if _k == "creature" and not (hasattr(src, "is_creature") and src.is_creature()):
+                    return False
+                sc = getattr(src, "controller", None)
+                if (_w == "an opponent controls" and (sc is None or sc is pm.controller)) or \
+                        (_w == "you control" and sc is not pm.controller):
+                    return False
+                if hasattr(src, "card"):
+                    g._trigger_subject = src         # "that creature" = la fuente del daño
+                return True
+            _xs.append(("damage", _f_dmg, mx.group(4).replace("it deals", "that creature deals")))
+        mx = re.match(r"whenever a creature blocks(?: this turn)?,\s*(.+)$", _ll)
+        if mx:
+            _xs.append(("any_blocks", lambda g, pm, kw: True, mx.group(1)))
+        mx = re.match(r"whenever a player discards a card,\s*(.+)$", _ll)
+        if mx:
+            _xs.append(("any_discarded", lambda g, pm, kw: True, mx.group(1)))
+        mx = re.match(r"whenever an opponent gains life,\s*(.+)$", _ll)
+        if mx:
+            _xs.append(("any_gain_life", lambda g, pm, kw: kw.get("player") is not pm.controller, mx.group(1)))
+        mx = re.match(r"whenever (a player|an opponent) casts their (second|third) spell each turn,\s*(.+)$", _ll)
+        if mx:
+            _xs.append(("any_cast", (lambda g, pm, kw, _o=mx.group(1) == "an opponent",
+                                     _n=2 if mx.group(2) == "second" else 3:
+                                     getattr(kw.get("caster"), "spells_cast_turn", 0) == _n
+                                     and (not _o or kw.get("caster") is not pm.controller)), mx.group(3)))
         for _ev, _flt, _bd in _xs:
-            _bd = re.sub(r"(?i)^it (gets|gains|deals|has)\b", r"this creature \1", _bd)
+            if _ev not in ("any_blocks", "any_discarded", "any_gain_life", "damage"):
+                _bd = re.sub(r"(?i)^it (gets|gains|deals|has)\b", r"this creature \1", _bd)
+            else:
+                _bd = re.sub(r"(?i)\bdamage to them\b", "damage to that player", _bd)
+                if _ev == "damage":
+                    _bd = re.sub(r"(?i)\bon it\b", "on that creature", _bd)
+                    _bd = re.sub(r"(?i)^(destroy|exile|tap) it\b", r"\1 that creature", _bd)
             _e = _eff(_bd)
             if _e is None:
                 continue
@@ -3745,6 +3870,104 @@ def _cond21(c):
         return lambda g, p: getattr(g, "monarch", None) is p
     if c == "there is no monarch":
         return lambda g, p: getattr(g, "monarch", None) is None
+    m = re.fullmatch(r"(enchanted|equipped) (?:creature|permanent) is (?:an? )?([a-z]+)(?: or ([a-z]+))?", c)
+    if m:
+        def _host_is(g, p, _w=(m.group(2), m.group(3))):
+            host = getattr(_cond_src(g, p), "enchanting", None)
+            if host is None:
+                return False
+            for w in _w:
+                if not w:
+                    continue
+                if w in _COLOR_W and _COLOR_W[w] in _perm_colors(host):
+                    return True
+                if w not in _COLOR_W and (host.has_subtype(w) or w in host.card.types):
+                    return True
+            return False
+        return _host_is
+    if c in ("this equipment is attached to a creature", "~ is attached to a creature", "this aura is attached to a creature"):
+        return lambda g, p: getattr(_cond_src(g, p), "enchanting", None) is not None
+    m = re.fullmatch(r"the top card of your library is an? ([a-z ,]+?) card", c)
+    if m:
+        return lambda g, p, _k=m.group(1): bool(p.library) and (
+            _card_kind_ok(p.library[-1], _k) or p.library[-1].has_subtype(_k) if hasattr(p.library[-1], "has_subtype")
+            else _card_kind_ok(p.library[-1], _k) or _k in {x.lower() for x in p.library[-1].subtypes})
+    if c in ("your opponents control no creatures", "no opponent controls a creature"):
+        return lambda g, p: not any(o.creatures() for o in g.opponents(p) if not o.lost)
+    m = re.fullmatch(r"an opponent has (\w+) or less life", c)
+    if m and (n := _count_word(m.group(1))):
+        return lambda g, p, _n=n: any(o.life <= _n for o in g.opponents(p) if not o.lost)
+    if c == "your life total is greater than your starting life total":
+        return lambda g, p: p.life > getattr(p, "starting_life", 40)
+    m = re.fullmatch(r"(?:~|this creature|this artifact|this permanent) has an? ([a-z+/0-9-]+) counter on (?:it|him|her)", c)
+    if m:
+        return lambda g, p, _k=m.group(1): getattr(_cond_src(g, p), "counters", {}).get(_k, 0) > 0
+    m = re.fullmatch(r"(?:~|this creature|this artifact) has (\w+) or more ([a-z+/0-9±-]+) counters on (?:it|him|her)", c)
+    if m and (n := _count_word(m.group(1))):
+        return lambda g, p, _n=n, _k=m.group(2): getattr(_cond_src(g, p), "counters", {}).get(_k, 0) >= _n
+    if c in ("~ isn't attacking", "this creature isn't attacking"):
+        return lambda g, p: not getattr(_cond_src(g, p), "attacking", None)
+    if c in ("~ is on the battlefield", "this creature is on the battlefield"):
+        return lambda g, p: (lambda s: s is not None and s in s.controller.battlefield)(_cond_src(g, p))
+    if c in ("this artifact is a creature", "~ is a creature"):
+        return lambda g, p: bool(getattr(_cond_src(g, p), "is_creature", lambda: False)())
+    if re.fullmatch(r"(?:an? [a-z]+ was beheld|you beheld an? [a-z]+|you revealed an? [a-z]+ card or (?:controlled|chose) "
+                    r"an? [a-z]+(?: as you cast this spell)?)", c):
+        return lambda g, p: bool(getattr(getattr(g, "_resolving_card", None), "_beheld", False)
+                                 or getattr(getattr(_cond_src(g, p), "card", None), "_beheld", False))
+    if c in ("a creature died under your control this turn", "a creature you controlled died this turn"):
+        return lambda g, p: getattr(p, "cr_died_turn", None) == g.turn
+    if c in ("you descended this turn",):
+        return lambda g, p: getattr(p, "descended_turn", None) == g.turn
+    if c in ("you discarded a card this turn", "you've discarded a card this turn"):
+        return lambda g, p: getattr(p, "discarded_turn", None) == g.turn
+    if c in ("you didn't cast a spell this turn", "you haven't cast a spell this turn", "no spells were cast this turn"):
+        return lambda g, p: not getattr(p, "spells_cast_turn", 0)
+    if c in ("you cast a spell this turn", "you've cast a spell this turn"):
+        return lambda g, p: getattr(p, "spells_cast_turn", 0) >= 1
+    if c in ("you put a counter on a creature this turn",):
+        return lambda g, p: getattr(p, "ctr_put_turn", None) == g.turn
+    if c in ("you lost life this turn", "you've lost life this turn"):
+        return lambda g, p: getattr(p, "life_lost_turn", None) == g.turn
+    m = re.fullmatch(r"you(?:'ve)? lost (\w+) or more life this turn", c)
+    if m and (n := _count_word(m.group(1))):
+        return lambda g, p, _n=n: getattr(p, "life_lost_turn", None) == g.turn and getattr(p, "life_lost_amt", 0) >= _n
+    if c == "you gained and lost life this turn":
+        return lambda g, p: getattr(p, "life_lost_turn", None) == g.turn and getattr(p, "gained_turn", None) == g.turn
+    m = re.fullmatch(r"(\{[wubrgc]\})+ was spent to cast (?:it|this spell|~|this creature)", c)
+    if m:
+        need = re.findall(r"\{([wubrgc])\}", c.split(" was ")[0])
+
+        def _spent(g, p, _need=need):
+            src = _cond_src(g, p)
+            card = getattr(src, "card", src)
+            got = list(getattr(card, "_colors_spent", None) or [])
+            for col in _need:
+                if col.upper() in got:
+                    got.remove(col.upper())
+                else:
+                    return False
+            return True
+        return _spent
+    m = re.fullmatch(r"at least (\w+) mana was spent to cast (?:it|this spell|~)", c)
+    if m and (n := _count_word(m.group(1))):
+        return lambda g, p, _n=n: (getattr(getattr(_cond_src(g, p), "card", None), "_mana_spent", 0) or 0) >= _n
+    if c in ("no mana was spent to cast it",):
+        return lambda g, p: not (getattr(getattr(_cond_src(g, p), "card", None), "_mana_spent", 0) or 0)
+    m = re.fullmatch(r"it had (?:(\w+) or more )?(\+1/\+1 |-1/-1 |[a-z]+ )?counters? on it", c)
+    if m and (not m.group(1) or _count_word(m.group(1))):
+        def _had(g, p, _n=_count_word(m.group(1)) if m.group(1) else 1, _k=(m.group(2) or "").strip()):
+            sj = getattr(g, "_trigger_subject", None) or _cond_src(g, p)
+            cs = getattr(sj, "counters", None) or {}
+            return (cs.get(_k, 0) if _k else sum(cs.values())) >= _n
+        return _had
+    if c in ("it's not a token", "it isn't a token", "it was a nontoken creature", "it wasn't a token"):
+        return lambda g, p: not getattr(getattr(g, "_trigger_subject", None) or _cond_src(g, p), "is_token", False)
+    if c in ("~ entered this turn", "this creature entered this turn", "it entered this turn"):
+        return lambda g, p: getattr(_cond_src(g, p), "_etb_turn", None) == g.turn
+    if c in ("it was a creature", "it's a creature"):
+        return lambda g, p: bool(getattr(getattr(g, "_trigger_subject", None) or _cond_src(g, p), "card", None)
+                                 and (getattr(g, "_trigger_subject", None) or _cond_src(g, p)).card.is_creature())
     if c in ("no creatures are on the battlefield", "there are no creatures on the battlefield"):
         return lambda g, p: not any(pm.is_creature() for pl in g.players for pm in pl.battlefield)
     m = re.fullmatch(r"you(?:'ve)? gained (\w+) or more life this turn", c)
@@ -3998,6 +4221,13 @@ def _kind_pred21(phrase):
     """'artifact, creature, or enchantment' / 'creature with flying' / 'snow land' /
     'creature with power 4 or greater' / 'nonland permanent' -> pred(pm) o None."""
     p = re.sub(r"\s+", " ", (phrase or "").lower().strip())
+    mt = re.fullmatch(r"(.+?) with toughness (\d+) or (greater|less)", p)
+    if mt:
+        _b = _kind_pred21(mt.group(1))
+        if _b is None:
+            return None
+        return (lambda pm, _f=_b, _n=int(mt.group(2)), _g=mt.group(3) == "greater":
+                _f(pm) and (pm.toughness >= _n if _g else pm.toughness <= _n))
     mw = re.fullmatch(r"(.+?) with (flying|power (\d+) or greater|power (\d+) or less|mana value (\d+) or less|"
                       r"mana value (\d+) or greater)", p)
     extra = None
@@ -4018,6 +4248,49 @@ def _kind_pred21(phrase):
     for k in parts:
         k = re.sub(r"^(?:a|an) ", "", k)
         if k == "spell":
+            continue
+        mpre = re.fullmatch(r"(legendary|nonlegendary|basic|token|nontoken|white|blue|black|red|green|colorless|"
+                            r"multicolored|attacking|blocking|tapped|untapped|modified|artifact|enchantment|"
+                            r"nonartifact|noncreature) (.+)", k)
+        if mpre and k != "nontoken creature" and (_rest := _kind_pred21(mpre.group(2))) is not None:
+            _w = mpre.group(1)
+
+            def _pre_ok(pm, _w=_w, _r=_rest):
+                if not _r(pm):
+                    return False
+                if _w == "legendary":
+                    return "legendary" in pm.card.supertypes
+                if _w == "nonlegendary":
+                    return "legendary" not in pm.card.supertypes
+                if _w == "basic":
+                    return "basic" in pm.card.supertypes
+                if _w == "token":
+                    return pm.is_token
+                if _w == "nontoken":
+                    return not pm.is_token
+                if _w in _COLOR_W:
+                    return _COLOR_W[_w] in _perm_colors(pm)
+                if _w == "colorless":
+                    return not _perm_colors(pm)
+                if _w == "multicolored":
+                    return len(_perm_colors(pm)) >= 2
+                if _w == "attacking":
+                    return pm.attacking is not None
+                if _w == "blocking":
+                    return bool(getattr(pm, "blocking", None))
+                if _w == "tapped":
+                    return pm.tapped
+                if _w == "untapped":
+                    return not pm.tapped
+                if _w in ("artifact", "enchantment"):
+                    return _w in pm.card.types
+                if _w == "nonartifact":
+                    return "artifact" not in pm.card.types
+                if _w == "noncreature":
+                    return not pm.is_creature()
+                return bool(pm.counters) or any(getattr(x, "enchanting", None) is pm for x in pm.game.all_permanents()) \
+                    if pm.game else bool(pm.counters)
+            preds.append(_pre_ok)
             continue
         if k == "snow land":
             preds.append(lambda pm: pm.card.is_land() and "snow" in pm.card.supertypes)
@@ -5105,6 +5378,7 @@ def _chapter_effect(body: str):
 
 
 _CUR_NAMES: list = []          # pila de nombres de la carta que se está armando
+_CUR_DICE: list = []           # pila de tablas de dado ("1—9 | …") de la carta en armado
 
 
 def _devotion(p, cols):
@@ -5628,7 +5902,17 @@ def _loyalty_effect(text: str):
             _choose_loyalty_targets(game, ctrl, _spec, _n,
                                     lambda tgs: _f(game, ctrl, tgs))
         return eff
-
+    # resto: la capa genérica de efectos (surveil, robar y descartar, fichas raras…)
+    _ga = _effect_any((text or "").strip())
+    if _ga is not None:
+        def eff(game, ctrl, perm, _g=_ga):
+            prev = getattr(game, "_trigger_source", None)
+            game._trigger_source = perm
+            try:
+                _g(game, ctrl, perm)
+            finally:
+                game._trigger_source = prev
+        return eff
     return None
 
 
@@ -6218,6 +6502,142 @@ _CONDITIONAL = re.compile(r"^(?:if|otherwise|unless|then if|instead)\b|\bif you 
 _SELF_REF = r"(?:~|this creature|this permanent|this artifact|this enchantment)"
 
 
+def _self_return_eff(dest):
+    """'return this card from your graveyard to the battlefield / your hand': mueve
+    ESTA carta (la fuente del disparo, aunque esté en el cementerio)."""
+    def eff_self_return(game, ctrl, *a, _d=dest, **kw):
+        src = _src_perm(game, a)
+        card = getattr(src, "card", None) if src is not None else None
+        if card is None:
+            return
+        card = getattr(card, "_real", None) or card
+        owner = next((p for p in game.players if card in p.graveyard), None)
+        if owner is not None:
+            owner.graveyard.remove(card)
+            if _d.startswith("the battlefield"):
+                pm = game.move_to_battlefield(card, owner)
+                if pm is not None and "tapped" in _d:
+                    pm.tapped = True
+                if pm is not None and "attacking" in _d and game.opponents(owner):
+                    pm.attacking = game.opponents(owner)[0]
+                game.log(f"{card.name} vuelve del cementerio al campo")
+            else:
+                owner.hand.append(card)
+                game.log(f"{card.name} vuelve del cementerio a la mano")
+            game.emit("leaves_graveyard", player=owner)
+        elif not _d.startswith("the battlefield") and src in getattr(src.controller, "battlefield", ()):
+            _bounce_pm(game, src)
+    return eff_self_return
+
+
+def _count_any(phrase, src_rel=True):
+    """Cantidad f(game, ctrl) para 'for each <X>' / 'where X is <X>': prueba los
+    contadores existentes y, si no, '<tipo> you control / your opponents control'
+    (con tapped/untapped/other), cartas en mano rival, experiencia, oponentes."""
+    p = re.sub(r"\s+", " ", (phrase or "").lower().strip().rstrip("."))
+    for cand in (p, "the number of " + p, p + "s", "the number of " + p + "s"):
+        try:
+            f = _count21(cand) if src_rel else None
+            f = f or _count_fn(cand)
+        except Exception:  # noqa: BLE001
+            f = None
+        if f is not None:
+            return f
+    if re.fullmatch(r"cards? in (?:your opponents'|each opponent's|an opponent's) hands?", p):
+        return lambda g, c: sum(len(o.hand) for o in g.opponents(c) if not o.lost)
+    if re.fullmatch(r"experience counters? you have", p):
+        return lambda g, c: getattr(c, "experience", 0)
+    if re.fullmatch(r"opponents? you have", p):
+        return lambda g, c: sum(1 for o in g.opponents(c) if not o.lost)
+    m = re.fullmatch(r"(other )?(tapped |untapped )?(.+?) (you control|your opponents control|an opponent controls|"
+                     r"on the battlefield)", p)
+    if m:
+        pred = _kind_pred21(_sing(m.group(3)) if "_sing" in globals() else m.group(3))
+        if pred is None:
+            return None
+        oth, tap, who = bool(m.group(1)), (m.group(2) or "").strip(), m.group(4)
+
+        def _cnt(g, c, _p=pred, _o=oth, _t=tap, _w=who):
+            pls = [c] if _w == "you control" else (g.opponents(c) if "opponent" in _w else g.players)
+            src = _cond_src(g, c)
+            n = 0
+            for pl in pls:
+                for pm in pl.battlefield:
+                    if _o and pm is src:
+                        continue
+                    if _t == "tapped" and not pm.tapped or _t == "untapped" and pm.tapped:
+                        continue
+                    try:
+                        if _p(pm):
+                            n += 1
+                    except Exception:  # noqa: BLE001
+                        pass
+            return n
+        return _cnt
+    return None
+
+
+def _block_kinds_pred(phrase):
+    """'artifact creatures and/or white creatures' / 'walls and/or creatures with flying' /
+    'non-wall creatures' / 'creatures with power 2 or greater' -> pred(blocker) o None."""
+    p = re.sub(r"\s+", " ", (phrase or "").lower().strip())
+    preds = []
+    for part in re.split(r"\s+and/or\s+|,\s*(?:and/or\s+|or\s+)?|\s+or\s+(?!greater|less|more|fewer)", p):
+        part = part.strip()
+        if not part:
+            continue
+        mn = re.fullmatch(r"non-?([a-z]+) creatures?", part)
+        if mn:
+            preds.append(lambda pm, _k=mn.group(1): pm.is_creature() and not (pm.has_subtype(_k) or _k in pm.card.types))
+            continue
+        part = re.sub(r"^(\w+?)s\b", r"\1", part)          # "creatures with…" -> "creature with…"
+        part = re.sub(r" creatures\b", " creature", part)
+        f = _kind_pred21(part)
+        if f is None:
+            return None
+        preds.append(f)
+    if not preds:
+        return None
+    return lambda pm, _ps=tuple(preds): any(f(pm) for f in _ps)
+
+
+def _card_kind_ok(c, k):
+    """'land' / 'creature' / 'nonland' / 'permanent' / 'instant or sorcery' /
+    'artifact, creature, or land' sobre una CARTA (no permanente)."""
+    k = (k or "").strip().lower()
+    if k in ("nonland",):
+        return not c.is_land()
+    if k == "permanent":
+        return bool(c.types & {"creature", "artifact", "enchantment", "land", "planeswalker", "battle"})
+    if k in ("noncreature",):
+        return not c.is_creature()
+    parts = [x.strip() for x in re.split(r",\s*(?:or\s+)?|\s+or\s+|\s+and/or\s+", k) if x.strip()]
+    for x in parts:
+        if x == "land" and c.is_land():
+            return True
+        if x in ("creature", "artifact", "enchantment", "instant", "sorcery", "planeswalker", "battle") and x in c.types:
+            return True
+    return False
+
+
+def _gy_line(l, names):
+    """¿La línea funciona DESDE el cementerio? Devuelve el texto a parsear (sin la
+    cláusula 'if this card is in your graveyard') o None."""
+    nm = "|".join(re.escape(n) for n in names if n)
+    me = r"(?:this card|~|this creature" + ("|" + nm if nm else "") + r")"
+    low = l.strip()
+    if not re.match(r"(?i)(?:when(?:ever)?|at) ", low) and not re.match(r"(?i)[a-z ]+ — (?:when(?:ever)?|at) ", low):
+        return None
+    if re.search(r"(?i)" + me + r" (?:dies|is put into (?:a|your) graveyard)", low.split(",")[0]):
+        return None                       # su propia muerte: lo cubre on_death
+    t2 = re.sub(r"(?i),?\s*if " + me + r" is in your graveyard,", ",", low, count=1)
+    t2 = re.sub(r"(?i)\s+while " + me + r" is in your graveyard", "", t2, count=1)
+    if t2 != low or re.search(r"(?i)return " + me + r" from your graveyard", low):
+        t2 = re.sub(r"(?i)return " + me + r" from your graveyard to", "return this card to", t2)
+        return re.sub(r"\s+,", ",", t2)
+    return None
+
+
 def _src_perm(game, a):
     """Permanente FUENTE del efecto: el que llega como argumento (ETB, activada) o
     el que dejó el motor al resolver un disparo/habilidad."""
@@ -6546,6 +6966,100 @@ def _atomic_effect(text):
         pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield if pred(pm) and game.can_target(ctrl, pm)]
         return max(pool, key=key) if pool else None
 
+    m = re.fullmatch(r"put (a|an|one|two|three|\w+) (\+1/\+1|-1/-1|[a-z]+) counters? on (?:that creature|that permanent)", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff_ctr_that(game, ctrl, *a, _n=n, _k=m.group(2), **kw):
+            sj = getattr(game, "_trigger_subject", None)
+            if sj is not None and hasattr(sj, "counters") and sj in sj.controller.battlefield:
+                game.add_counters(sj, _k, _n)
+        return eff_ctr_that
+    # ── batch 23: empower Jace N (ficha de planeswalker Jace) ──
+    m = re.fullmatch(r"empower jace (\w+)", t)
+    if m and (n := _count_word(m.group(1))):
+        def eff_empower(game, ctrl, *a, _n=n, **kw):
+            jt = next((pm for pm in ctrl.battlefield if pm.is_token and "planeswalker" in pm.card.types
+                       and pm.has_subtype("jace")), None)
+            if jt is None:
+                tok = build_card_from_data({"name": "Jace", "type_line": "Legendary Planeswalker — Jace",
+                                            "mana_cost": "", "oracle_text": "−1: Surveil 1.\n−3: Draw a card.",
+                                            "loyalty": "0", "colors": ["U"]})
+                jt = game.move_to_battlefield(tok, ctrl, is_token=True)
+                if jt is None:
+                    return
+                jt.counters["loyalty"] = 0
+            jt.counters["loyalty"] = jt.counters.get("loyalty", 0) + _n
+            game.log(f"{ctrl.name} potencia a Jace (+{_n} lealtad)")
+        return eff_empower
+    # ── batch 23: tirar un dado contra la tabla de la carta ("1—9 | …") ──
+    m = re.fullmatch(r"roll (?:a|an) d(\d+)", t)
+    if m:
+        _tab = _CUR_DICE[-1] if _CUR_DICE else ()
+
+        def eff_roll(game, ctrl, *a, _n=int(m.group(1)), _t=_tab, **kw):
+            r = game.rng.randint(1, _n)
+            ctrl.last_roll = r
+            game.log(f"{ctrl.name} tira un d{_n}: sale {r}")
+            for lo, hi, e in _t:
+                if lo <= r <= hi:
+                    if e is not None:
+                        e(game, ctrl, *a)
+                    break
+        return eff_roll
+    # ── batch 23: mirar/revelar el tope y actuar según el tipo ──
+    _t23 = re.sub(r"^(defending player|that player|target player) (reveals|exiles|looks at) the top card of their library",
+                  r"\2 the top card of \1's library", t)
+    m = re.fullmatch(r"(?:you may )?(look at|reveal|exile)s? the top card of (your|their|defending player's|that player's|"
+                     r"target player's) library\. (?:you may cast (?:it|that card) without paying its mana cost if it's an? "
+                     r"([a-z, ]+?) (?:card|spell)|if it's an? ([a-z, ]+?) card(?: that shares [a-z ]+)?, (?:you may |the player "
+                     r"|that player |they )?(put (?:it|the card|that card) (?:onto the battlefield(?: tapped)?|into (?:your|their|"
+                     r"his or her) (?:hand|graveyard))|puts? it (?:onto the battlefield|into (?:their|your) hand)|cast it without "
+                     r"paying its mana cost|reveal it and put it into your hand))(?:\. otherwise, (?:put it|the player puts it|"
+                     r"they put it) (into (?:your|their) graveyard|on the bottom of (?:your|their) library|into (?:your|their) hand))?",_t23)
+    if m:
+        def eff_top_kind(game, ctrl, *a, _how=m.group(1), _who=m.group(2), _k=(m.group(3) or m.group(4)),
+                         _do=(m.group(5) or "cast it"), _else=m.group(6), **kw):
+            pl = ctrl if _who == "your" else (_that_player(game, ctrl) or next(
+                (o for o in game.opponents(ctrl) if not o.lost), None))
+            if pl is None or not pl.library:
+                return
+            c = pl.library[-1]
+            game.log(f"{pl.name} revela {c.name} del tope")
+            ok = _card_kind_ok(c, _k)
+            if ok:
+                pl.library.pop()
+                if "battlefield" in _do:
+                    pm = game.move_to_battlefield(c, pl)
+                    if pm is not None and "tapped" in _do:
+                        pm.tapped = True
+                elif "graveyard" in _do:
+                    pl.graveyard.append(c)
+                elif "cast" in _do:
+                    if c.cost is not None and not c.is_land():
+                        pl.hand.append(c)
+                        orig = c.cost
+                        c.cost = Cost(generic=0, pips=())
+                        try:
+                            if not game.cast(pl, c) and c in pl.hand:
+                                pl.hand.remove(c)
+                                (pl.exile if _how == "exile" else pl.library).append(c)
+                        finally:
+                            c.cost = orig
+                    else:
+                        (pl.exile if _how == "exile" else pl.library).append(c)
+                else:
+                    pl.hand.append(c)
+            elif _else:
+                pl.library.pop()
+                if "graveyard" in _else:
+                    pl.graveyard.append(c)
+                elif "bottom" in _else:
+                    pl.library.insert(0, c)
+                else:
+                    pl.hand.append(c)
+            elif _how == "exile":
+                pl.library.pop()
+                pl.exile.append(c)
+        return eff_top_kind
     # ── batch 20: long tail de efectos atómicos ──
     m = re.fullmatch(r"put target (.+?)(?: an opponent controls| you don't control)? on (top|the bottom) of its owner's library", t)
     if m and (_kp := _kind_pred21(m.group(1))) is not None and m.group(1) != "creature":
@@ -9874,26 +10388,39 @@ def _atomic_effect(text):
             game.log(f"{ctrl.name} exilia {min(_n, len(pick))} carta(s) del cementerio de {o.name}")
         return eff_gy_hate
     # ── batch 7: daño dividido ("deals N damage divided as you choose among …") ──
-    m = re.fullmatch(r"(?:[\w,' -]+?) deals (\w+) damage divided (?:as you choose |evenly )?among "
-                     r"(any number of targets|any number of target creatures(?: and/or "
-                     r"planeswalkers)?|one or two targets|one, two, or three targets|"
-                     r"one or two target creatures(?: and/or planeswalkers)?|up to (\w+) targets|"
-                     r"(\w+) targets|any number of target creatures your opponents control)", t)
-    if m and (n := _count_word(m.group(1))):
-        who = m.group(2)
-        cr_only = "creature" in who
-        cap = (99 if "any number" in who else 2 if "one or two" in who else
-               3 if "one, two, or three" in who else
+    m = re.fullmatch(r"(?:[\w,'~ -]+?) deals (\w+) damage divided (?:as you choose |evenly(?:, rounded down,)? )?among "
+                     r"(any number of|one or two|one, two, or three|up to (\w+)|(\w+)) (targets|target ([a-z ,/-]+?))"
+                     r"(?: your opponents control| an opponent controls)?", t)
+    if m and (m.group(1) == "x" or _count_word(m.group(1))):
+        who = m.group(6) or ""
+        cr_only = m.group(5) != "targets"
+        cap = (99 if m.group(2) == "any number of" else 2 if m.group(2) == "one or two" else
+               3 if m.group(2) == "one, two, or three" else
                (_count_word(m.group(3) or m.group(4) or "") or 99))
 
-        def eff_divided(game, ctrl, *a, _n=n, _c=cr_only, _cap=cap, **kw):
+        def _ok(pm, _w=who):
+            if "attacking or blocking" in _w:
+                if not (pm.attacking or getattr(pm, "blocking", None)):
+                    return False
+            elif "attacking" in _w and not pm.attacking:
+                return False
+            if "without flying" in _w and pm.has("flying"):
+                return False
+            if "with flying" in _w and "without" not in _w and not pm.has("flying"):
+                return False
+            return pm.is_creature() or ("planeswalker" in _w and "planeswalker" in pm.card.types)
+
+        def eff_divided(game, ctrl, *a, _n=_count_word(m.group(1)) if m.group(1) != "x" else None,
+                        _c=cr_only, _cap=cap, **kw):
+            n_ = _n if _n is not None else max(0, int(getattr(game, "spell_x", 0) or 0))
             src = getattr(game, "_trigger_source", None)
-            left, hits = _n, 0
-            pool = sorted([pm for o in game.opponents(ctrl) for pm in o.creatures()
-                           if game.can_target(ctrl, pm)],
+            left, hits = n_, 0
+            pool = sorted([pm for o in game.opponents(ctrl) for pm in o.battlefield
+                           if _ok(pm) and game.can_target(ctrl, pm)],
                           key=lambda x: (x.power + x.toughness), reverse=True)
             for pm in pool:                      # matar lo más grande que alcance
-                need = max(1, pm.toughness - pm.damage)
+                need = max(1, pm.toughness - pm.damage) if pm.is_creature() else \
+                    max(1, pm.counters.get("loyalty", 0))
                 if pm.has("indestructible") or need > left or hits >= _cap:
                     continue
                 game.deal_damage(src, pm, need)
@@ -9908,7 +10435,7 @@ def _atomic_effect(text):
                     alive = [pm for pm in pool if pm in pm.controller.battlefield]
                     if alive:
                         game.deal_damage(src, alive[0], left)
-            game.log(f"{ctrl.name} reparte {_n} de daño")
+            game.log(f"{ctrl.name} reparte {n_} de daño")
             game.sba()
         return eff_divided
     # ── batch 6: debuffs / pumps en masa y dirigidos, top of library ──
@@ -10757,6 +11284,11 @@ def _generic_amount_single_core(oracle: str):
     if _amt_depth > 6:
         return None
     t = re.sub(r"\s+", " ", (oracle or "").lower())
+    _msr = re.fullmatch(r"\s*(?:you may )?return (this card|~|it|this creature|this enchantment|this artifact|"
+                        r"this permanent) (from your graveyard )?to (the battlefield(?: tapped)?(?: and attacking)?|"
+                        r"your hand|its owner's hand)\.?\s*", t)
+    if _msr and (_msr.group(2) or _msr.group(1) == "this card"):
+        return _self_return_eff(_msr.group(3))
 
     # ficha COPIA de una criatura/permanente (ETB, disparos, hechizos)
     _cs = _copy_token_spec(oracle)
@@ -12210,10 +12742,12 @@ def build_card_from_data(data: dict) -> Card:
     _build_depth += 1
     try:
         _n_before = len(_CUR_NAMES)
+        _d_before = len(_CUR_DICE)
         try:
             c = _build_card_from_data_impl(data)
         finally:
             del _CUR_NAMES[_n_before:]
+            del _CUR_DICE[_d_before:]
         # habilidades con coste "discard this card" (Channel…): se activan DESDE LA
         # MANO, no desde el campo (antes descartaban otra carta al azar en el campo)
         abs_ = tuple(c.activated_abilities or ())
@@ -12454,6 +12988,23 @@ def _build_card_from_data_impl(data: dict) -> Card:
             data["oracle_text"])
     # nombres propios de la carta en construcción: _effect_any los lee como "~"
     _CUR_NAMES.append(_self_names(data.get("name") or ""))
+    # tablas de dado: "1—9 | efecto" / "20 | efecto" (las usa "roll a d20")
+    _drows, _dkeep = [], []
+    for _dl in (data.get("oracle_text") or "").split("\n"):
+        _md = re.match(r"\s*(\d+)(?:\s*[—–-]\s*(\d+))?\s*\|\s*(.+)$", _dl)
+        if _md:
+            _lo = int(_md.group(1))
+            _hi = int(_md.group(2)) if _md.group(2) else _lo
+            _drows.append((_lo, _hi, _md.group(3).strip()))
+        else:
+            _dkeep.append(_dl)
+    if _drows:
+        _dtab = tuple((lo, hi, _effect_any(txt)) for lo, hi, txt in _drows)
+        _CUR_DICE.append(_dtab)
+        data = dict(data, oracle_text="\n".join(_dkeep))
+        card_dice = tuple((lo, hi, e is not None) for lo, hi, e in _dtab)
+    else:
+        card_dice = None
     # hechizo "<efecto>. If <condición>, <bonus>." (addendum, raid, morbid…): el
     # bonus se separa y se aplica solo si se cumple al resolver. Antes el parser
     # genérico lo aplicaba SIEMPRE (o tomaba solo una de las dos partes).
@@ -12471,6 +13022,16 @@ def _build_card_from_data_impl(data: dict) -> Card:
                 if _be is not None:
                     _cond_bonus = (_cg, _be)
                     data["oracle_text"] = _ot[:mcb.start()].rstrip()
+        elif mcb and _ot[:mcb.start()].strip() and (_cg := _cond_gc(mcb.group(1))) is not None and (
+                _mtc := re.fullmatch(r"(?:[\w' ,-]+?) deals (\w+) damage to that (?:creature|permanent)'s controller\.",
+                                     mcb.group(2).strip(), re.I)) and _count_word(_mtc.group(1)):
+            # "If <cond>, ~ deals N damage to that creature's controller" (Draconic Roar)
+            def _be_ctrl(g, ctrl, tg, _n=_count_word(_mtc.group(1))):
+                t0 = next((t for t in (tg or []) if hasattr(t, "controller")), None)
+                if t0 is not None:
+                    g.deal_damage(getattr(g, "_trigger_source", None), t0.controller, _n)
+            _cond_bonus = (_cg, _be_ctrl, True)
+            data["oracle_text"] = _ot[:mcb.start()].rstrip()
         elif mcb and _ot[:mcb.start()].strip() and _cond_gc(mcb.group(1)) is not None \
                 and re.search(r"\b(?:those|they|them)\b", mcb.group(2), re.I) \
                 and not re.search(r"\binstead\b", mcb.group(0), re.I):
@@ -12627,6 +13188,28 @@ def _build_card_from_data_impl(data: dict) -> Card:
     _gyt = _parse_gy_triggers(data.get("oracle_text", ""))
     if _gyt:
         card.gy_triggers = _gyt
+    if not data.get("_gy_inner"):
+        _gpt = {}
+        for _gl in _ability_lines(data.get("oracle_text", "")):
+            if "landfall" in _gl.lower() and _gyt.get("landfall"):
+                continue                      # ya cubierto por la recursión de landfall
+            _gtxt = _gy_line(_gl, _self_names(data.get("name", "")))
+            if _gtxt is None:
+                continue
+            try:
+                _gc = build_card_from_data({"name": data.get("name", ""), "type_line": data.get("type_line", ""),
+                                            "mana_cost": data.get("mana_cost", ""), "oracle_text": _gtxt,
+                                            "power": data.get("power"), "toughness": data.get("toughness"),
+                                            "_gy_inner": True})
+            except Exception:  # noqa: BLE001
+                continue
+            for _k, _v in (_gc.triggers or {}).items():
+                if _k not in _gpt:
+                    _gpt[_k] = _v
+                elif "__x_" + _k not in _gpt:
+                    _gpt["__x_" + _k] = _v
+        if _gpt:
+            card.gy_perm_triggers = _gpt
     _gyg = _parse_gy_grant(data.get("oracle_text", ""))
     if _gyg:
         card.gy_grant = _gyg
@@ -12790,7 +13373,17 @@ def _build_card_from_data_impl(data: dict) -> Card:
                 if n >= _mx:
                     game.to_graveyard(perm, "saga completa")
 
-            card.on_etb = (lambda g, ctrl, perm, _run=_saga_run: _run(g, ctrl, perm, 1))
+            if re.search(r"(?im)^read ahead\b", data.get("oracle_text", "") or ""):
+                # read ahead: el humano elige el capítulo inicial (los saltados no
+                # disparan); el bot empieza en el I
+                def _ra_etb(g, ctrl, perm, _run=_saga_run, _mx=_maxch):
+                    _human_target_choice(g, ctrl, "etb_target", f"Read ahead: capítulo inicial de {perm.name}",
+                                         [(f"Capítulo {n}", n) for n in range(1, _mx + 1)],
+                                         lambda n, _p=perm, _c=ctrl: _run(g, _c, _p, n))
+                card.on_etb = _ra_etb
+                card.read_ahead = True
+            else:
+                card.on_etb = (lambda g, ctrl, perm, _run=_saga_run: _run(g, ctrl, perm, 1))
 
             def _saga_upkeep(game, perm, _run=_saga_run, **_kw):
                 _run(game, perm.controller, perm, perm.counters.get("lore", 0) + 1)
@@ -13895,7 +14488,10 @@ def _build_card_from_data_impl(data: dict) -> Card:
             if _base is not None:
                 _base(g, ctrl, tg)
             if _cb[0](g, ctrl):
-                _cb[1](g, ctrl)
+                if len(_cb) > 2:
+                    _cb[1](g, ctrl, tg)
+                else:
+                    _cb[1](g, ctrl)
         card.on_cast_resolve = _cb_resolve
     # Exiliar HASTA que deje el campo (Banishing Light, O-Ring, Faceless Butcher):
     # el ETB exilia el objetivo y lo recuerda; al irse, vuelve bajo su dueño.
@@ -14110,6 +14706,8 @@ def _build_card_from_data_impl(data: dict) -> Card:
         card.umbra_armor = True
     mex = re.search(r"you may exert (?:~|this creature|" + re.escape(name.lower()) +
                     r") as it attacks\. when you do, ([^.]+\.)", _lt)
+    if re.search(r"you may exert (?:~|this creature|" + re.escape(name.lower()) + r") as it attacks", _lt):
+        card.can_exert = True
     if mex:
         _xb = re.sub(r"^it\b", "this creature", mex.group(1).strip())
         _xb = re.sub(r"\bit deals\b", "this creature deals", _xb)
@@ -14286,6 +14884,7 @@ def _build_card_from_data_impl(data: dict) -> Card:
             if _prev:
                 _prev(g, ctrl, perm)
         card.on_etb = _tribute_etb
+        card.tribute = (_tn, _te is not None)
     if (wsc := _kwcost("web-slinging")) is not None and "creature" in types:
         card.web_slinging_cost = wsc
     mamp = re.search(r"(?:^|\n)amplify (\d+)", "\n" + (data.get("oracle_text", "") or "").lower())
@@ -14779,6 +15378,43 @@ def _build_card_from_data_impl(data: dict) -> Card:
         elif (m6 := re.fullmatch(_subj5 + r" (?:saddles mounts and )?crews vehicles(?: and saddles mounts)? as though "
                                  r"its power were (\w+) greater", _l5)) and _count_word(m6.group(1)):
             card.crew_bonus = _count_word(m6.group(1))
+        elif (m6 := re.fullmatch(r"(?:strive — )?this spell costs ((?:\{[wubrgc0-9]\})+) more to cast for each target "
+                                 r"beyond the first", _l5)):
+            card.strive_cost = parse_cost(mana_cost_to_str(m6.group(1)))
+        elif (m6 := re.fullmatch(_subj5 + r" gets ([+-]\d+|[+-]x)/([+-]\d+|[+-]x)(?: for each (.+)|, where x is (.+))",
+                                 _l5)) and (_cfn := _count_any(m6.group(3) or m6.group(4))) is not None:
+            def _sgn(v):
+                return (1 if v.startswith("+") else -1) * (1 if v[1:] == "x" else int(v[1:]))
+            _ga, _gb = _sgn(m6.group(1)), _sgn(m6.group(2))
+            _prev_sm = card.static_mod
+
+            def _sm23(src, target, _f=_cfn, _a=_ga, _b=_gb, _p=_prev_sm):
+                base = _p(src, target) if _p is not None else None
+                if target is not src or src.game is None:
+                    return base
+                prev = getattr(src.game, "_static_src", None)
+                src.game._static_src = src
+                try:
+                    n = max(0, int(_f(src.game, src.controller) or 0))
+                except Exception:  # noqa: BLE001
+                    n = 0
+                finally:
+                    src.game._static_src = prev
+                b0 = base or (0, 0)
+                return (b0[0] + _a * n, b0[1] + _b * n)
+            card.static_mod = _sm23
+        elif (m6 := re.fullmatch(_subj5 + r" can't be blocked except by (.+)", _l5)) and \
+                (_bp := _block_kinds_pred(m6.group(1))) is not None:
+            card.unblock_except_pred = _bp
+        elif (m6 := re.fullmatch(_subj5 + r" can't be blocked by (.+)", _l5)) and "more than" not in _l5 and \
+                (_bp := _block_kinds_pred(m6.group(1))) is not None:
+            card.unblock_by_pred = _bp
+        elif (m6 := re.fullmatch(_subj5 + r" can block ([a-z]+?)s? as though (?:it|this creature) had reach", _l5)):
+            card.reach_vs = m6.group(1)
+        elif re.fullmatch(_subj5 + r" can block creatures with shadow as though they didn't have shadow", _l5):
+            card.block_shadow = True
+        elif (m6 := re.fullmatch(_subj5 + r" can't attack unless defending player is (poisoned|the monarch)", _l5)):
+            card.attack_unless_def = m6.group(1)
         elif _l5 == "lands you control enter untapped":
             card.lands_enter_untapped = True
         elif _l5 in ("each opponent can cast spells only any time they could cast a sorcery",
@@ -15320,6 +15956,17 @@ def _build_card_from_data_impl(data: dict) -> Card:
             mrv = re.search(r"^reveal (?:a|an) ([a-z]+) card from your hand", seg)
             if mrv:
                 add["reveal"] = mrv.group(1)
+            # behold: "(you may) behold a <tipo> (and exile it) (or pay {N})" /
+            # "you may reveal a <tipo> card from your hand (or choose a <tipo> you control)"
+            mbh = re.search(r"^(you may )?behold (?:a|an) ([a-z]+)(?: creature| card)?( and exile it)?"
+                            r"(?: or pay ((?:\{[^}]+\})+))?$", seg)
+            mrvo = re.search(r"^you may reveal (?:a|an) ([a-z]+) card from your hand(?: or choose (?:a|an) [a-z]+ you control)?$",
+                             seg)
+            if mbh:
+                add["behold"] = (mbh.group(2), parse_cost(mana_cost_to_str(mbh.group(4))) if mbh.group(4) else None,
+                                 bool(mbh.group(1)), bool(mbh.group(3)))
+            elif mrvo:
+                add["behold"] = (mrvo.group(1), None, True, False)
             if "sacrifice a creature" in seg or "sacrifice another creature" in seg:
                 add["sacrifice"] = True
             else:
@@ -15425,6 +16072,8 @@ def _build_card_from_data_impl(data: dict) -> Card:
                         gained.add(key)
             card.soulbond_kws = frozenset(gained)
 
+    if card_dice:
+        card.dice_table = card_dice
     # efecto genérico POR TAG: en un hechizo, al resolver; en un permanente, solo si
     # tiene un disparo de entrada propio y con los tags de ESE cuerpo (antes un
     # "whenever ~ attacks, draw" o un "{T}: destroy" se volvía un ETB gratis)

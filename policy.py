@@ -327,7 +327,7 @@ class Policy:
         # no se puede lanzar ahora y no es tierra (las tierras se juegan)
         if not card.is_land():
             for k, ha in enumerate(getattr(card, "hand_abilities", None) or ()):
-                if not me.can_pay(ha["cost"]):
+                if ha.get("mana_ab") or not me.can_pay(ha["cost"]):
                     continue
                 spec = ha.get("target_spec")
                 tg = self._spec_targets(game, me, spec, ha.get("target_count", 1)) if spec else []
@@ -485,6 +485,8 @@ class Policy:
             if done is not None and perm.uid in done:
                 continue
             for j, ab in enumerate(getattr(perm.card, "activated_abilities", ()) or ()):
+                if ab.get("mana_ab"):
+                    continue            # maná flotante sin destino: el bot no lo genera suelto
                 # "prepared" (mecánica Prepared): sólo mientras la criatura lo esté
                 if ab.get("prepared") and not getattr(perm, "_prepared", False):
                     continue
