@@ -21,6 +21,14 @@ def _sick(pm):
     return pm.is_creature() and pm.summoning_sick and not pm.has("haste")
 
 
+def _fast(c, g=None) -> bool:
+    """¿Se puede lanzar a velocidad de instantáneo? (instantáneo, destello,
+    'as though it had flash' con coste extra / sacrificio, o destello otorgado)."""
+    return ("instant" in c.types) or ("flash" in c.keywords) \
+        or getattr(c, "flash_tax", None) is not None or getattr(c, "flash_sac", False) \
+        or (g is not None and g.flash_granted(c))
+
+
 def _never_respond(*_a, **_k):
     """Reemplaza respond/respond_copy/respond_ability en la política del HUMANO:
     las respuestas las decide la persona en su ventana de reacción, no su IA."""
@@ -84,6 +92,19 @@ def _cost_str_cost(c):
 
 
 class InteractiveGame:
+    @property
+    def mode(self):
+        return self.__dict__.get("_mode")
+
+    @mode.setter
+    def mode(self, v):
+        # fuera de la fase principal propia (defensa/combate/respuesta) los hechizos
+        # se lanzan a velocidad de instantáneo: el motor cobra el "flash tax".
+        self.__dict__["_mode"] = v
+        g = self.__dict__.get("g")
+        if g is not None:
+            g._fast_cast = self.human() if v is not None else None
+
     def __init__(self, deck_defs, human_index=0, seed=0, level="intermedio",
                  max_turns=60):
         self.players = run.build_players_from_defs(deck_defs, level=level)
@@ -404,7 +425,7 @@ class InteractiveGame:
             return True
         if declared is not None and self._ninjutsu_opts(declared):
             return True
-        return any((("instant" in c.types) or ("flash" in c.keywords))
+        return any(_fast(c, self.g)
                    and c.cost is not None and hu.can_pay(self.g.effective_cost(hu, c)) for c in hu.hand)
 
     def _has_counter_response(self, hu):
@@ -440,7 +461,7 @@ class InteractiveGame:
         hu = self.human()
         if action == "cast" and i is not None and 0 <= i < len(hu.hand):
             c = hu.hand[i]
-            if (("instant" in c.types) or ("flash" in c.keywords)) and hu.can_pay(self.g.effective_cost(hu, c)):
+            if _fast(c, self.g) and hu.can_pay(self.g.effective_cost(hu, c)):
                 spec = getattr(c, "target_spec", None)
                 if spec == "stack_spell":
                     tgt = [ctx["spell"]]                 # contrahechizo: apunta a la pila
@@ -517,7 +538,7 @@ class InteractiveGame:
         me = self.human()
         if 0 <= i < len(me.hand):
             c = me.hand[i]
-            fast = ("instant" in c.types) or ("flash" in c.keywords)
+            fast = _fast(c, self.g)
             if fast and c.cost is not None and me.can_pay(self.g.effective_cost(me, c)):
                 modes = getattr(c, "modes", ())
                 chosen = spec = None
@@ -1725,7 +1746,7 @@ class InteractiveGame:
             "targets": self._targets_for(c),
             "modes": self._modes_for(c), "mode_pick": getattr(c, "mode_pick", 1),
         } for i, c in enumerate(me.hand)
-            if (("instant" in c.types) or ("flash" in c.keywords))
+            if _fast(c, self.g)
             and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
         return {
             "stage": "declare",
@@ -1823,7 +1844,7 @@ class InteractiveGame:
             "targets": self._targets_for(c),
             "modes": self._modes_for(c), "mode_pick": getattr(c, "mode_pick", 1),
         } for i, c in enumerate(me.hand)
-            if (("instant" in c.types) or ("flash" in c.keywords))
+            if _fast(c, self.g)
             and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
         return {
             "stage": "damage",
@@ -1851,7 +1872,7 @@ class InteractiveGame:
             "target_count": getattr(c, "target_count", 1),
             "targets": self._targets_for(c),
         } for i, c in enumerate(me.hand)
-            if (("instant" in c.types) or ("flash" in c.keywords))
+            if _fast(c, self.g)
             and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
         # item 4: habilidades a velocidad de instante (permanentes y cementerio)
         abilities = []

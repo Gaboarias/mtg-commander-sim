@@ -5548,7 +5548,7 @@ def test_level_up_grows_creature():
     perm = g.move_to_battlefield(lu, me)
     ab = [a for a in lu.activated_abilities if a["label"] == "Level up"][0]
     ab["effect"](g, me, perm, [])
-    assert perm.counters.get("+1/+1") == 1 and perm.counters.get("level") == 1
+    assert not perm.counters.get("+1/+1") and perm.counters.get("level") == 1
 
 
 def test_madness_cast_on_discard():

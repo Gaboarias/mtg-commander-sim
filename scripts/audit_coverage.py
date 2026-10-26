@@ -29,12 +29,15 @@ REPORT = os.path.join(ROOT, "docs", "coverage_report.md")
 # juego para la IA: no cuentan como faltantes
 _STRUCTURAL = re.compile(
     r"^(?:enchant (?:creature|player|land|permanent|artifact|opponent|planeswalker"
-    r"|creature you control|creature or vehicle|nonland permanent|[a-z ]+)$"
+    r"|creature you control|creature or vehicle|nonland permanent|[a-z -]+)$"
     r"|partner(?: with [^.]+)?$|partner—|friends forever$|choose a background$"
     r"|doctor's companion$|~ can be your commander|devoid$|changeling$"
     r"|you may look at the top card of your library any time"
     r"|play with the top card of your library revealed"
-    r"|level \d|\d+/\d+$|\(|flavor)", re.I)
+    r"|level (?:\d|n)|(?:\d+|n)/(?:\d+|n)$|\(|flavor"
+    # reglas de draft / ante: sin efecto en una partida de Commander
+    r"|draft ~ face up|draft this card face up|reveal (?:this card|~) as you draft"
+    r"|remove (?:this card|~) from your deck before playing if you're not playing for ante)", re.I)
 
 
 FULL = os.path.join(ROOT, "data", "cards_full.json.gz")
@@ -136,6 +139,7 @@ _KW_WIRED = {
     "if it's neither day nor night, it becomes day as this creature enters.":
         lambda c: getattr(c, "daybound", False),
     "bargain": lambda c: getattr(c, "bargain", False),
+    "spree": lambda c: bool(getattr(c, "spree_costs", None)),
     "haunt": lambda c: getattr(c, "haunt", False),
     "storm": lambda c: "storm" in (getattr(c, "tags", None) or ()),
     "this creature enters prepared.": lambda c: any(

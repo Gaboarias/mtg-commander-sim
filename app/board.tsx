@@ -27,7 +27,7 @@ export type PlayerState = {
   name: string; life: number; lost: boolean; hand: number; library: number;
   commander: string[]; cmdr_tax: number; cmdr_damage?: Record<string, number>;
   poison?: number; experience?: number; energy?: number;
-  graveyard: string[]; exile?: string[]; battlefield: Perm[];
+  graveyard: string[]; exile?: string[]; battlefield: Perm[]; revealed?: string[];
   hand_cards?: { i: number; name: string; is_land: boolean; cost: string }[];
 };
 
@@ -255,11 +255,18 @@ export function Seat({
         </motion.span>
       </div>
       <div className="seat-meta">
-        <motion.span key={"h" + p.hand} title="cartas en mano"
-          initial={reduce ? false : { scale: 1.35, color: "var(--accent)" }}
-          animate={{ scale: 1, color: "var(--muted)" }} transition={{ duration: 0.5 }}>
-          <Icon name="hand" size={13} /> {p.hand}
-        </motion.span>
+        {onZone && p.revealed ? (
+          <button type="button" className="zone-chip" title="mano revelada: ver cartas"
+            onClick={() => onZone(`Mano de ${p.name} (revelada)`, p.revealed || [])}>
+            <Icon name="hand" size={13} /> {p.hand}
+          </button>
+        ) : (
+          <motion.span key={"h" + p.hand} title="cartas en mano"
+            initial={reduce ? false : { scale: 1.35, color: "var(--accent)" }}
+            animate={{ scale: 1, color: "var(--muted)" }} transition={{ duration: 0.5 }}>
+            <Icon name="hand" size={13} /> {p.hand}
+          </motion.span>
+        )}
         <motion.span key={"l" + p.library} title="cartas en biblioteca"
           initial={reduce ? false : { scale: 1.35, color: "var(--accent)" }}
           animate={{ scale: 1, color: "var(--muted)" }} transition={{ duration: 0.5 }}>
