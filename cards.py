@@ -180,7 +180,8 @@ def make_resource_token(game, player, kind, _extra=True):
     )
     tok.activated_abilities = _resource_abilities(k)
     last = None
-    for _ in range(game.token_multiplier(player)):     # dobladores de fichas
+    extra = sum(1 for pm in player.battlefield if k in (getattr(pm.card, "res_plus", None) or ())) if _extra else 0
+    for _ in range(game.token_multiplier(player) + extra):     # dobladores de fichas (+ "an additional Treasure")
         last = game.move_to_battlefield(_copy.deepcopy(tok), player, is_token=True)
     # Academy Manufactor: crear un Clue, Food o Treasure crea uno de cada
     if _extra and k in ("clue", "food", "treasure") and any(

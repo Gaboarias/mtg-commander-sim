@@ -507,7 +507,68 @@ class Permanent:
 # Player
 # --------------------------------------------------------------------------- #
 
+class _GYList(list):
+    """Cementerio con reemplazos "if a card would be put into a graveyard from
+    anywhere, exile it instead" (Rest in Peace, Leyline of the Void…)."""
+    __slots__ = ("owner",)
+
+    def __init__(self, owner, items=()):
+        super().__init__(items)
+        self.owner = owner
+
+    def _redir(self, c):
+        o = self.owner
+        g = o.__dict__.get("_game") if o is not None else None
+        if g is None or not getattr(g, "_any_gy_replace", False) or not hasattr(c, "types"):
+            return False
+        for pl in g.players:
+            for pm in pl.battlefield:
+                rep = getattr(pm.card, "gy_replace", None)
+                if not rep or pm.abilities_off():
+                    continue
+                scope, kind = rep
+                if (scope == "you" and pl is not o) or (scope == "opp" and pl is o):
+                    continue
+                if kind == "instant or sorcery" and not ({"instant", "sorcery"} & c.types):
+                    continue
+                if kind == "creature" and not c.is_creature():
+                    continue
+                return True
+        return False
+
+    def append(self, c):
+        if self._redir(c):
+            self.owner.exile.append(c)
+            return
+        super().append(c)
+
+    def insert(self, i, c):
+        if self._redir(c):
+            self.owner.exile.append(c)
+            return
+        super().insert(i, c)
+
+    def extend(self, cs):
+        for c in list(cs):
+            self.append(c)
+
+    def remove(self, c):
+        if c in self:
+            super().remove(c)
+
+    def __reduce_ex__(self, proto):
+        return (_GYList, (self.owner, list(self)))
+
+
 class Player:
+    @property
+    def graveyard(self):
+        return self.__dict__["_gy"]
+
+    @graveyard.setter
+    def graveyard(self, v):
+        self.__dict__["_gy"] = v if isinstance(v, _GYList) and v.owner is self else _GYList(self, v or ())
+
     @property
     def life(self):
         return self.__dict__.get("_life", 0)
@@ -661,7 +722,8 @@ class Player:
                 if p.card.produces is not None and not p.tapped
                 and not (_art_off and "artifact" in p.card.types)
                 and not (exclude and p in exclude)
-                and not (p.is_creature() and p.summoning_sick and not p.has("haste"))
+                and not (p.is_creature() and p.summoning_sick and not p.has("haste")
+                         and not any(getattr(x.card, "haste_abilities", False) for x in self.battlefield))
                 and (not getattr(p.card, "_cond_mana", False) or self.produced(p))]
 
     def produced(self, p) -> dict:
@@ -1598,7 +1660,102 @@ class Game:
                 scope = getattr(pm.card, "damage_double", None)
                 if scope == "all" or (scope == "you" and src_ctrl is pm.controller):
                     mult *= 2
+                tsc = getattr(pm.card, "damage_triple", None)
+                if tsc == "all" or (tsc == "you" and src_ctrl is pm.controller):
+                    mult *= 3
         return mult
+
+    def _pay_opt_add(self, player, card, oa):
+        """Costes adicionales OPCIONALES (teamwork, blight, collect evidence, waterbend
+        opcional). Los bots los pagan si tienen con qué sin perder algo valioso."""
+        kind, n = oa
+        if kind == "teamwork":
+            pool = sorted((pm for pm in player.creatures() if not pm.tapped),
+                          key=lambda pm: (not pm.summoning_sick, pm.power))
+            tot, use = 0, []
+            for pm in pool:
+                if tot >= n:
+                    break
+                if pm.power > 0:
+                    use.append(pm)
+                    tot += pm.power
+            if tot < n:
+                return False
+            for pm in use:
+                pm.tapped = True
+            self.log(f"{player.name} usa teamwork ({len(use)} criatura(s))")
+            return True
+        if kind == "blight":
+            pool = [pm for pm in player.creatures() if pm.is_token or pm.toughness > n]
+            if not pool:
+                return False
+            pm = min(pool, key=lambda x: (not x.is_token, x.power + x.toughness))
+            self.add_counters(pm, "-1/-1", n)
+            self.log(f"{player.name} plaga {n} sobre {pm.name}")
+            self.sba()
+            return True
+        if kind == "evidence":
+            pool = sorted((c for c in player.graveyard if c.cost is not None and c.cost.cmc > 0
+                           and c is not card), key=lambda c: -c.cost.cmc)
+            pick, tot = [], 0
+            for c in pool:
+                if tot >= n:
+                    break
+                pick.append(c)
+                tot += c.cost.cmc
+            if tot < n:
+                return False
+            for c in pick:
+                player.graveyard.remove(c)
+                player.exile.append(c)
+            self.log(f"{player.name} reúne evidencia {n}")
+            self.emit("cards_exiled", player=player, count=len(pick))
+            return True
+        if kind == "waterbend":
+            pool = sorted((pm for pm in player.battlefield if not pm.tapped and pm.card.produces is None and (
+                "artifact" in pm.card.types or (pm.is_creature() and pm.summoning_sick))), key=lambda pm: pm.is_creature())
+            if len(pool) < n:
+                return False
+            for pm in pool[:n]:
+                pm.tapped = True
+            self.log(f"{player.name} paga waterbend {n} girando permanentes")
+            return True
+        return False
+
+    def _dmg_mods(self, source, target, amount, combat):
+        """Reemplazos de daño de batch 25: "+N damage" (Torbran, Fiery Emancipation
+        aditivo) y redirección "all damage that would be dealt to you is dealt to
+        this creature instead"."""
+        src_perm = isinstance(source, Permanent)
+        src_ctrl = source.controller if src_perm else getattr(self, "_fx_controller", None)
+        tgt_ctrl = target if isinstance(target, Player) else getattr(target, "controller", None)
+        for pl in self.players:
+            for pm in pl.battlefield:
+                dp = getattr(pm.card, "dmg_plus", None)
+                if not dp or pm.abilities_off():
+                    continue
+                n, color, other, tscope = dp
+                if src_ctrl is not pm.controller or (other and source is pm):
+                    continue
+                if color and not (src_perm and color in {x for pp in (getattr(source.card.cost, "pips", None) or ())
+                                                         for x in str(pp).upper()}):
+                    continue
+                if tscope == "opp" and (tgt_ctrl is None or tgt_ctrl is pm.controller):
+                    continue
+                amount += n
+        owner = target if isinstance(target, Player) else getattr(target, "controller", None)
+        if owner is not None:
+            for pm in owner.battlefield:
+                rd = getattr(pm.card, "dmg_redirect", None)
+                if not rd or pm.abilities_off():
+                    continue
+                dest = pm.attached_to if rd[1] == "attached" else pm
+                if not isinstance(dest, Permanent) or dest is target or dest not in dest.controller.battlefield:
+                    continue
+                if isinstance(target, Player) or (rd[0] == "you_perms" and target is not pm):
+                    self.log(f"el daño a {target.name} se redirige a {dest.name}")
+                    return dest, amount
+        return target, amount
 
     def _dies_to_exile(self, perm: "Permanent") -> bool:
         """¿Una muerte de `perm` se reemplaza por exilio? (odio de cementerio)."""
@@ -1621,6 +1778,10 @@ class Game:
             return
         for pl in self.players:
             for pm in pl.battlefield:
+                if getattr(pm.card, "gain_to_loss", False) and pl is not player and not pm.abilities_off():
+                    self.log(f"{player.name} pierde {n} vida en vez de ganarla ({pm.name})")
+                    player.life -= n
+                    return
                 stop = getattr(pm.card, "stops_lifegain", None)
                 if stop == "all" or (stop == "opponents" and pl is not player):
                     self.log(f"{player.name} no puede ganar vida ({pm.name})")
@@ -1705,6 +1866,11 @@ class Game:
         perm.game = self
         if getattr(card, "archetype_lose", None):
             self._any_archetype = True
+        if getattr(card, "gy_replace", None):
+            self._any_gy_replace = True
+        if (getattr(card, "dmg_plus", None) or getattr(card, "dmg_redirect", None)
+                or getattr(card, "no_prev_from", False) or getattr(card, "prevent_from_blocked", False)):
+            self._any_dmg_mod = True
         if card.enters_tapped:
             perm.tapped = True
         if perm.tapped and card.is_land() and any(getattr(pm.card, "lands_enter_untapped", False)
@@ -1781,7 +1947,11 @@ class Game:
             if getattr(player, "_entered_turn", None) != self.turn:
                 player._entered_turn, player.entered_nonland = self.turn, 0
             player.entered_nonland += 1
-        if card.on_etb:
+        _torp = card.on_etb and perm.is_creature() and any(
+            getattr(pm.card, "torpor", False) and not pm.abilities_off() for pl in self.players for pm in pl.battlefield)
+        if _torp:
+            self.log(f"{card.name} entra sin disparar habilidades (Torpor Orb)")
+        if card.on_etb and not _torp:
             self.note_ability(card, "entra al campo", controller=player)
             prev = self._fx_source
             prev_c = self._fx_controller
@@ -2247,6 +2417,11 @@ class Game:
             ctrl.descended_turn = self.turn
         self.emit("discarded", player=ctrl, card=card)    # "whenever you discard a card"
         self.emit("opp_discarded", player=ctrl, card=card)
+        fxc = getattr(self, "_fx_controller", None)
+        if getattr(card, "discard_to_bf", False) and fxc is not None and fxc is not ctrl:
+            self.log(f"{card.name} entra al campo al ser descartada por un rival")
+            self.move_to_battlefield(card, ctrl)
+            return
         mad = getattr(card, "madness", None)
         if mad is None:
             ctrl.graveyard.append(card)
@@ -2342,11 +2517,20 @@ class Game:
         mult = self.damage_multiplier(source)
         if mult > 1:
             amount *= mult
+        _dm = getattr(self, "_any_dmg_mod", False)
+        if _dm:
+            target, amount = self._dmg_mods(source, target, amount, combat)
+            if amount <= 0 or target is None:
+                return
         # "el daño no se puede prevenir este turno" (Skullcrack, Flames of the Blood
         # Hand…): ignora todos los escudos de prevención.
         no_prev = getattr(self, "no_prevention_turn", False) or any(
             getattr(pm.card, "no_prevention_static", False) for pl in self.players
-            for pm in pl.battlefield)
+            for pm in pl.battlefield) or (_dm and isinstance(source, Permanent)
+                                          and getattr(source.card, "no_prev_from", False))
+        if (_dm and not no_prev and combat and isinstance(target, Permanent) and isinstance(source, Permanent)
+                and getattr(target.card, "prevent_from_blocked", False) and source in (getattr(target, "blocking", None) or ())):
+            return                       # "prevent all damage … by creatures it's blocking"
         # prevención de daño (escudos "hasta el fin del turno")
         if not no_prev and isinstance(target, Player):
             if getattr(target, "prevent_all", False):
@@ -2488,6 +2672,16 @@ class Game:
                 self.add_counters(target, "-1/-1", amount)
                 if source.has("deathtouch") and target.toughness > 0:
                     self.add_counters(target, "-1/-1", target.toughness)
+            elif getattr(target.card, "dmg_to_counters", None) and not target.abilities_off() and (
+                    not target.card.dmg_to_counters[1] or (combat and src_perm and source.is_creature())):
+                # "if damage would be dealt to this creature, put that many +1/+1 counters on it instead"
+                _dk, _dcomb, _dfix = target.card.dmg_to_counters
+                self.add_counters(target, _dk, _dfix or amount)
+                self.log(f"{target.name}: el daño se convierte en contadores {_dk}")
+                amount = 0
+            elif getattr(target.card, "small_dmg_immune", 0) and amount <= target.card.small_dmg_immune \
+                    and not target.abilities_off():
+                amount = 0                       # Callous Giant: "N or less damage … prevent that damage"
             elif getattr(target.card, "phantom", False):
                 # Phantom: se previene el daño y pierde un contador +1/+1
                 if target.counters.get("+1/+1", 0) > 0:
@@ -2845,8 +3039,18 @@ class Game:
         # delve (exiliar del cementerio). Bajan el genérico y consumen recursos.
         convoke_tap, delve_n = [], 0
         tags = getattr(card, "tags", set()) or set()
-        if pay_cost is not None and (tags & {"affinity_art", "convoke", "delve", "improvise"}):
+        wb = getattr(card, "waterbend_req", 0) or 0
+        if wb and pay_cost is not None:
+            pay_cost = Cost(generic=pay_cost.generic + wb, pips=pay_cost.pips)
+        if pay_cost is not None and ((tags & {"affinity_art", "convoke", "delve", "improvise"}) or wb):
             gen = pay_cost.generic
+            if wb:                       # waterbend: girar artefactos/criaturas, cada uno paga {1}
+                tappers = sorted((pm for pm in player.battlefield if not pm.tapped and (
+                    pm.is_creature() or "artifact" in pm.card.types)),
+                    key=lambda pm: (pm.card.produces is not None, pm.is_creature()))
+                use = min(gen, wb, len(tappers))
+                convoke_tap = tappers[:use]
+                gen -= use
             if "affinity_art" in tags:
                 arts = sum(1 for pm in player.battlefield if "artifact" in pm.card.types)
                 gen = max(0, gen - arts)
@@ -2912,6 +3116,15 @@ class Game:
             if player.can_pay(bb_cost):
                 pay_cost = bb_cost
                 card._buyback_used = True
+        # Fuse: lanzar ambas mitades de una carta partida desde la mano.
+        card._fused = False
+        _bf = getattr(card, "back_face", None)
+        if (getattr(card, "fuse", False) and _bf is not None and _bf.cost is not None and pay_cost is not None
+                and card in player.hand and _bf.on_cast_resolve is not None):
+            fc = Cost(generic=pay_cost.generic + _bf.cost.generic, pips=pay_cost.pips + _bf.cost.pips)
+            if player.can_pay(fc):
+                pay_cost = fc
+                card._fused = True
         # Spree: cada modo elegido suma su coste. Escalate: cada modo extra suma.
         if pay_cost is not None and chosen_modes:
             sc = getattr(card, "spree_costs", None)
@@ -3184,6 +3397,9 @@ class Game:
             if victim is not None and victim in player.battlefield:
                 self.to_graveyard(victim, "coste adicional")
             self.log(f"{player.name} paga el coste adicional de {card.name}")
+        card._opt_paid = False
+        if getattr(card, "opt_add", None):
+            card._opt_paid = self._pay_opt_add(player, card, card.opt_add)
 
         self.log(f"{player.name} lanza {card.name}")
         # telemetria: registrar el lanzamiento y el turno del comandante
@@ -3239,7 +3455,16 @@ class Game:
             elif {"instant", "sorcery"} & card.types:
                 if card.modes:
                     picks = chosen_modes if chosen_modes else [0]
+                    _extra_t = {}
+                    if getattr(card, "modes_all_if_opt", False) and getattr(card, "_opt_paid", False):
+                        for _mi, _md in enumerate(card.modes):     # modos agregados: objetivos automáticos
+                            if _mi not in picks and _md.get("target_spec"):
+                                _px = copy.copy(card)
+                                _px.target_spec, _px.target_count = _md["target_spec"], _md.get("target_count", 1)
+                                _extra_t[_mi] = g._auto_targets(player, _px) or []
+                        picks = list(range(len(card.modes)))
                     per_mode = g.split_mode_targets(card.modes, picks, targets or [])
+                    per_mode.update({k: v for k, v in _extra_t.items() if not per_mode.get(k)})
                     for mi in picks:
                         if 0 <= mi < len(card.modes):
                             m = card.modes[mi]
@@ -3267,6 +3492,11 @@ class Game:
                             lambda gg, pp, tt, _a=eff, _b=be: (_a(gg, pp, tt), _b(gg, pp, tt)))
                     for _ in range(reps):
                         eff(g, player, targets or [])
+                    if getattr(card, "_fused", False):     # fuse: también la otra mitad
+                        card._fused = False
+                        _bk = card.back_face
+                        g.log(f"{card.name}: fusionada, resuelve también {_bk.name}")
+                        _bk.on_cast_resolve(g, player, g._auto_targets(player, _bk) or [])
                     # demonstrate: un rival también copia el hechizo
                     if getattr(card, "_demonstrated", False):
                         card._demonstrated = False
@@ -3671,7 +3901,8 @@ class Game:
             return False
         # {T} de una criatura con mareo de invocación (sin prisa): no se puede
         if ab.get("tap") and perm.is_creature() and perm.summoning_sick \
-                and not perm.has("haste"):
+                and not perm.has("haste") and not any(getattr(x.card, "haste_abilities", False)
+                                                      for x in perm.controller.battlefield):
             return False
         ctrl = perm.controller
         # si la habilidad gira el permanente, éste no puede además girarse como
@@ -6265,11 +6496,23 @@ class Game:
                 pl.hand.remove(c)
                 self.move_to_battlefield(c, pl)
                 self.log(f"{pl.name} empieza con {c.name} en el campo")
+            for c in pl.hand:            # Chancellors / Providence: revelar de la mano inicial
+                orv = getattr(c, "opening_reveal", None)
+                if orv:
+                    self._opening_fx = getattr(self, "_opening_fx", None) or []
+                    self._opening_fx.append((pl, orv))
+                    self.log(f"{pl.name} revela {c.name} de su mano inicial")
 
     def begin_turn(self, p: "Player"):
         """UNTAP + UPKEEP + DRAW + SBA. Compartido por el turno de la política
         (run_turn) y por el turno manual de un humano (interactive)."""
         self._opening_leylines()
+        if getattr(self, "_opening_fx", None):
+            for ent in list(self._opening_fx):
+                pl, (scope, eff) = ent
+                if (scope == "all" or pl is p) and not pl.lost:
+                    self._opening_fx.remove(ent)
+                    eff(self, pl)
         self.turns_played += 1
         # encabezado de turno: separa visualmente los turnos en el registro
         self.log(f"‹turno› {p.name}")
@@ -6607,6 +6850,11 @@ class Game:
                    and len(self.alive()) > 1 and not self.turn_cap_reached()):
                 who = self.extra_turns.pop(0)
                 if who.lost:
+                    continue
+                if any(getattr(pm.card, "skip_extra_turns", None) in ("all", "opp") and (
+                        pm.card.skip_extra_turns == "all" or pm.controller is not who)
+                       for pl in self.players for pm in pl.battlefield if not pm.abilities_off()):
+                    self.log(f"{who.name} salta su turno extra")
                     continue
                 self.active_index = self.players.index(who)
                 self.log(f"{who.name} toma un turno extra")
