@@ -154,6 +154,8 @@ _KW_WIRED = {
 
 def _kw_wired(tpl, row):
     fn = _KW_WIRED.get(tpl)
+    if fn is None and tpl.startswith("more than meets the eye {"):
+        fn = lambda c: getattr(c, "mtmte_cost", None) is not None  # noqa: E731
     if fn is None:
         return False
     try:

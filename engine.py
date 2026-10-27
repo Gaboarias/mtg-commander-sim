@@ -650,6 +650,8 @@ class Player:
 
     def draw(self, n: int, game: "Game"):
         for _ in range(n):
+            if getattr(game, "_any_draw_lock", False) and game._draw_locked(self):
+                return
             if not self.library:
                 self.lost = True     # perder por deckout
                 return
@@ -760,6 +762,10 @@ class Player:
             mult *= getattr(src.card, "mana_mult", 1) or 1
         if mult > 1:
             opts = {k: v * mult for k, v in opts.items()}
+        for src in self.battlefield:                # Crypt Ghast / "tap a creature for mana, add an additional"
+            tb = getattr(src.card, "tap_bonus", None)
+            if tb and ((tb == "creature" and p.is_creature()) or (tb != "creature" and p.has_subtype(tb))):
+                opts = {k: v + 1 for k, v in opts.items()}
         if not p.card.is_land():
             return opts
         bonus = 0
@@ -1631,11 +1637,14 @@ class Game:
             prev_c = self._fx_controller
             self._fx_source = getattr(getattr(obj, "source", None), "name", None)
             self._fx_controller = obj.controller
+            prev_ss = getattr(self, "_stack_src", None)
+            self._stack_src = getattr(obj, "source", None)
             try:
                 obj.resolve(self)
             finally:
                 self._fx_source = prev
                 self._fx_controller = prev_c
+                self._stack_src = prev_ss
             self.sba()
 
     # -- movimiento de cartas -------------------------------------------- #
@@ -1664,6 +1673,41 @@ class Game:
                 if tsc == "all" or (tsc == "you" and src_ctrl is pm.controller):
                     mult *= 3
         return mult
+
+    def _draw_locked(self, pl) -> bool:
+        """"Players can't draw cards" / Leovold ("each opponent can't draw more than one
+        card each turn")."""
+        for q in self.players:
+            for pm in q.battlefield:
+                if pm.abilities_off():
+                    continue
+                if getattr(pm.card, "draw_lock", None) == "all":
+                    return True
+                cap = getattr(pm.card, "draw_cap_opp", 0)
+                if cap and q is not pl and pl.draws_this_turn >= cap:
+                    return True
+        return False
+
+    def _addcost_tappers(self, player, card, qual, kind, excl):
+        """Permanentes que pueden girarse para un coste adicional "tap N untapped …":
+        primero los que no atacarían ni dan maná."""
+        _cw = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
+        out = []
+        for pm in player.battlefield:
+            if pm.tapped or pm.card is card or (excl and pm in excl):
+                continue
+            if kind == "creature" and not pm.is_creature():
+                continue
+            if kind == "any" and not (pm.is_creature() or pm.card.is_land() or "artifact" in pm.card.types):
+                continue
+            if qual in _cw and _cw[qual] not in {x for pp in (getattr(pm.card.cost, "pips", None) or ())
+                                                 for x in str(pp).upper()}:
+                continue
+            if qual and qual not in _cw and not pm.has_subtype(qual):
+                continue
+            out.append(pm)
+        out.sort(key=lambda pm: (pm.card.produces is not None, not pm.summoning_sick, pm.power if pm.is_creature() else 0))
+        return out
 
     def _pay_opt_add(self, player, card, oa):
         """Costes adicionales OPCIONALES (teamwork, blight, collect evidence, waterbend
@@ -1812,6 +1856,10 @@ class Game:
         """
         if n > 0 and getattr(perm.card, "no_counters", False) and not perm.abilities_off():
             return                      # "this creature can't have counters put on it"
+        if n > 0 and kind == "-1/-1" and perm.is_creature() and any(
+                getattr(pm.card, "no_minus_counters", False) and not pm.abilities_off()
+                for pm in perm.controller.battlefield):
+            return                      # Melira: "can't have -1/-1 counters put on them"
         if n > 0 and perm.is_creature():
             perm.controller.ctr_put_turn = self.turn   # "if you put a counter on a creature this turn"
         if n > 0:
@@ -1868,6 +1916,10 @@ class Game:
             self._any_archetype = True
         if getattr(card, "gy_replace", None):
             self._any_gy_replace = True
+        if getattr(card, "sac_no_creatures", False):
+            self._any_sac_nocr = True
+        if getattr(card, "draw_lock", None) or getattr(card, "draw_cap_opp", 0):
+            self._any_draw_lock = True
         if (getattr(card, "dmg_plus", None) or getattr(card, "dmg_redirect", None)
                 or getattr(card, "no_prev_from", False) or getattr(card, "prevent_from_blocked", False)):
             self._any_dmg_mod = True
@@ -1955,6 +2007,8 @@ class Game:
             self.note_ability(card, "entra al campo", controller=player)
             prev = self._fx_source
             prev_c = self._fx_controller
+            prev_ep = getattr(self, "_etb_perm", None)
+            self._etb_perm = perm
             self._fx_source = card.name
             self._fx_controller = player
             try:
@@ -1968,6 +2022,7 @@ class Game:
             finally:
                 self._fx_source = prev
                 self._fx_controller = prev_c
+                self._etb_perm = prev_ep
         if getattr(card, "_impending_cast", False):
             card._impending_cast = False
             perm._impending = True
@@ -2211,6 +2266,12 @@ class Game:
             return False
         ctrl.battlefield.remove(perm)
         self.note_departure(perm, "exiled")
+        _hold = (getattr(self, "_trigger_source", None) or getattr(self, "_etb_perm", None)
+                 or getattr(self, "_stack_src", None))
+        if (isinstance(_hold, Permanent) and _hold is not perm and not perm.is_token
+                and getattr(_hold.card, "returns_exiled", None)):
+            _hold._exiled_with = list(getattr(_hold, "_exiled_with", None) or []) + [
+                (getattr(perm.card, "_real", None) or perm.card, ctrl)]
         if perm.card.on_leave:
             self._run_fx(f"on_leave {perm.name}",
                          lambda: perm.card.on_leave(self, ctrl, perm))
@@ -2735,6 +2796,13 @@ class Game:
             changed = False
             if self._normalize_proxies():
                 changed = True
+            if getattr(self, "_any_sac_nocr", False) and not any(pm.is_creature() for pl in self.players
+                                                                   for pm in pl.battlefield):
+                for pl in self.players:
+                    for pm in list(pl.battlefield):
+                        if getattr(pm.card, "sac_no_creatures", False):
+                            self.to_graveyard(pm, "sacrificio (sin criaturas)")
+                            changed = True
             for _p in self.players:
                 if not _p.citys_blessing and not _p.lost:
                     self._check_ascend(_p)
@@ -3000,6 +3068,16 @@ class Game:
             except Exception:  # noqa: BLE001
                 return False
         _act = self.players[self.active_index] if self.players else None
+        _cz = getattr(card, "_cast_zone", None)
+        for _q in self.players:
+            for _pm in _q.battlefield:
+                if _pm.abilities_off():
+                    continue
+                _ngc = getattr(_pm.card, "no_gy_cast", None)
+                if _ngc and _cz in ("graveyard", "library") and (_ngc == "all" or _q is not player):
+                    return False         # Grafdigger's Cage
+                if getattr(_pm.card, "abolisher", None) is not None and _q is not player and _act is _q:
+                    return False         # Grand Abolisher: no lanzan hechizos en tu turno
         if (self.stack or getattr(self, "_fast_cast", None) is player or _act is not player) and any(
                 getattr(pm.card, "opp_sorcery_only", False) and not pm.abilities_off()
                 for _o in self.opponents(player) for pm in _o.battlefield):
@@ -3259,6 +3337,19 @@ class Game:
                                               or (_rk == "colorless" and not c.identity()))
                            for c in player.hand):
                     return False
+            if add.get("tap_n"):
+                _tn, _tq, _tk = add["tap_n"]
+                if len(self._addcost_tappers(player, card, _tq, _tk, excl)) < _tn:
+                    return False
+            if add.get("minus_ctr") and not any(pm.card is not card for pm in player.creatures()):
+                return False
+            if add.get("blight_or"):
+                if not any(pm.card is not card for pm in player.creatures()) and pay_cost is not None:
+                    _bc = add["blight_or"][1]
+                    pay_cost = Cost(generic=pay_cost.generic + _bc.generic, pips=tuple(pay_cost.pips) + tuple(_bc.pips))
+                    card._blight_paid_mana = True
+                else:
+                    card._blight_paid_mana = False
             if add.get("sacrifice"):
                 sk = add["sacrifice"]
                 kinds = {"creature"} if sk is True else set(str(sk).split("|"))
@@ -3266,6 +3357,20 @@ class Game:
                 def _sac_ok(pm, _k=kinds):
                     if pm.card is card or player.is_commander(pm.card):
                         return False
+                    _qk = next((k for k in _k if k.startswith("qual:")), None)
+                    if _qk:                      # "sacrifice a green/legendary/nontoken creature"
+                        q = _qk[5:]
+                        if not pm.is_creature():
+                            return False
+                        _cw = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
+                        if q in _cw:
+                            return _cw[q] in {x for pp in (getattr(pm.card.cost, "pips", None) or ())
+                                              for x in str(pp).upper()}
+                        if q == "legendary":
+                            return "legendary" in pm.card.supertypes
+                        if q == "nontoken":
+                            return not pm.is_token
+                        return q in pm.card.types
                     if "nonland_permanent" in _k:
                         return not pm.card.is_land()
                     _ck = next((k for k in _k if k.startswith("color:")), None)
@@ -3331,6 +3436,22 @@ class Game:
                         self.log(f"{player.name} devuelve {v.name} a la mano (coste)")
                     else:
                         self.exile_permanent(v, "coste")
+        if add.get("tap_n"):                     # "tap N untapped creatures you control"
+            _tn, _tq, _tk = add["tap_n"]
+            for pm in self._addcost_tappers(player, card, _tq, _tk, None)[:_tn]:
+                pm.tapped = True
+            self.log(f"{player.name} gira {_tn} permanente(s) como coste de {card.name}")
+        if add.get("minus_ctr"):                 # "put a -1/-1 counter on a creature you control"
+            pool = [pm for pm in player.creatures() if pm.card is not card]
+            if pool:
+                pm = min(pool, key=lambda x: (not x.is_token, x.toughness <= 1, x.power + x.toughness))
+                self.add_counters(pm, "-1/-1", 1)
+        if add.get("blight_or") and not getattr(card, "_blight_paid_mana", False):
+            pool = [pm for pm in player.creatures() if pm.card is not card]
+            if pool:
+                pm = min(pool, key=lambda x: (not x.is_token, x.toughness <= add["blight_or"][0], x.power + x.toughness))
+                self.add_counters(pm, "-1/-1", add["blight_or"][0])
+                self.log(f"{player.name} plaga {add['blight_or'][0]} sobre {pm.name}")
         if add.get("sacrifice_n"):               # "sacrifice N creatures"
             vs = sorted([pm for pm in player.creatures() if pm.card is not card
                          and not player.is_commander(pm.card)],
@@ -3417,6 +3538,8 @@ class Game:
         storm_copies += 1 if getattr(card, "_conspired", False) else 0
         self.spells_this_turn += 1
         player.spells_cast_turn = getattr(player, "spells_cast_turn", 0) + 1
+        if "artifact" in card.types or "legendary" in card.supertypes or "saga" in {x.lower() for x in card.subtypes}:
+            player._historic_turn = self.turn
         if getattr(card, "flash_sac", False) and getattr(self, "_fast_cast", None) is player:
             card._flash_sac_pending = True   # lanzado a velocidad de instantáneo: se sacrifica
         if not card.is_creature():
@@ -3685,6 +3808,7 @@ class Game:
         the target of a spell or ability you control for the first time each turn')."""
         if any((isinstance(t, Player) and t is not caster) or
                (isinstance(t, Permanent) and t.controller is not caster) for t in (targets or [])):
+            caster._crime_turn = self.turn
             self.emit("crime", player=caster)        # "whenever you commit a crime"
         for t in (targets or []):
             if isinstance(t, Permanent) and t in t.controller.battlefield:
@@ -3865,6 +3989,7 @@ class Game:
         # va a la pila y se resuelve con prioridad (refactor A: habilidades en pila).
         perm.counters["loyalty"] = loy + cost
         perm.activated_this_turn = True
+        self.emit("loyalty_act", player=perm.controller, perm=perm)
         self.log(f"{perm.controller.name}: {perm.name} activa {cost:+d} "
                  f"(lealtad {perm.counters['loyalty']})")
         self.note_ability(perm.card, f"lealtad {cost:+d}", controller=perm.controller)
@@ -3899,6 +4024,11 @@ class Game:
                     return False
         if ab.get("tap") and perm.tapped:
             return False
+        if perm.card.types & {"artifact", "creature", "enchantment"}:
+            _act = self.players[self.active_index] if self.players else None
+            if _act is not None and _act is not perm.controller and any(
+                    getattr(_pm.card, "abolisher", False) and not _pm.abilities_off() for _pm in _act.battlefield):
+                return False             # Grand Abolisher
         # {T} de una criatura con mareo de invocación (sin prisa): no se puede
         if ab.get("tap") and perm.is_creature() and perm.summoning_sick \
                 and not perm.has("haste") and not any(getattr(x.card, "haste_abilities", False)
@@ -5937,6 +6067,10 @@ class Game:
         """Marca los atacantes válidos, los tapea (sin vigilancia) y dispara
         'attacks'. Devuelve la lista de Permanent que efectivamente atacan."""
         declared = []
+        _cap = min((getattr(pm.card, "max_attackers", 0) for pl in self.players for pm in pl.battlefield
+                    if getattr(pm.card, "max_attackers", 0) and not pm.abilities_off()), default=0)
+        if _cap and len(attackers) > _cap:      # "no more than one creature can attack each combat"
+            attackers = sorted(attackers, key=lambda x: -x[0].power)[:_cap]
         # "can't attack alone": fuera si sería la única atacante
         if sum(1 for pm, _d in attackers if pm.can_attack()) <= 1:
             attackers = [(pm, d) for pm, d in attackers
@@ -5951,9 +6085,15 @@ class Game:
                 continue
             _paid.append((perm, defender))
         attackers = _paid
+        _dbf = [q for q in self.players if getattr(q, "_att_debuff", None) and q is not p]
         for perm, defender in attackers:
             if not perm.can_attack():
                 continue
+            for q in _dbf:                    # Jace, Architect of Thought +1 / Reality Sculptor −3
+                _n, _any = q._att_debuff
+                _dpl = defender if isinstance(defender, Player) else getattr(defender, "controller", None)
+                if _any or _dpl is q:
+                    perm.temp_pt[0] -= _n
             if isinstance(defender, Player):
                 if defender.lost:
                     continue
@@ -6016,7 +6156,9 @@ class Game:
                         self.discard_card(p, dc)
                 self.log(f"El Anillo: {perm.name} roba y descarta")
             cb = perm.card.triggers.get("attacks")
-            if cb:
+            _xat = 1 + sum(getattr(s.card, "attack_trig_extra", 0) or 0 for s in p.battlefield
+                           if not s.abilities_off())     # Windcrag Siege (Mardu) / Isshin
+            for _ in range(_xat if cb else 0):
                 self.stack.append(StackObject(
                     p, (lambda g, _cb=cb, _perm=perm, _d=defender:
                         g._run_trigger(_cb, _perm, {"defender": _d}, subject=_perm)),
@@ -6044,7 +6186,7 @@ class Game:
                         source=src, label=f"attacks_you:{src.name}", kind="trigger", perm=src))
             for src in p.battlefield:
                 gcb = src.card.triggers.get("creature_attacks")
-                if gcb:
+                for _ in range(_xat if gcb else 0):
                     self.stack.append(StackObject(
                         p, (lambda g, _cb=gcb, _s=src, _a=perm, _d=defender:
                             g._run_trigger(_cb, _s, {"attacker": _a, "defender": _d},
@@ -6294,7 +6436,10 @@ class Game:
         # landwalk: si el DEFENSOR controla una tierra de ese tipo, no se bloquea
         dfn = blocker.controller
         lands = [pm for pm in dfn.battlefield if pm.card.is_land()]
+        _woff = {w for pl in self.players for pm in pl.battlefield for w in (getattr(pm.card, "walk_off", None) or ())}
         for kw, sub in _LANDWALK.items():
+            if kw in _woff:
+                continue                 # Quagmire / Great Wall: se bloquea como si no tuviera landwalk
             if attacker.has(kw) and any(pm.has_subtype(sub) or pm.name.lower() == sub
                                         for pm in lands):
                 return False
@@ -6507,6 +6652,8 @@ class Game:
         """UNTAP + UPKEEP + DRAW + SBA. Compartido por el turno de la política
         (run_turn) y por el turno manual de un humano (interactive)."""
         self._opening_leylines()
+        if getattr(p, "_att_debuff", None):
+            p._att_debuff = None              # "until your next turn"
         if getattr(self, "_opening_fx", None):
             for ent in list(self._opening_fx):
                 pl, (scope, eff) = ent
@@ -6534,6 +6681,10 @@ class Game:
 
         def _g_nountap(pm):
             for k in _gnu:
+                if k.startswith("pow") and k[3:].isdigit():
+                    if pm.is_creature() and pm.power >= int(k[3:]):
+                        return True
+                    continue
                 if (k == "lands" and pm.card.is_land()) or (k == "creatures" and pm.is_creature()) or \
                         (k == "artifacts" and "artifact" in pm.card.types) or \
                         (k not in ("lands", "creatures", "artifacts") and pm.has_subtype(k.rstrip("s") if k != "plains" else k)):
@@ -6709,7 +6860,7 @@ class Game:
                 perm.temp_subtypes = set()       # subtipos temporales (tierras animadas)
         # el goad/obligación de atacar del jugador activo se agota tras su combate
         for perm in p.battlefield:
-            perm.goaded = False
+            perm.goaded = bool(getattr(perm, "perma_goad", False))   # "goaded for the rest of the game"
             perm.must_attack = False
         while len(p.hand) > self.max_hand_size(p):
             if p.policy and hasattr(p.policy, "choose_discard"):

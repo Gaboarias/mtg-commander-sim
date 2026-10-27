@@ -261,13 +261,9 @@ def remove_targets(mode="destroy"):
             if mode == "destroy":
                 game.destroy(perm, "removal")
             elif mode == "exile":
-                owner.battlefield.remove(perm)
-                if perm.is_token:
-                    continue
-                if game.commander_owner(perm.card) is not None:   # a la zona de mando de su dueño
-                    game.commander_owner(perm.card).command.append(perm.card)
-                else:
-                    owner.exile.append(perm.card)
+                # exile_permanent: dispara on_leave / "leaves the battlefield", fichas,
+                # comandante a la zona de mando y proxies (antes se salteaban)
+                game.exile_permanent(perm, "removal")
             elif mode == "bounce":
                 owner.battlefield.remove(perm)
                 if perm.is_token:

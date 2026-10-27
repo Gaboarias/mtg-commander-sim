@@ -1470,6 +1470,7 @@ export default function Play() {
           reanimate: "Revivir desde el cementerio", exile_pick: "Elegí una carta del exilio",
           cascade_target: "Cascada: elegí el objetivo",
           gy_shuffle: "Barajar cartas del cementerio",
+          mode_choice: "Elegí un modo",
         };
         // Una línea que EXPLICA la mecánica (sobre todo la jerga de MTG), debajo del
         // título. El `prompt` del motor da el detalle puntual (qué carta, cuántas faltan).
@@ -1491,6 +1492,7 @@ export default function Play() {
           creature_type: "Elegí un tipo de criatura (p. ej. Zombi, Elfo, Dragón).",
           discard: "Elegí qué carta mandar al cementerio.",
           may: "Decidí si querés aplicar el efecto opcional.",
+          mode_choice: "Al entrar elegís un modo; el permanente tiene solo la habilidad de ese modo.",
         };
         const title = titles[ch.kind] || "Elegí una carta";
         const hint = hints[ch.kind];
