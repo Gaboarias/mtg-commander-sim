@@ -281,7 +281,9 @@ class Permanent:
                 or getattr(self, "_detained_by", None) is not None
                 or getattr(self, "suspected", False)
                 or self.aura_flag("aura_no_block")
-                or self._color_cant_block())
+                or self._color_cant_block()
+                or (self.game is not None and any(getattr(pm.card, "global_no_block", False) and not pm.abilities_off()
+                                                  for pl in self.game.players for pm in pl.battlefield)))
 
     def _color_cant_block(self) -> bool:
         if self.game is None:
@@ -433,6 +435,10 @@ class Permanent:
     def has(self, kw: str) -> bool:
         if self.abilities_off():
             return False                 # perdió todas sus habilidades (mutación)
+        if self.game is not None and getattr(self.game, "_any_archetype", False) and any(
+                getattr(pm.card, "archetype_lose", None) == kw and not pm.abilities_off()
+                for o in self.game.opponents(self.controller) for pm in o.battlefield):
+            return False                 # Archetype: "creatures your opponents control lose <kw>"
         _lk = getattr(self, "_lost_kw", None)
         if _lk and self.game is not None and _lk[0] == self.game.turn and kw in _lk[1]:
             return False                 # "loses flying until end of turn"
@@ -666,6 +672,10 @@ class Player:
         if not opts or getattr(p, "game", None) is None:
             return opts
         if p.card.is_land():
+            for _src in self.battlefield:
+                _ya = getattr(_src.card, "your_lands_are", None)
+                if _ya and not _src.abilities_off():
+                    return {_ya: 1}              # Celestial Dawn: "lands you control are Plains"
             for _pl in p.game.players:
                 for _src in _pl.battlefield:
                     _nb = getattr(_src.card, "nonbasic_are", None)
@@ -1314,9 +1324,19 @@ class Game:
         estáticas desde el cementerio (Anger/Brawn/Wonder): 'mientras esta carta
         esté en tu cementerio (y controles un <subtipo>), tus criaturas tienen
         <keyword>'."""
+        ctrl = perm.controller
+        # "<tipo> (you control) have <kw>" (Greater Auramancy, Akroma's Devoted, Aysen Highway…)
+        for src in self.all_permanents():
+            for _gp, _gk, _gs, _go in (getattr(src.card, "kind_grants", None) or ()):
+                if kw in _gk and not src.abilities_off() and (_gs == "all" or src.controller is ctrl) \
+                        and not (_go and src is perm):
+                    try:
+                        if _gp(perm):
+                            return True
+                    except Exception:  # noqa: BLE001
+                        pass
         if not perm.is_creature():
             return False
-        ctrl = perm.controller
         # auras anexadas a este permanente que otorgan la keyword
         for src in self.all_permanents():
             if src.enchanting is perm and kw in (getattr(src.card, "aura_keywords", None) or set()):
@@ -1633,6 +1653,8 @@ class Game:
             return                      # "this creature can't have counters put on it"
         if n > 0 and perm.is_creature():
             perm.controller.ctr_put_turn = self.turn   # "if you put a counter on a creature this turn"
+        if n > 0:
+            perm._ctr_turn = self.turn                 # "if you put a counter on this creature this turn"
         _cps = (perm.card.triggers or {}).get("ctr_put_self")
         if _cps is not None and kind == "+1/+1" and n >= 1:
             self._push_self_trigger(perm, "ctr_put_self", "recibe contadores", amount=n)
@@ -1681,6 +1703,8 @@ class Game:
             return None
         perm = Permanent(card, player, is_token=is_token)
         perm.game = self
+        if getattr(card, "archetype_lose", None):
+            self._any_archetype = True
         if card.enters_tapped:
             perm.tapped = True
         if perm.tapped and card.is_land() and any(getattr(pm.card, "lands_enter_untapped", False)
@@ -2055,6 +2079,10 @@ class Game:
         ctrl.battlefield.remove(perm)
         if not perm.is_token:
             ctrl.descended_turn = self.turn  # descend: una carta de permanente fue a tu cementerio
+            _gk = getattr(ctrl, "_gy_from_bf", None)
+            if not _gk or _gk[0] != self.turn:
+                _gk = ctrl._gy_from_bf = (self.turn, set())
+            _gk[1].update(perm.card.types)
         _r = (reason or "").lower()
         self.note_departure(perm, "sacrificed" if (any(k in _r for k in self._SAC_REASONS) or "coste" in _r)
                             else getattr(self, "_dep_kind", None) or (
@@ -2088,6 +2116,13 @@ class Game:
                 self._deaths_turn, self.deaths_count = self.turn, 0
             self.deaths_count += 1
             ctrl.cr_died_turn = self.turn      # "if a creature died under your control this turn"
+            _dk = getattr(ctrl, "_died_kinds", None)
+            if not _dk or _dk[0] != self.turn:
+                _dk = ctrl._died_kinds = (self.turn, set())
+            _dk[1].update(s.lower() for s in (set(perm.card.subtypes) | perm.added_subtypes))
+            _dk[1].add("creature")
+            if not perm.is_token:
+                ctrl._cr_card_gy_turn = self.turn
             self.death_turn = self.turn       # morbid: murió una criatura este turno
             self.emit("death", player=ctrl, perm=perm)
             # "when enchanted creature dies, …" de las auras anexadas (mirando atrás)
@@ -2204,6 +2239,8 @@ class Game:
         lanzan si pueden pagarla."""
         card._discarded_turn = self.turn
         ctrl.discarded_turn = self.turn
+        if card.is_creature():
+            ctrl._cr_card_gy_turn = self.turn
         if self._x_listen("any_discarded"):
             self.emit("any_discarded", player=ctrl, card=card)   # "whenever a player discards a card"
         if card.types & {"creature", "artifact", "enchantment", "land", "planeswalker", "battle"}:
@@ -3173,6 +3210,10 @@ class Game:
         if card.is_creature():
             _ct = getattr(player, "_cr_cast", None)
             player._cr_cast = (self.turn, (_ct[1] if _ct and _ct[0] == self.turn else 0) + 1)
+        card._cast_n = player.spells_cast_turn            # "if it was the second spell you cast this turn"
+        card._alt_paid = getattr(card, "_alt_kind", None)  # "if its spectacle/surge cost was paid"
+        if card in player.hand or getattr(card, "_cast_from_hand", False):
+            player._hand_cast_turn = self.turn
         # Buyback: si se pagó el coste adicional de buyback, la carta vuelve a la mano.
         buyback_used = bool(getattr(card, "_buyback_used", False))
         card._cast_x = cast_x            # las copias del hechizo conservan su X
@@ -3374,6 +3415,8 @@ class Game:
         gb = ab.get("granted_by")
         if gb is not None and (gb not in gb.controller.battlefield or getattr(gb, "enchanting", None) is not perm):
             return False                 # habilidad otorgada por un aura/equipo que ya no está anexado
+        if ab.get("upkeep_only") and getattr(self, "_upkeep_of", None) is not perm.controller:
+            return False                 # "activate only during your upkeep"
         lr = ab.get("level_band")
         if lr and not (lr[0] <= perm.counters.get("level", 0) <= lr[1]):
             return False                 # habilidad de una banda de nivel (leveler)
@@ -4170,6 +4213,8 @@ class Game:
                     for pm in player.battlefield)
         extra += sum(getattr(pm.card, "extra_land_all", 0) or 0
                      for pl in self.players for pm in pl.battlefield)      # Rites of Flourishing
+        if any(getattr(pm.card, "self_no_lands", False) and not pm.abilities_off() for pm in player.battlefield):
+            return 0                     # "you can't play lands"
         if getattr(player, "no_land_turn", None) == self.turn or any(
                 getattr(pm.card, "global_no_lands", False) and not pm.abilities_off()
                 for pl in self.players for pm in pl.battlefield):
@@ -4490,6 +4535,8 @@ class Game:
         p.pay(cost)
         p.hand.remove(card)
         self.log(f"{p.name} cicla {card.name}")
+        _cy = getattr(p, "_cycles", None)
+        p._cycles = (self.turn, (_cy[1] if _cy and _cy[0] == self.turn else 0) + 1)
         self.discard_card(p, card)     # respeta madness
         if self._x_listen("cycled"):
             self.emit("cycled", player=p, card=card)
@@ -6254,6 +6301,8 @@ class Game:
             if perm.aura_flag("aura_no_untap") or getattr(perm.card, "no_untap_self", False) or (
                     _nuc and perm.counters.get(_nuc, 0) > 0) or (_gnu and _g_nountap(perm)):
                 pass                         # "doesn't untap during its controller's untap step"
+            elif perm.tapped and perm.counters.get("stun", 0) > 0:
+                perm.counters["stun"] -= 1   # contador de aturdimiento: se quita en vez de enderezar
             elif getattr(perm, "frozen", False):
                 perm.frozen = False          # "no se endereza en su próximo enderezar": salta uno
             elif getattr(perm, "exerted", False):
@@ -6325,6 +6374,24 @@ class Game:
         # "at the beginning of EACH player's upkeep": sin alcance (dispara para todos)
         self.emit("each_upkeep", active=p)
         self.resolve_stack()
+        # ventana de mantenimiento para "activate only during your upkeep" (bots)
+        if p is not getattr(self, "interactive_human", None) and any(
+                ab.get("upkeep_only") for pm in p.battlefield for ab in (pm.card.activated_abilities or ())):
+            self._upkeep_of = p
+            try:
+                for pm in list(p.battlefield):
+                    for j, ab in enumerate(pm.card.activated_abilities or ()):
+                        if not ab.get("upkeep_only") or pm not in p.battlefield:
+                            continue
+                        if ab.get("sacrifice_self") and pm.is_creature() and pm.power >= 3:
+                            continue
+                        if ab.get("cost") is not None and not p.can_pay(ab["cost"]):
+                            continue
+                        if self.activate_ability(pm, j):
+                            self.resolve_stack()
+                            break
+            finally:
+                self._upkeep_of = None
 
         # DRAW (el jugador inicial no roba en el turno 1)
         if not (self.turn == 1 and self.active_index == 0) and not any(
