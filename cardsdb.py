@@ -15,6 +15,12 @@ import json
 import os
 import re
 
+# El parser usa miles de patrones distintos y la caché de "re" guarda solo 512: cada
+# carta recompilaba casi todo (94% del tiempo de armar un mazo; en el navegador,
+# minutos de "cargando"). Con una caché grande cada patrón se compila una sola vez.
+if getattr(re, "_MAXCACHE", 0) < 100000:
+    re._MAXCACHE = 100000
+
 from engine import Card, Cost, parse_cost, W, U, B, R, G, C, KEYWORDS
 import cards
 
