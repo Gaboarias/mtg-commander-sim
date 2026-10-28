@@ -5050,6 +5050,11 @@ def _parse_gy_play(oracle: str, types: set):
     if me:
         return {"mode": "escape", "cost": _cost(me.group(1)),
                 "exile_n": _count_word(me.group(2)) or 0, "after": "exile"}
+    # "Flashback—Sacrifice three creatures." (Dread Return): coste de sacrificio
+    mfs = re.search(r"flashback\s*[—:-]\s*sacrifice (\w+) creatures?", t, re.I)
+    if mfs and _count_word(mfs.group(1).lower()):
+        return {"mode": "flashback", "cost": parse_cost("0"), "after": "exile",
+                "sac_n": _count_word(mfs.group(1).lower())}
     for kw, mode, after in (
         ("unearth", "unearth", "exile_eot"),
         ("embalm", "embalm", "token"),
@@ -5087,12 +5092,22 @@ def _wire_reanimate_aura(card, t):
         cands = [(pl, c) for pl in pools for c in pl.graveyard if c.is_creature()]
         if not cands:
             return
-        pl, c = max(cands, key=lambda x: ((x[1].cost.cmc if x[1].cost else 0), x[1].power, x[0] is ctrl))
-        pl.graveyard.remove(c)
-        host = game.move_to_battlefield(c, ctrl)
-        if host is not None:
-            perm.enchanting = host
-            game.log(f"{ctrl.name} reanima {c.name} con {perm.name}")
+        cands.sort(key=lambda x: ((x[1].cost.cmc if x[1].cost else 0), x[1].power, x[0] is ctrl), reverse=True)
+
+        def _do(pc):
+            perm._awaiting_host = False
+            pl, c = pc
+            if c not in pl.graveyard or perm not in perm.controller.battlefield:
+                return
+            pl.graveyard.remove(c)
+            host = game.move_to_battlefield(c, ctrl)
+            if host is not None:
+                perm.enchanting = host
+                game.log(f"{ctrl.name} reanima {c.name} con {perm.name}")
+            game.sba()
+        if ctrl is getattr(game, "interactive_human", None):
+            perm._awaiting_host = True        # la SBA no la descarta mientras elegís
+        _choose_gy_card(game, ctrl, cands, f"{perm.name}: elegí qué criatura reanimar", _do)
     card.on_etb = _etb
 
     def _leave(game, ctrl, perm, _prev=card.on_leave):
@@ -15605,6 +15620,267 @@ def _wire_b29(card, data, name, types):
 
 
 
+# ── batch 30: más cartas frecuentes de precons ──
+def _wire_b30(card, data, name, types):
+    raw = data.get("_orig_text") or data.get("oracle_text", "") or ""
+    t = re.sub(r"\s+", " ", raw.lower())
+    for nm in sorted((x for x in _self_names(name) if x), key=len, reverse=True):
+        t = t.replace(nm, "~")
+    t = re.sub(r"\bthis (?:creature|artifact|enchantment|equipment|land)\b", "~", t)
+    trg = dict(card.triggers or {})
+
+    def _add_trig(key, fn):
+        prev = trg.get(key)
+        trg[key] = fn if prev is None else (lambda g, perm, _a=prev, _b=fn, **kw: (_a(g, perm, **kw), _b(g, perm, **kw)))
+
+    # Clever Concealment: "any number of target nonland permanents you control phase out"
+    if {"instant", "sorcery"} & types and "any number of target nonland permanents you control phase out" in t:
+        def _cc(g, c, tg):
+            for pm in [x for x in c.battlefield if not x.card.is_land()]:
+                g.phase_out(pm)
+            g.log(f"{c.name}: sus permanentes no tierra quedan en fase")
+        card.on_cast_resolve = _cc
+
+    # Cursed Mirror / Masterwork of Ingenuity: "as ~ enters, you may have it become a copy of any
+    # creature (equipment) on the battlefield (until end of turn, except it has haste)"
+    m = re.search(r"as ~ enters, you may have it become a copy of any (creature|equipment) on the battlefield"
+                  r"( until end of turn, except it has haste)?", t) or \
+        re.search(r"you may have ~ enter as a copy of any (equipment) on the battlefield()", t)
+    if m:
+        def _mirror(g, c, perm, _k=m.group(1), _eot=bool(m.group(2)), _prev=card.on_etb):
+            import copy as _cl
+            cands = [pm for pl in g.players for pm in pl.battlefield if pm is not perm and (
+                pm.is_creature() if _k == "creature" else "equipment" in {x.lower() for x in pm.card.subtypes})]
+            cands.sort(key=lambda pm: -((pm.power + pm.toughness) if pm.is_creature() else
+                                        (pm.card.cost.cmc if pm.card.cost else 0)))
+
+            def _copy(tgt):
+                orig = perm.card
+                nc = _cl.deepcopy(tgt.card)
+                if _eot:
+                    nc.keywords = set(nc.keywords) | {"haste"}
+                    g.delayed_end.append(lambda gg, _p=perm, _o=orig: setattr(_p, "card", _o))
+                perm.card = nc
+                g.log(f"{orig.name} entra como copia de {tgt.name}")
+                if nc.on_etb is not None:
+                    nc.on_etb(g, c, perm)
+            if cands:
+                _choose_tgt(g, c, cands, f"{perm.name}: elegí qué copiar", _copy, allow_none=True)
+            if _prev:
+                _prev(g, c, perm)
+        card.on_etb = _mirror
+
+    # Coveted Jewel: lo resuelve el motor tras los bloqueos
+    if re.search(r"whenever one or more creatures an opponent controls attack you and aren't blocked, that player draws "
+                 r"three cards and gains control of ~", t):
+        card.coveted = True
+
+    # Veyran: disparos por lanzar/copiar instantáneos o conjuros se disparan otra vez
+    if "if you casting or copying an instant or sorcery spell causes a triggered ability of a permanent you control to "\
+       "trigger, that ability triggers an additional time" in t:
+        card.veyran = True
+
+    # Gisela: "if a source would deal damage to an opponent or a permanent an opponent controls, that
+    # source deals double that damage instead" + prevenir la mitad (redondeo arriba) a vos/tus permanentes
+    if "prevent half that damage, rounded up" in t and "deals double that damage" in t:
+        card.gisela = True
+        card.damage_double = None          # no es un doblador global (antes duplicaba también lo tuyo)
+
+    # Simic Ascendancy: contadores de crecimiento y victoria con 20
+    if re.search(r"whenever one or more \+1/\+1 counters are put on a creature you control, put that many growth "
+                 r"counters on ~", t):
+        card.growth_from_counters = True
+        m = re.search(r"at the beginning of your upkeep, if ~ has (\w+) or more growth counters on it, you win the game",
+                      t)
+        if m and _count_word(m.group(1)):
+            def _sa(g, perm, _n=_count_word(m.group(1)), **kw):
+                if kw.get("player") not in (None, perm.controller):
+                    return
+                if perm.counters.get("growth", 0) >= _n:
+                    for o in g.opponents(perm.controller):
+                        o.lost = True
+                    g.log(f"{perm.controller.name} gana la partida ({perm.name})")
+            _add_trig("upkeep", _sa)
+
+    # Tomb Blade: "whenever ~ deals combat damage to a player, that player loses life equal to the
+    # number of creatures they control"
+    if re.search(r"whenever ~ deals combat damage to a player, that player loses life equal to the number of creatures "
+                 r"they control", t):
+        def _tb(g, perm, **kw):
+            d = kw.get("defender")
+            if d is not None and hasattr(d, "life"):
+                n = len(d.creatures())
+                d.life -= n
+                g.log(f"{d.name} pierde {n} de vida ({perm.name})")
+        _add_trig("combat_damage_to_player", _tb)
+
+    # Shard of the Nightbringer: "target opponent loses half their life, rounded up. you gain life
+    # equal to the life lost this way"
+    if re.search(r"when ~ enters, (?:if you cast it, )?target opponent loses half their life, rounded up\. you gain life "
+                 r"equal to the life lost this way", t):
+        def _sn(g, c, pm, _prev=card.on_etb):
+            def _go(o):
+                n = (max(0, o.life) + 1) // 2
+                o.life -= n
+                g.gain_life(c, n)
+                g.log(f"{o.name} pierde {n} de vida; {c.name} gana {n}")
+            _pick_player(g, c, _go, include_self=False, bot=lambda cs: max(cs, key=lambda o: o.life),
+                         prompt="Elegí qué rival pierde la mitad de su vida")
+            if _prev:
+                _prev(g, c, pm)
+        card.on_etb = _sn
+
+    # The World Tree: "as long as you control six or more lands, lands you control have '{T}: add one
+    # mana of any color'"
+    m = re.search(r"as long as you control (\w+) or more lands, lands you control have \"\{t\}: add one mana of any "
+                  r"color", t)
+    if m and _count_word(m.group(1)):
+        card.lands_any_color_n = _count_word(m.group(1))
+
+    # Goldspan Dragon: "treasures you control have '{T}, sacrifice this artifact: add two mana of any one color'"
+    if re.search(r"treasures you control have \"\{t\}, sacrifice (?:this artifact|~): add two mana of any one color", t):
+        card.treasure_double = True
+
+    # Resourceful Defense: "whenever a permanent you control leaves the battlefield, if it had counters
+    # on it, put those counters on target permanent you control"
+    if re.search(r"whenever a permanent you control leaves the battlefield, if it had counters on it, put those counters "
+                 r"on target permanent you control", t):
+        def _rd(g, perm, **kw):
+            gone = kw.get("subject") or kw.get("perm")
+            if gone is None or gone is perm or gone.controller is not perm.controller:
+                return
+            ctrs = {k: v for k, v in (getattr(gone, "_last_counters", None) or gone.counters).items() if v > 0}
+            if not ctrs:
+                return
+            pool = sorted([x for x in perm.controller.battlefield if x is not gone],
+                          key=lambda x: -(x.power if x.is_creature() else 0))
+
+            def _put(x):
+                for k, v in ctrs.items():
+                    g.add_counters(x, k, v)
+                g.log(f"{perm.name}: los contadores de {gone.name} pasan a {x.name}")
+            _choose_tgt(g, perm.controller, pool, f"{perm.name}: elegí dónde poner los contadores de {gone.name}", _put)
+        _add_trig("other_leaves", _rd)
+
+    # Mimic Vat: imprimir criaturas que mueren y crear fichas copia
+    if "imprint — whenever a nontoken creature dies, you may exile that card" in t:
+        def _mv_death(g, perm, **kw):
+            dead = kw.get("subject") or kw.get("perm")
+            if dead is None or dead.is_token:
+                return
+            c = getattr(dead.card, "_real", None) or dead.card
+            owner = next((pl for pl in g.players if c in pl.graveyard), None)
+            if owner is None:
+                return
+
+            def _imp():
+                if c not in owner.graveyard:
+                    return
+                owner.graveyard.remove(c)
+                old = getattr(perm, "_imprinted", None)
+                if old is not None:
+                    for pl in g.players:
+                        if old in pl.exile:
+                            pl.exile.remove(old)
+                            pl.graveyard.append(old)
+                            break
+                owner.exile.append(c)
+                perm._imprinted = c
+                g.log(f"{perm.name} imprime {c.name}")
+            if perm.controller is getattr(g, "interactive_human", None):
+                _human_may(g, perm.controller, f"{perm.name}: ¿exiliar {c.name} con Mimic Vat?", _imp)
+            elif getattr(perm, "_imprinted", None) is None or (c.cost.cmc if c.cost else 0) > (
+                    perm._imprinted.cost.cmc if perm._imprinted.cost else 0):
+                _imp()
+        _add_trig("death", _mv_death)
+
+        def _mv_act(g, c, perm, tg):
+            import copy as _cl
+            src = getattr(perm, "_imprinted", None)
+            if src is None:
+                return
+            tok = g.move_to_battlefield(_cl.deepcopy(src), c, is_token=True)
+            if tok is not None:
+                tok.summoning_sick = False
+                g.delayed_end.append(lambda gg, _t=tok: (gg.exile_permanent(_t, "Mimic Vat")
+                                                         if _t in _t.controller.battlefield else None))
+                g.log(f"{c.name} crea una copia de {src.name} con prisa (Mimic Vat)")
+        card.activated_abilities = tuple(ab for ab in (card.activated_abilities or ())
+                                         if "copy of a card exiled" not in (ab.get("label") or "").lower()) + ({
+            "cost": parse_cost("3"), "tap": True, "sacrifice_self": False, "sacrifice_other": None, "pay_life": 0,
+            "discard": 0, "label": "Crear copia de la carta imprimida", "effect": _mv_act, "target_spec": None,
+            "target_count": 1, "is_copy_ability": False},)
+
+    # Diluvian Primordial: "for each opponent, you may cast up to one target instant or sorcery card
+    # from that player's graveyard without paying its mana cost. if a spell cast this way would be put
+    # into a graveyard, exile it instead"
+    if re.search(r"when ~ enters, for each opponent, you may cast up to one target instant or sorcery card from that "
+                 r"player's graveyard without paying its mana cost", t):
+        def _dp(g, c, pm, _prev=card.on_etb):
+            opps = [o for o in g.opponents(c) if not o.lost]
+
+            def _cast(oc):
+                o, k = oc
+                if k not in o.graveyard:
+                    return
+                o.graveyard.remove(k)
+                if k.on_cast_resolve:
+                    k.on_cast_resolve(g, c, g._auto_targets(c, k) or [])
+                o.exile.append(k)
+                g.log(f"{c.name} lanza gratis {k.name} del cementerio de {o.name}")
+
+            def _step(i):
+                if i >= len(opps):
+                    return
+                o = opps[i]
+                pool = [(o, k) for k in o.graveyard if {"instant", "sorcery"} & k.types]
+                pool.sort(key=lambda x: -(x[1].cost.cmc if x[1].cost else 0))
+                if not pool:
+                    _step(i + 1)
+                    return
+                if c is getattr(g, "interactive_human", None):
+                    _human_target_choice(g, c, "exile_pick", f"Cementerio de {o.name}: ¿qué hechizo lanzás gratis?",
+                                         [(k.name, (o, k)) for o, k in pool],
+                                         lambda oc: (_cast(oc), _step(i + 1)), allow_none=True,
+                                         on_none=lambda: _step(i + 1))
+                    return
+                _cast(pool[0])
+                _step(i + 1)
+            _route_choice(g, c, lambda: _step(0), lambda: _step(0))
+            if _prev:
+                _prev(g, c, pm)
+        card.on_etb = _dp
+
+    # Forgotten Ancient: "at the beginning of your upkeep, you may move any number of +1/+1 counters
+    # from ~ onto other creatures" (humano: elige a quién y cuántos; el bot los conserva)
+    if re.search(r"at the beginning of your upkeep, you may move any number of \+1/\+1 counters from ~ onto other "
+                 r"creatures", t):
+        def _fa(g, perm, **kw):
+            ctrl = perm.controller
+            if kw.get("player") not in (None, ctrl) or ctrl is not getattr(g, "interactive_human", None):
+                return
+
+            def _step():
+                n = perm.counters.get("+1/+1", 0)
+                others = [x for pl in g.players for x in pl.creatures() if x is not perm]
+                if n <= 0 or not others or perm not in ctrl.battlefield:
+                    return
+
+                def _to(x):
+                    _human_target_choice(g, ctrl, "amount", f"¿Cuántos contadores mover a {x.name}? (tiene {n})",
+                                         [(str(k), k) for k in range(n, 0, -1)],
+                                         lambda k, _x=x: (perm.counters.__setitem__("+1/+1", perm.counters["+1/+1"] - k),
+                                                          g.add_counters(_x, "+1/+1", k), _step()))
+                _human_target_choice(g, ctrl, "etb_target", f"{perm.name}: ¿a qué criatura mover contadores +1/+1?",
+                                     [(_tgt_label(g, x), x) for x in others], _to, allow_none=True)
+            _route_choice(g, ctrl, _step, lambda: None)
+        _add_trig("upkeep", _fa)
+
+    if trg != (card.triggers or {}):
+        card.triggers = trg
+
+
+
 def build_card_from_data(data: dict) -> Card:
     """Construye una Card desde un dict tipo Scryfall (name, mana_cost,
     type_line, power, toughness, keywords, color_identity).
@@ -19396,6 +19672,7 @@ def _build_card_from_data_impl(data: dict) -> Card:
             card.soulbond_kws = frozenset(gained)
 
     _wire_b29(card, data, name, types)
+    _wire_b30(card, data, name, types)
     if card_dice:
         card.dice_table = card_dice
     # efecto genérico POR TAG: en un hechizo, al resolver; en un permanente, solo si

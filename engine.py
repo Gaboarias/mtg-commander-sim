@@ -760,6 +760,13 @@ class Player:
                     if _ac and not _src.abilities_off():
                         opts = dict(opts)
                         opts[_ac] = max(opts.get(_ac, 0), max(opts.values()))
+        if p.card.is_land() and any(getattr(src.card, "lands_any_color_n", 0) and not src.abilities_off()
+                                    and sum(1 for x in self.battlefield if x.card.is_land()) >= src.card.lands_any_color_n
+                                    for src in self.battlefield):
+            opts = {c: max(opts.values()) for c in ("W", "U", "B", "R", "G")}   # The World Tree
+        if p.card.name == "Treasure" and p.is_token and any(getattr(src.card, "treasure_double", False)
+                                                            for src in self.battlefield):
+            opts = {k: v * 2 for k, v in opts.items()}                        # Goldspan Dragon
         if p.card.is_land() and any(getattr(src.card, "all_basic_types", False) for src in self.battlefield):
             opts = {c: max(opts.values()) for c in ("W", "U", "B", "R", "G")}   # Dryad of the Ilysian Grove
         if p.card.is_land():
@@ -1557,6 +1564,9 @@ class Game:
                     inner["subject"] = kw["perm"]
                 # Teysa / Drivnod: los disparos por muerte se disparan otra vez
                 copies = 1 + (self._death_extra(pl) if event == "death" else 0)
+                if event == "cast" and who is pl and {"instant", "sorcery"} & set(getattr(kw.get("card"), "types", ())) \
+                        and any(getattr(x.card, "veyran", False) and not x.abilities_off() for x in pl.battlefield):
+                    copies += 1                  # Veyran: los disparos por lanzar instantáneo/conjuro, x2
                 for _ in range(copies):
                     self.stack.append(StackObject(
                         controller=pl,
@@ -1875,7 +1885,34 @@ class Game:
                 if isinstance(target, Player) or (rd[0] == "you_perms" and target is not pm):
                     self.log(f"el daño a {target.name} se redirige a {dest.name}")
                     return dest, amount
+        # Gisela, Blade of Goldnight: doble a rivales y sus permanentes; la mitad (redondeo
+        # arriba) prevenida a su controlador y sus permanentes
+        if owner is not None:
+            for pl in self.players:
+                for pm in pl.battlefield:
+                    if getattr(pm.card, "gisela", False) and not pm.abilities_off():
+                        if owner is pm.controller:
+                            amount = amount // 2
+                        else:
+                            amount *= 2
         return target, amount
+
+    def _coveted_check(self, declared):
+        """Coveted Jewel: si criaturas de un rival atacan a su dueño y no son bloqueadas, ese
+        rival roba 3 y gana el control del artefacto (lo endereza)."""
+        hits = {}
+        for a in declared:
+            d = a.attacking if isinstance(a.attacking, Player) else None
+            if d is not None and not a.blocked_by and a in a.controller.battlefield:
+                hits.setdefault(id(d), (d, a.controller))
+        for _k, (d, att) in hits.items():
+            for jw in [x for x in d.battlefield if getattr(x.card, "coveted", False)]:
+                att.draw(3, self)
+                d.battlefield.remove(jw)
+                jw.controller = att
+                att.battlefield.append(jw)
+                jw.tapped = False
+                self.log(f"{att.name} roba 3 y toma {jw.name}")
 
     def _dies_to_exile(self, perm: "Permanent") -> bool:
         """¿Una muerte de `perm` se reemplaza por exilio? (odio de cementerio)."""
@@ -1949,6 +1986,10 @@ class Game:
                 if mod is not None:
                     n = mod(self, perm, kind, n)
         perm.counters[kind] = perm.counters.get(kind, 0) + n
+        if n > 0 and kind == "+1/+1" and perm.is_creature():
+            for _sa in perm.controller.battlefield:      # Simic Ascendancy
+                if getattr(_sa.card, "growth_from_counters", False) and not _sa.abilities_off():
+                    _sa.counters["growth"] = _sa.counters.get("growth", 0) + n
         _ce = getattr(perm.card, "counter_exile", None)
         if _ce and kind == _ce[0] and perm.counters.get(kind, 0) >= _ce[1] and perm in perm.controller.battlefield:
             self.exile_permanent(perm, "contadores")          # Mazemind Tome
@@ -2022,7 +2063,8 @@ class Game:
         if getattr(card, "draw_lock", None) or getattr(card, "draw_cap_opp", 0):
             self._any_draw_lock = True
         if (getattr(card, "dmg_plus", None) or getattr(card, "dmg_redirect", None)
-                or getattr(card, "no_prev_from", False) or getattr(card, "prevent_from_blocked", False)):
+                or getattr(card, "no_prev_from", False) or getattr(card, "prevent_from_blocked", False)
+                or getattr(card, "gisela", False)):
             self._any_dmg_mod = True
         if card.enters_tapped:
             perm.tapped = True
@@ -3034,7 +3076,8 @@ class Game:
                         self.log(f"{perm.name} se sacrifica (no controlás {need})")
                         self.to_graveyard(perm, "sin tierra requerida")
                         changed = True
-            # aura sin huésped válido -> al cementerio (bestow: vuelve a ser criatura)
+            # aura sin huésped válido -> al cementerio (bestow: vuelve a ser criatura). Animate Dead
+            # esperando que el humano elija la criatura todavía no tiene huésped: no se descarta.
             for p in self.players:
                 for perm in list(p.battlefield):
                     subs = {s.lower() for s in perm.card.subtypes}
@@ -3051,6 +3094,8 @@ class Game:
                             if ep.lost:
                                 self.to_graveyard(perm, "su jugador perdió")
                                 changed = True
+                            continue
+                        if getattr(perm, "_awaiting_host", False) and host is None:
                             continue
                         if host is None or host not in host.controller.battlefield:
                             self.to_graveyard(perm, "aura sin objetivo")
@@ -4777,6 +4822,13 @@ class Game:
             self.log(f"{p.name} lanza la secuela de {card.name}")
             self.sba()
             return True
+        if gp.get("sac_n"):
+            # "Flashback—Sacrifice N creatures" (Dread Return)
+            _sv = sorted([x for x in p.creatures() if not p.is_commander(x.card)], key=lambda x: (x.power, x.toughness))
+            if len(_sv) < gp["sac_n"]:
+                return False
+            for x in _sv[:gp["sac_n"]]:
+                self.to_graveyard(x, "sacrificio (flashback)")
         if m == "escape":
             others = [x for x in p.graveyard if x is not card]
             need = gp.get("exile_n", 0) or 0
@@ -6670,6 +6722,7 @@ class Game:
 
     def _finish_combat(self, declared: list):
         """Valida amenaza, aplica daño (primer golpe + normal) y limpia."""
+        self._coveted_check(declared)
         for a in declared:
             mn = getattr(a.card, "min_blockers", 0)
             if mn and 0 < len(a.blocked_by) < mn:
