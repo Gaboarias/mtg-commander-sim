@@ -1446,7 +1446,7 @@ class InteractiveGame:
                              "target_count": getattr(c, "target_count", 1),
                              "targets": tgts,
                              "modes": self._modes_for(c),
-                             "mode_pick": getattr(c, "mode_pick", 1)}
+                             "mode_pick": self.g.mode_pick_for(p, c)}
                     if not self._has_legal_target(c, tgts):
                         entry["castable"] = False
                         entry["reason"] = "Sin objetivos legales"
@@ -1862,7 +1862,7 @@ class InteractiveGame:
             "target_spec": getattr(c, "target_spec", None),
             "target_count": getattr(c, "target_count", 1),
             "targets": self._targets_for(c),
-            "modes": self._modes_for(c), "mode_pick": getattr(c, "mode_pick", 1),
+            "modes": self._modes_for(c), "mode_pick": self.g.mode_pick_for(me, c),
         } for i, c in enumerate(me.hand)
             if _fast(c, self.g)
             and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
@@ -1960,7 +1960,7 @@ class InteractiveGame:
             "target_spec": getattr(c, "target_spec", None),
             "target_count": getattr(c, "target_count", 1),
             "targets": self._targets_for(c),
-            "modes": self._modes_for(c), "mode_pick": getattr(c, "mode_pick", 1),
+            "modes": self._modes_for(c), "mode_pick": self.g.mode_pick_for(me, c),
         } for i, c in enumerate(me.hand)
             if _fast(c, self.g)
             and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]

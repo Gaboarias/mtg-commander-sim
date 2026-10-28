@@ -589,7 +589,7 @@ class Policy:
                     chosen.append(i)
                     gen, pips = g2, p2
             return chosen or [0]
-        pick = max(1, getattr(card, "mode_pick", 1))
+        pick = game.mode_pick_for(me, card) if hasattr(game, "mode_pick_for") else max(1, getattr(card, "mode_pick", 1))
         scored = []
         for i, m in enumerate(modes):
             spec = m.get("target_spec")
@@ -804,6 +804,16 @@ class Policy:
             if not mine:
                 return []
             n = max(1, getattr(card, "target_count", 1))
+            if "_blink_effect" in getattr(getattr(card, "on_cast_resolve", None), "__qualname__", ""):
+                # parpadeo: la que más gana re-entrando (su ETB), no la más grande
+                srcs = {id(x) for x in (getattr(game, "_trigger_source", None), getattr(game, "_etb_perm", None),
+                                        getattr(game, "_stack_src", None)) if x is not None}
+                mine = [p for p in mine if id(p) not in srcs and id(p.card) not in srcs]
+                if not mine:
+                    return []
+                mine.sort(key=lambda p: (p.card.on_etb is not None, p.card.cost.cmc if p.card.cost else 0),
+                          reverse=True)
+                return mine[:n]
             mine.sort(key=lambda p: (p.power, p.toughness), reverse=True)
             return mine[:n]
         if spec == "opp_creature":

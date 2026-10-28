@@ -1465,7 +1465,7 @@ def test_blink_reexecutes_etb():
         "color_identity": ["W"],
         "oracle_text": "Exile target creature you control, then return it to the "
                        "battlefield under its owner's control."})
-    assert blink.on_cast_resolve is not None and blink.target_spec == "own_perm"
+    assert blink.on_cast_resolve is not None and blink.target_spec == "own_creature"
     etb = cardsdb.build_card_from_data({
         "name": "Maker", "type_line": "Creature", "mana_cost": "{1}{W}",
         "power": "1", "toughness": "1", "color_identity": ["W"],
@@ -3989,7 +3989,7 @@ def test_cascade_spell_free_casts_cheaper():
         "name": "Bloom", "type_line": "Sorcery", "mana_cost": "{4}{G}",
         "oracle_text": "Cascade\nDraw two cards.", "keywords": ["Cascade"]})
     assert "cascade" in casc.tags
-    casc.on_cast_resolve(g, me, [])
+    casc.cast_trigger(g, me)                     # cascada = disparo al lanzar
     assert any(p.name == "Cheap" for p in me.battlefield)
 
 
@@ -4001,7 +4001,7 @@ def test_cascade_creature_triggers_on_enter():
     cc = cardsdb.build_card_from_data({
         "name": "Beast", "type_line": "Creature — Beast", "mana_cost": "{5}{G}",
         "power": "6", "toughness": "6", "oracle_text": "Cascade", "keywords": ["Cascade"]})
-    g.move_to_battlefield(cc, me)
+    cc.cast_trigger(g, me)                       # cascada al LANZAR (no al entrar)
     assert any(p.name == "Small" for p in me.battlefield)
 
 
@@ -4027,7 +4027,10 @@ def test_cascade_human_picks_target_manually():
     casc = cardsdb.build_card_from_data({
         "name": "Bloom", "type_line": "Sorcery", "mana_cost": "{4}{G}",
         "oracle_text": "Cascade", "keywords": ["Cascade"]})
-    casc.on_cast_resolve(ig.g, hu, [])
+    casc.cast_trigger(ig.g, hu)
+    pc = ig.g.pending_choice                       # primero: ¿lanzarlo gratis?
+    assert pc is not None and pc["kind"] == "may"
+    ig.resolve_choice(0)
 
     pc = ig.g.pending_choice
     assert pc is not None and pc["kind"] == "cascade_target"
@@ -4706,7 +4709,7 @@ def test_cascade_bot_no_target_prompt():
     casc = cardsdb.build_card_from_data({
         "name": "Bloom", "type_line": "Sorcery", "mana_cost": "{4}{G}",
         "oracle_text": "Cascade", "keywords": ["Cascade"]})
-    casc.on_cast_resolve(ig.g, bot, [])
+    casc.cast_trigger(ig.g, bot)
     assert ig.g.pending_choice is None                     # la IA no pausa
 
 
@@ -5259,6 +5262,7 @@ def test_extort_drains_on_cast():
         "name": "Blind Obedience", "mana_cost": "{1}{W}", "cmc": 2,
         "type_line": "Enchantment", "oracle_text": "Extort"})
     g.move_to_battlefield(ext, me)
+    g.move_to_battlefield(cards.land("Plains", ["W"], basic=True), me)    # paga el {W/B} del extort
     l0, my0 = op.life, me.life
     g.emit("cast", player=me, card=cards.creature("Z", "1U", 1, 1))
     g.resolve_stack()

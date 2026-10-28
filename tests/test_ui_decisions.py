@@ -6,8 +6,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from engine import G, B, R  # noqa: E402
-from cards import creature  # noqa: E402
+from engine import G, B, R, U  # noqa: E402
+from cards import creature, land  # noqa: E402
 from test_parser_corpus import build, new_game, run, put, give_lands  # noqa: E402
 
 
@@ -172,3 +172,65 @@ def test_tap_or_untap_and_unblockable_choice():
     assert g.pending_choice["kind"] == "may"
     _choose(g, "Girar")
     assert a.tapped
+
+
+def test_optional_payments_and_may_triggers_ask_human():
+    g, me, ops = _human_game()
+    give_lands(g, me, 3, colors=(G,))
+    dh = put(g, build("Dawn of Hope", "{1}{W}", "Enchantment", "Whenever you gain life, you may pay {2}. If you do, "
+                      "draw a card.\n{3}{W}: Create a 1/1 white Soldier creature token with lifelink."), me)
+    me.library = [land("F", [G], basic=True) for _ in range(3)]
+    g._run_trigger(dh.card.triggers["gain_life"], dh, {"player": me, "amount": 2})
+    assert g.pending_choice and g.pending_choice["kind"] == "may"
+    hand = len(me.hand)
+    _choose(g, "No")
+    assert len(me.hand) == hand                          # dijo que no: no paga ni roba
+    g._run_trigger(dh.card.triggers["gain_life"], dh, {"player": me, "amount": 2})
+    _choose(g, "Sí")
+    assert len(me.hand) == hand + 1
+
+
+def test_extort_charges_mana_and_asks():
+    g, me, ops = _human_game()
+    ex = put(g, build("Tithe", "{2}{B}", "Creature — Vampire", "Extort", 2, 1), me)
+    life = ops[0].life
+    g._run_trigger(ex.card.triggers["cast"], ex, {"player": me})
+    assert g.pending_choice is None and ops[0].life == life          # sin maná: no hay extorsión
+    give_lands(g, me, 1, colors=(B,))
+    g._run_trigger(ex.card.triggers["cast"], ex, {"player": me})
+    _choose(g, "Sí")
+    assert ops[0].life == life - 1 and me.life == 41
+
+
+def test_you_may_trigger_and_land_from_hand():
+    g, me, ops = _human_game()
+    me.library = [land("F", [G], basic=True) for _ in range(5)]
+    ce = put(g, build("Tamper", "{2}{B}", "Enchantment", "At the beginning of your upkeep, you may mill three cards."), me)
+    g._run_trigger(ce.card.triggers["upkeep"], ce, {"player": me})
+    assert g.pending_choice and g.pending_choice["kind"] == "may"
+    _choose(g, "No")
+    assert len(me.graveyard) == 0
+    me.hand = [land("Forest", [G], basic=True), land("Island", [U], basic=True)]
+    uro = build("Uro", "{1}{G}{U}", "Legendary Creature — Elder Giant", "Whenever Uro enters or attacks, you gain 3 "
+                "life and draw a card, then you may put a land card from your hand onto the battlefield.", 6, 6)
+    put(g, uro, me)
+    assert g.pending_choice and g.pending_choice["kind"] == "reveal_land" and g.pending_choice["allow_none"]
+    _choose(g, "Island")
+    assert any(pm.name == "Island" for pm in me.battlefield)
+
+
+def test_drown_in_dreams_modes_and_player_choice():
+    g, me, ops = _human_game()
+    dd = build("Drown in Dreams", "{X}{2}{U}", "Instant", "Choose one. If you control a commander as you cast this "
+               "spell, you may choose both instead.\n• Target player draws X cards.\n• Target player mills twice X "
+               "cards.")
+    assert len(dd.modes) == 2 and dd.mode_pick_cmdr
+    assert g.mode_pick_for(me, dd) == 1
+    g.move_to_battlefield(me.commanders[0], me)
+    assert g.mode_pick_for(me, dd) == 2
+    ops[0].library = [land("I", [U], basic=True) for _ in range(10)]
+    g.spell_x = 2
+    dd.modes[1]["effect"](g, me, [])
+    assert g.pending_choice["kind"] == "player_target"
+    _choose(g, ops[0].name)
+    assert len(ops[0].graveyard) == 4

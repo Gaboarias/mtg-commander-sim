@@ -361,7 +361,15 @@ class Permanent:
 
     @property
     def power(self) -> int:
-        return (self._base_pt()[0] + self.counters.get("+1/+1", 0)
+        _dp = getattr(self.card, "dyn_power", None)
+        if _dp is not None and getattr(self, "game", None) is not None:
+            try:
+                base = _dp(self.game, self)    # "~'s power is equal to …" (Nighthawk Scavenger)
+            except Exception:  # noqa: BLE001
+                base = self._base_pt()[0]
+        else:
+            base = self._base_pt()[0]
+        return (base + self.counters.get("+1/+1", 0)
                 - self.counters.get("-1/-1", 0)
                 + self._static_delta()[0] + self.temp_pt[0])
 
@@ -409,6 +417,9 @@ class Permanent:
                     return True
         if s in {x.lower() for x in self.added_subtypes}:
             return True
+        if self.game is not None and getattr(self.game, "_any_all_types", False) and self.is_creature() and any(
+                getattr(x.card, "all_types_own", False) and not x.abilities_off() for x in self.controller.battlefield):
+            return True                          # Maskwood Nexus: tus criaturas son de todos los tipos
         if s in {x.lower() for x in self.temp_subtypes}:
             return True
         if self.counters.get("everything", 0) > 0:
@@ -1372,6 +1383,14 @@ class Game:
             out.extend(pl.battlefield)
         return out
 
+    def mode_pick_for(self, player, card) -> int:
+        """Cuántos modos puede elegir `player` para `card` ("if you control a commander as
+        you cast this spell, you may choose both instead")."""
+        n = max(1, getattr(card, "mode_pick", 1) or 1)
+        if getattr(card, "mode_pick_cmdr", False) and any(player.is_commander(pm.card) for pm in player.battlefield):
+            n = max(n, len(getattr(card, "modes", ()) or ()))
+        return n
+
     def may(self, ctrl: "Player", prompt: str, on_yes) -> None:
         """Decisión OPCIONAL ('podés hacer X'). El humano elige sí/no vía
         pending_choice; los bots auto-aceptan (heurística: suele convenir).
@@ -1930,7 +1949,28 @@ class Game:
                 if mod is not None:
                     n = mod(self, perm, kind, n)
         perm.counters[kind] = perm.counters.get(kind, 0) + n
+        _ce = getattr(perm.card, "counter_exile", None)
+        if _ce and kind == _ce[0] and perm.counters.get(kind, 0) >= _ce[1] and perm in perm.controller.battlefield:
+            self.exile_permanent(perm, "contadores")          # Mazemind Tome
+            self.gain_life(perm.controller, _ce[2])
+            return n
+        # Enduring Scalelord: "whenever one or more +1/+1 counters are put on another creature
+        # you control, you may put a +1/+1 counter on ~" (los suyos no re-disparan: sin bucles)
+        if n > 0 and kind == "+1/+1" and perm.is_creature() and not getattr(self, "_scale_busy", False):
+            for src in list(perm.controller.battlefield):
+                if src is not perm and getattr(src.card, "counters_on_other_bonus", False) and not src.abilities_off():
+                    self.stack.append(StackObject(
+                        src.controller, (lambda g, _s=src: g._scale_bonus(_s)),
+                        source=src, label=f"scalelord:{src.name}", kind="trigger", perm=src))
         return n
+
+    def _scale_bonus(self, src):
+        if src in src.controller.battlefield:
+            self._scale_busy = True
+            try:
+                self.add_counters(src, "+1/+1", 1)
+            finally:
+                self._scale_busy = False
 
     def _run_trigger(self, cb, perm, kw, subject=None):
         """Resuelve una disparada dejando a mano la FUENTE (el permanente que
@@ -1969,8 +2009,12 @@ class Game:
             return None
         perm = Permanent(card, player, is_token=is_token)
         perm.game = self
+        if is_token:
+            player._token_turn = self.turn      # "if you created a token this turn"
         if getattr(card, "archetype_lose", None):
             self._any_archetype = True
+        if getattr(card, "all_types_own", False):
+            self._any_all_types = True
         if getattr(card, "gy_replace", None):
             self._any_gy_replace = True
         if getattr(card, "sac_no_creatures", False):
@@ -2657,12 +2701,14 @@ class Game:
         if not no_prev and isinstance(target, Player):
             if getattr(target, "prevent_all", False):
                 self.log(f"se previene el daño a {target.name}")
+                self.emit("damage_prevented", player=target, amount=amount)   # Selfless Squire
                 return
             pv = getattr(target, "prevent", 0)
             if pv > 0:
                 blocked = min(pv, amount)
                 target.prevent = pv - blocked
                 amount -= blocked
+                self.emit("damage_prevented", player=target, amount=blocked)
                 if amount <= 0:
                     return
         elif not no_prev and isinstance(target, Permanent):
@@ -3147,7 +3193,10 @@ class Game:
             if getattr(_o, "silence_turn", None) == self.turn:
                 return False             # "your opponents can't cast spells this turn"
             if _o is _act and any(getattr(pm.card, "opp_no_cast_your_turn", False)
-                                  and not pm.abilities_off() for pm in _o.battlefield):
+                                  and not pm.abilities_off()
+                                  and (not getattr(pm.card, "ncast_attached", False)
+                                       or getattr(pm, "enchanting", None) is not None)
+                                  for pm in _o.battlefield):
                 return False             # "your opponents can't cast spells during your turn"
         cost = card.cost
         # impuesto de comandante + reducciones + stax
@@ -3272,6 +3321,13 @@ class Game:
                     if 0 <= mi < len(sc) and sc[mi] is not None:
                         pay_cost = Cost(generic=pay_cost.generic + sc[mi].generic,
                                         pips=pay_cost.pips + sc[mi].pips)
+            if getattr(card, "escalate_tap", False) and len(set(chosen_modes)) > 1:
+                # Collective Effort: cada modo extra = girar una criatura tuya sin girar
+                _pool = sorted([pm for pm in player.creatures() if not pm.tapped], key=lambda x: x.power)
+                _k = min(len(set(chosen_modes)) - 1, len(_pool))
+                chosen_modes = list(dict.fromkeys(chosen_modes))[:_k + 1]
+                for pm in _pool[:_k]:
+                    pm.tapped = True
             ec = getattr(card, "escalate_cost", None)
             if ec is not None and len(set(chosen_modes)) > 1:
                 k = len(set(chosen_modes)) - 1
@@ -3853,6 +3909,15 @@ class Game:
             if isinstance(t, Permanent) and t in t.controller.battlefield:
                 self._push_self_trigger(t, "becomes_target_spell" if spell else "becomes_target_ability",
                                         "es objetivo")
+            # Thunderbreak Regent: "whenever a Dragon you control becomes the target of a spell or
+            # ability an opponent controls, ~ deals 3 damage to that player"
+            if isinstance(t, Permanent) and t.controller is not caster:
+                for src in list(t.controller.battlefield):
+                    tp = getattr(src.card, "targeted_punish", None)
+                    if tp and t.has_subtype(tp[0]) and not src.abilities_off():
+                        self.stack.append(StackObject(
+                            t.controller, (lambda g, _s=src, _c=caster, _n=tp[1]: g.deal_damage(_s, _c, _n)),
+                            source=src, label=f"targeted:{src.name}", kind="trigger", perm=src))
             if isinstance(t, Permanent) and getattr(t.card, "sac_when_targeted", False) \
                     and (spell or t.card.sac_when_targeted is True) \
                     and t in t.controller.battlefield:
@@ -4098,6 +4163,10 @@ class Game:
             if (_r[0] == "creature" and perm.is_creature()) or (_r[0] == "equip" and ab.get("label") == "Equipar"):
                 _red += _r[1]
                 _floor1 = _floor1 or _r[2]
+        if ab.get("label") == "Equipar" and pay_cost is not None and any(
+                getattr(_pm.card, "metalcraft_equip0", False) and not _pm.abilities_off() for _pm in ctrl.battlefield) \
+                and sum(1 for _pm in ctrl.battlefield if "artifact" in _pm.card.types) >= 3:
+            pay_cost = Cost(0, ())               # Puresteel Paladin (metalcraft): equip {0}
         if _red and pay_cost is not None and pay_cost.generic:
             _g = max(0, pay_cost.generic - _red)
             if _floor1 and _g == 0 and not pay_cost.pips:
@@ -4121,6 +4190,8 @@ class Game:
         # costes adicionales: verificar que se pueden pagar ANTES de tocar nada.
         sac_o = ab.get("sacrifice_other")
         pay_life = ab.get("pay_life") or 0
+        if pay_life == "cmd_colors":                 # War Room: colores de tu identidad de comandante
+            pay_life = len(ctrl.identity())
         disc = ab.get("discard") or 0
         sac_victims = []
         if sac_o:
@@ -4473,6 +4544,9 @@ class Game:
             if k == "any" or (k == "creature" and top.is_creature()) or (
                     k in top.types):
                 return top
+            if k == "art_colorless" and ("artifact" in top.types or not (
+                    top.cost is not None and set("WUBRG") & {x for pp in top.cost.pips for x in str(pp).upper()})):
+                return top                   # Mystic Forge: artefactos y hechizos incoloros
             if isinstance(k, str) and k.startswith("sub:") and any(
                     x in top.types or x.lower() in {st.lower() for st in top.subtypes} for x in k[4:].split("|")):
                 return top
@@ -6114,6 +6188,14 @@ class Game:
         if sum(1 for pm, _d in attackers if pm.can_attack()) <= 1:
             attackers = [(pm, d) for pm, d in attackers
                          if not getattr(pm.card, "attack_not_alone", False)]
+        # "creatures with flying / named X can't attack you" (Sandwurm Convergence, Rite of the
+        # Raging Storm): el defensor tiene un permanente que prohíbe a ese atacante
+        def _forbid(pm, d):
+            dpl = d if isinstance(d, Player) else getattr(d, "controller", None)
+            return dpl is not None and any(
+                getattr(x.card, "no_attack_pred", None) is not None and not x.abilities_off()
+                and x.card.no_attack_pred(pm) for x in dpl.battlefield)
+        attackers = [(pm, d) for pm, d in attackers if not _forbid(pm, d)]
         # Ghostly Prison / Propaganda: pagar {N} por cada criatura que ataca a ese jugador
         _paid = []
         for perm, defender in attackers:
@@ -6122,6 +6204,11 @@ class Game:
             if tax and not p.pay(Cost(tax, ())):
                 self.log(f"{p.name} no puede pagar el impuesto para atacar con {perm.name}")
                 continue
+            if tax:
+                _src = next((x.name for x in dpl.battlefield if (getattr(x.card, "attack_tax", 0)
+                                                                 or getattr(x.card, "attack_tax_ench", False))), "")
+                self.log(f"{p.name} paga {{{tax}}} para atacar a {dpl.name} con {perm.name}"
+                         + (f" ({_src})" if _src else ""))
             _paid.append((perm, defender))
         attackers = _paid
         _dbf = [q for q in self.players if getattr(q, "_att_debuff", None) and q is not p]
@@ -6246,7 +6333,11 @@ class Game:
                     self._push_self_trigger(_w, "attacks_alone", "ataca sola", subject=declared[0])
         if declared:
             self._combat_declare_triggers(p, declared)
-        self.resolve_stack()
+        self._cur_declared = declared            # "tapped and attacking" (Kaalia) se suma acá
+        try:
+            self.resolve_stack()
+        finally:
+            self._cur_declared = None
         if declared:
             self.emit("you_attack", player=p)    # "whenever you attack"
             self._curse_attack_triggers(p, declared)
@@ -6300,7 +6391,7 @@ class Game:
         # myriad: por cada OTRO rival, una ficha copia girada y atacándolo; se
         # exilian al final del combate. Se agregan a `declared` (misma lista).
         for a in list(declared):
-            if not getattr(a.card, "myriad", False) or a.is_token and getattr(a, "_myriad", False):
+            if not (getattr(a.card, "myriad", False) or a.has("myriad")) or a.is_token and getattr(a, "_myriad", False):
                 continue
             dfn = a.attacking if isinstance(a.attacking, Player) else a.attacking.controller
             for opp in self.opponents(p):
