@@ -957,6 +957,10 @@ h3 svg { color: currentColor; }
 .decide-sacrifice .decide-opt.picked, .decide-keep .decide-opt.picked { border-color: #e0684f; box-shadow: 0 0 0 2px #e0684f, 0 0 16px rgba(224,104,79,.6); }
 .decide-opt:disabled:not(.picked) { opacity: .45; }
 .decide-none { animation: decide-opt-in .24s ease-out .12s both; }
+.inspect.decide-player_target, .inspect.decide-amount { border-top-color: var(--accent-2); }
+.color-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,.35); flex: 0 0 auto; }
+.color-dot.c-blanco { background: #f4ecd2; } .color-dot.c-azul { background: #4a8fd8; }
+.color-dot.c-negro { background: #2b2630; } .color-dot.c-rojo { background: #d8513a; } .color-dot.c-verde { background: #3f9a52; }
 @keyframes decide-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes decide-in { from { opacity: 0; transform: translateY(14px) scale(.94); } to { opacity: 1; transform: none; } }
 @keyframes decide-opt-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }

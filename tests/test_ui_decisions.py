@@ -96,3 +96,79 @@ def test_kicker_and_sac_cost_prefs():
     assert g.cast(me, no)
     g._human_pref = None
     assert b not in me.battlefield and a in me.battlefield
+
+
+def _human_game(n_opp=1):
+    g, me, ops = new_game(n_opp)
+    g.interactive_human = me
+    g.active_index = g.players.index(me)
+    return g, me, ops
+
+
+def test_qualified_removal_asks_human_and_bot_spares_own():
+    g, me, ops = _human_game()
+    mine = put(g, creature("Mine", "1G", 5, 5), me)
+    a = put(g, creature("OppA", "1G", 2, 2), ops[0])
+    b = put(g, creature("OppB", "1R", 4, 4), ops[0])
+    put(g, creature("OppBlack", "1B", 6, 6), ops[0])
+    t = build("Terror", "{1}{B}", "Instant", "Destroy target nonartifact, nonblack creature. It can't be regenerated.")
+    t.on_cast_resolve(g, me, [])
+    ch = g.pending_choice
+    assert ch and ch["kind"] == "etb_target" and not any("OppBlack" in o["name"] for o in ch["options"])
+    _choose(g, "OppA")
+    assert a not in ops[0].battlefield and b in ops[0].battlefield
+    # bot: la más amenazante del rival, nunca la propia
+    g.interactive_human = None
+    t2 = build("Terror", "{1}{B}", "Instant", "Destroy target nonartifact, nonblack creature. It can't be regenerated.")
+    t2.on_cast_resolve(g, me, [])
+    assert b not in ops[0].battlefield and mine in me.battlefield
+
+
+def test_non_removal_generic_no_longer_kills_creatures():
+    g, me, ops = new_game()
+    big = put(g, creature("Big", "3G", 6, 6), ops[0])
+    pg = build("Purify the Grave", "{W}", "Instant", "Exile target card from a graveyard.\nFlashback {W}")
+    pg.on_cast_resolve(g, me, [])
+    assert big in ops[0].battlefield
+
+
+def test_divided_damage_human_assigns():
+    g, me, ops = _human_game()
+    a = put(g, creature("OppA", "1G", 2, 2), ops[0])
+    b = put(g, creature("OppB", "1G", 1, 1), ops[0])
+    put(g, build("Titan", "{4}{R}{R}", "Creature — Giant", "When this creature enters, it deals 3 damage divided as you "
+                 "choose among one, two, or three targets.", 6, 6), me)
+    _choose(g, "OppA")
+    assert g.pending_choice["kind"] == "amount"
+    _choose(g, "2")
+    _choose(g, "OppB")
+    assert a not in ops[0].battlefield and b not in ops[0].battlefield
+
+
+def test_target_player_mill_can_pick_self_and_color_choice():
+    g, me, ops = _human_game(2)
+    me.library = [creature("X", "G", 1, 1) for _ in range(5)]
+    gm = build("Mindcrusher", "{4}{U}{U}", "Creature — Zombie Horror", "When this creature enters, target player mills "
+               "five cards.", 5, 5)
+    put(g, gm, me)
+    assert g.pending_choice["kind"] == "player_target"
+    _choose(g, "Vos")
+    assert len(me.graveyard) == 5
+    cs = build("Caged", "{6}", "Artifact", "As this artifact enters, choose a color.\nCreatures you control of the "
+               "chosen color get +1/+1.")
+    pm = put(g, cs, me)
+    assert g.pending_choice["kind"] == "color"
+    _choose(g, "Azul")
+    assert pm.chosen_color == "U"
+
+
+def test_tap_or_untap_and_unblockable_choice():
+    g, me, ops = _human_game()
+    a = put(g, creature("OppA", "1G", 2, 2), ops[0])
+    put(g, creature("OppB", "1G", 3, 3), ops[0])
+    put(g, build("Pester", "{2}{U}", "Creature — Faerie", "Flash\nFlying\nWhen this creature enters, you may tap or "
+                 "untap target permanent.", 2, 1), me)
+    _choose(g, "OppA")
+    assert g.pending_choice["kind"] == "may"
+    _choose(g, "Girar")
+    assert a.tapped

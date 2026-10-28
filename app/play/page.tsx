@@ -1484,6 +1484,7 @@ export default function Play() {
           mode_choice: "Elegí un modo",
           sacrifice: "Sacrificar", keep: "Elegí qué conservar",
           opt_cost: "Coste opcional",
+          player_target: "Elegí un jugador", amount: "¿Cuánto?", color: "Elegí un color",
         };
         // Una línea que EXPLICA la mecánica (sobre todo la jerga de MTG), debajo del
         // título. El `prompt` del motor da el detalle puntual (qué carta, cuántas faltan).
@@ -1508,7 +1509,10 @@ export default function Play() {
           mode_choice: "Al entrar elegís un modo; el permanente tiene solo la habilidad de ese modo.",
           sacrifice: "Elegí qué permanente tuyo va al cementerio.",
           keep: "Lo que no conserves se sacrifica.",
-          opt_cost: "Pagarlo es opcional: decidí antes de que el hechizo vaya a la pila.",
+          opt_cost: "Pagarlo es opcional; si no lo pagás, pasa lo que dice la otra opción.",
+          player_target: "El efecto apunta a un jugador: elegí a quién.",
+          amount: "Repartí el total entre los objetivos que elijas.",
+          color: "El permanente recuerda el color elegido para sus habilidades.",
         };
         const title = titles[ch.kind] || "Elegí una carta";
         const hint = hints[ch.kind];
@@ -1562,7 +1566,9 @@ export default function Play() {
                     onClick={() => pickChoice(o.i)}
                     style={{ display: "inline-flex", alignItems: "center", gap: 6,
                              animationDelay: `${Math.min(k, 10) * 40}ms` }}>
-                    {art[o.name]
+                    {ch.kind === "color"
+                      ? <span className={`color-dot c-${o.name.split(" ")[0].toLowerCase()}`} />
+                      : art[o.name]
                       ? <span className="choice-thumb" style={{ backgroundImage: `url(${art[o.name]})` }} />
                       : <Icon name={isCardPick ? (o.is_land ? "land" : "cards") : "chevron-right"} size={13} />}
                     {o.name}
