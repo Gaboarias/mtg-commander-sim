@@ -1663,6 +1663,7 @@ def _parse_activated(oracle: str, name: str = ""):
     restricciones (una vez por partida, solo si atacó, solo si <condición>, solo
     como conjuro, una vez por turno)."""
     out = []
+    oracle = re.sub(r"\n\s*•", " •", oracle or "")       # "{2}: Choose one — • … • …" en una línea
     for raw in (oracle or "").split("\n"):
         ln = raw.strip()
         flags = {}
@@ -1782,6 +1783,7 @@ def _parse_activated_core0(oracle: str, name: str = ""):
     _fh = [0, False]                   # (inicio de la línea previa en out, ¿desde la mano?)
     _fh_exile = [False]                # el coste de la mano es EXILIARLA (no descartarla)
     _xc = [[]]                         # costes extra de la línea previa (batch 21)
+    oracle = re.sub(r"\n\s*•", " •", oracle or "")       # "{2}: Choose one — • … • …" en una línea
     for raw in (oracle or "").split("\n") + [""]:
         if _fh[1]:
             for _ab in out[_fh[0]:]:
@@ -2176,7 +2178,43 @@ def _parse_activated_core0(oracle: str, name: str = ""):
                         "label": _short_label(body), "effect": eff_shuffle_gy,
                         "target_spec": None, "target_count": 1, "is_copy_ability": False})
             continue
-        eff, spec, count = _fragment_effect(body)
+        _is_modal = bool(re.match(r"(?i)choose (?:one|two|one or both|one or more)\.?\s*[—–-]?\s*•", body))
+        eff, spec, count = (None, None, 1) if _is_modal else _fragment_effect(body)
+        if eff is None and _is_modal:
+            _md = _parse_modes(body)
+            if _md is not None:
+                _mds = _md[0]
+
+                def eff(g, c, tg=None, _ms=_mds):
+                    good = [i for i, md in enumerate(_ms) if md.get("effect") is not None]
+                    if not good:
+                        return
+
+                    def _run(i, _ms=_ms):
+                        md = _ms[i]
+                        tg2 = []
+                        if md.get("target_spec"):
+                            import copy as _cp
+                            px = _cp.copy(getattr(g, "_trigger_source", None).card) if getattr(
+                                g, "_trigger_source", None) is not None else None
+                            if px is not None:
+                                px.target_spec, px.target_count = md["target_spec"], md.get("target_count", 1)
+                                tg2 = g._auto_targets(c, px) or []
+                        md["effect"](g, c, tg2)
+                    _human_target_choice(g, c, "mode_choice", "Elegí un modo",
+                                         [(_ms[i]["label"], i) for i in good], _run)
+                spec, count = None, 1
+        if eff is None:
+            # batch 28: el parser general de efectos (atómicos, "until end of turn, this
+            # land becomes…", modos, fuente = el permanente que activa) antes del respaldo
+            try:
+                _ae = _effect_any(re.sub(r"(?i)\bactivate only (?:as a sorcery|once each turn|"
+                                         r"during your turn)\.?", "", body).strip())
+            except RecursionError:
+                _ae = None
+            if _ae is not None:
+                eff = (lambda g, c, tg=None, _a=_ae: _a(g, c))
+                spec, count = None, 1
         if eff is None:
             # efecto no modelado: EXPONER igual la habilidad con un respaldo visible,
             # así el jugador puede activarla (mismo criterio que los modos).
@@ -7124,6 +7162,374 @@ def _atomic_effect(text):
                         o.life -= n
             game.sba()
         return eff_mass_state
+    # ── batch 28: habilidades de lealtad comunes sin efecto ──
+    m = re.fullmatch(r"(destroy|exile) all (other )?(?:(non-?[a-z]+) )?(creatures|permanents)(?: with power (\d+) or "
+                     r"(greater|less))?(?: except for lands and tokens)?", t)
+    if m:
+        def eff_mass28(game, ctrl, *a, _v=m.group(1), _oth=bool(m.group(2)), _neg=m.group(3), _k=m.group(4),
+                       _pw=int(m.group(5)) if m.group(5) else None, _ge=m.group(6) == "greater",
+                       _exc="except for lands and tokens" in t, **kw):
+            src = _src_perm(game, a)
+            neg = (_neg or "").replace("non-", "non")[3:] if _neg else None
+            vic = []
+            for pl in game.players:
+                for pm in list(pl.battlefield):
+                    if _oth and pm is src:
+                        continue
+                    if _k == "creatures" and not pm.is_creature():
+                        continue
+                    if _exc and (pm.card.is_land() or pm.is_token):
+                        continue
+                    if neg and (pm.has_subtype(neg) or neg in pm.card.types):
+                        continue
+                    if _pw is not None and not (pm.power >= _pw if _ge else pm.power <= _pw):
+                        continue
+                    vic.append(pm)
+            for pm in vic:
+                if pm in pm.controller.battlefield:
+                    (game.exile_permanent(pm, "exilio masivo") if _v == "exile" else game.destroy(pm, "destrucción masiva"))
+            game.sba()
+        return eff_mass28
+    m = re.fullmatch(r"untap (up to )?(\w+) target (lands|permanents|creatures|artifacts)", t)
+    if m and (_count_word(m.group(2)) or m.group(2) == "x"):
+        def eff_untap_n(game, ctrl, *a, _n0=_count_word(m.group(2)) if m.group(2) != "x" else None,
+                        _k=m.group(3)[:-1], **kw):
+            _n = _n0 if _n0 is not None else max(0, getattr(game, "_ability_x", 0) or 0)
+            pool = [pm for pm in ctrl.battlefield if pm.tapped and (_k == "permanent" or _k in pm.card.types
+                                                                    or (_k == "creature" and pm.is_creature()))]
+            pool.sort(key=lambda pm: (pm.card.produces is None, not pm.card.is_land()))
+            for pm in pool[:_n]:
+                pm.tapped = False
+            game.log(f"{ctrl.name} endereza {min(_n, len(pool))} permanente(s)")
+        return eff_untap_n
+    if t == "discard all the cards in your hand, then draw that many cards plus one":
+        def eff_wheel1(game, ctrl, *a, **kw):
+            n = len(ctrl.hand)
+            for c in list(ctrl.hand):
+                ctrl.hand.remove(c)
+                game.discard_card(ctrl, c)
+            ctrl.draw(n + 1, game)
+        return eff_wheel1
+    if t in ("put any number of land cards from your hand onto the battlefield tapped",
+             "you may put any number of land cards from your hand onto the battlefield tapped"):
+        def eff_lands_from_hand(game, ctrl, *a, **kw):
+            for c in [c for c in ctrl.hand if c.is_land()]:
+                ctrl.hand.remove(c)
+                pm = game.move_to_battlefield(c, ctrl)
+                if pm is not None:
+                    pm.tapped = True
+        return eff_lands_from_hand
+    m = re.fullmatch(r"tap up to (\w+) target (nonland permanents|creatures|permanents)\. they don't untap during their "
+                     r"controllers?'s? next untap steps?", t)
+    if m and _count_word(m.group(1)):
+        def eff_tap_freeze(game, ctrl, *a, _n=_count_word(m.group(1)), _k=m.group(2), **kw):
+            pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield
+                    if (_k == "creatures" and pm.is_creature()) or (_k == "nonland permanents" and not pm.card.is_land())
+                    or _k == "permanents"]
+            pool.sort(key=lambda pm: -(pm.power if pm.is_creature() else 0) - (pm.card.cost.cmc if pm.card.cost else 0))
+            for pm in pool[:_n]:
+                pm.tapped = True
+                pm.frozen = True
+        return eff_tap_freeze
+    m = re.fullmatch(r"put a loyalty counter on (?:~|this planeswalker) for each creature target opponent controls", t)
+    if m:
+        def eff_loy_each(game, ctrl, *a, **kw):
+            src = _src_perm(game, a)
+            opps = game.opponents(ctrl)
+            if src is not None and opps:
+                n = max(len(o.creatures()) for o in opps)
+                src.counters["loyalty"] = src.counters.get("loyalty", 0) + n
+        return eff_loy_each
+    m = re.fullmatch(r"(?:until your next turn, )?(up to (?:one|two) )?target (legendary creature|creature|creatures) "
+                     r"(?:each )?gains? ([a-z ,]+?)(?: until (?:your next turn|end of turn))?", t)
+    if m:
+        _kw2 = [key for nm, key in _KEYWORD_WORDS + [("shroud", "shroud")] if re.search(r"\b" + re.escape(nm) + r"\b",
+                                                                                         m.group(3))]
+        if _kw2:
+            def eff_tg_kw_ynt(game, ctrl, *a, _k=tuple(_kw2), _leg="legendary" in m.group(2),
+                              _n=2 if "two" in (m.group(1) or "") else 1, **kw):
+                pool = [pm for pm in ctrl.creatures() if not _leg or "legendary" in pm.card.supertypes]
+                pool.sort(key=lambda pm: -pm.power)
+                for pm in pool[:_n]:
+                    pm.temp_keywords |= set(_k)
+            return eff_tg_kw_ynt
+    m = re.fullmatch(r"(another )?target (.+?) (?:you control )?(can't be blocked|gains fear|gains shadow) this turn", t)
+    if m and m.group(2) not in ("creature an opponent controls",) and (_ub := _kind_pred21(m.group(2))) is not None:
+        def eff_tg_unblock(game, ctrl, *a, _p=_ub, _an=bool(m.group(1)), **kw):
+            src = _src_perm(game, a)
+            pool = [pm for pm in ctrl.creatures() if _p(pm) and not (_an and pm is src)]
+            if pool:
+                pm = max(pool, key=lambda x: (x.attacking is not None, x.power))
+                pm.temp_keywords.add("unblockable")
+        return eff_tg_unblock
+    m = re.fullmatch(r"exile (target player's|each opponent's|all) graveyards?", t)
+    if m:
+        def eff_gy_hate(game, ctrl, *a, _w=m.group(1), **kw):
+            if _w == "target player's":
+                opps = [o for o in game.opponents(ctrl) if not o.lost]
+                pls = [max(opps, key=lambda o: sum(1 for c in o.graveyard if c.is_creature()) * 3 + len(o.graveyard))] \
+                    if opps else []
+            elif _w == "each opponent's":
+                pls = game.opponents(ctrl)
+            else:
+                pls = list(game.players)
+            for pl in pls:
+                n = len(pl.graveyard)
+                pl.exile.extend(pl.graveyard)
+                del pl.graveyard[:]
+                if n:
+                    game.emit("cards_exiled", player=pl, count=n)
+                    game.log(f"{ctrl.name} exilia el cementerio de {pl.name} ({n})")
+        return eff_gy_hate
+    m = re.fullmatch(r"all ([a-z]+) gain ([a-z ,]+?) until end of turn", t)
+    if m:
+        _kwz = [key for nm, key in _KEYWORD_WORDS if re.search(r"\b" + re.escape(nm) + r"\b", m.group(2))]
+        _zp = _kind_pred21(_sing(m.group(1)))
+        if _kwz and _zp is not None:
+            def eff_all_kind_kw(game, ctrl, *a, _p=_zp, _k=tuple(_kwz), **kw):
+                for pl in game.players:
+                    for pm in pl.creatures():
+                        if _p(pm):
+                            pm.temp_keywords |= set(_k)
+            return eff_all_kind_kw
+    if t == "untap each enchanted permanent you control":
+        def eff_untap_ench(game, ctrl, *a, **kw):
+            hosts = {id(getattr(pm, "enchanting", None)) for pl in game.players for pm in pl.battlefield
+                     if getattr(pm, "enchanting", None) is not None}
+            for pm in ctrl.battlefield:
+                if id(pm) in hosts:
+                    pm.tapped = False
+        return eff_untap_ench
+    if t in ("this vehicle becomes an artifact creature until end of turn", "~ becomes an artifact creature until end of turn"):
+        def eff_vehicle_self(game, ctrl, *a, **kw):
+            src = _src_perm(game, a)
+            if src is not None:
+                src.temp_creature = True
+        return eff_vehicle_self
+    m = re.fullmatch(r"regenerate (it|~|another target (.+?)|target (.+?))", t)
+    if m and m.group(3) not in ("creature", "permanent"):
+        _rp = _kind_pred21(m.group(2) or m.group(3)) if (m.group(2) or m.group(3)) else None
+
+        def eff_regen28(game, ctrl, *a, _p=_rp, _self=m.group(1) in ("it", "~"), _an=bool(m.group(2)), **kw):
+            src = _src_perm(game, a)
+            if _self:
+                tgt = src
+            else:
+                pool = [pm for pm in ctrl.creatures() if (_p is None or _p(pm)) and not (_an and pm is src)]
+                tgt = max(pool, key=lambda pm: (pm.damage > 0 or pm.attacking is not None, pm.power), default=None)
+            if tgt is not None:
+                tgt.regen_shields = getattr(tgt, "regen_shields", 0) + 1
+        return eff_regen28
+    m = re.fullmatch(r"put an? (\+1/\+1|-1/-1|[a-z]+) counter on each (other )?(.+?)(?: you control)?", t)
+    if m and (_gp := _kind_pred21(_sing(m.group(3).split()[-1]) if len(m.group(3).split()) == 1 else m.group(3))):
+        def eff_group_ctr(game, ctrl, *a, _k=m.group(1), _p=_gp, _oth=bool(m.group(2)), _mine=" you control" in t, **kw):
+            src = _src_perm(game, a)
+            pls = [ctrl] if _mine else list(game.players)
+            for pl in pls:
+                for pm in list(pl.battlefield):
+                    if _p(pm) and not (_oth and pm is src):
+                        game.add_counters(pm, _k, 1)
+            game.sba()
+        return eff_group_ctr
+    m = re.fullmatch(r"target ([\w-]+) (?:creature )?gets ([+-]\d+)/([+-]\d+) until end of turn", t)
+    if m and m.group(1) not in ("creature", "attacking", "blocking") and (_sp := _kind_pred21(m.group(1))) is not None:
+        def eff_sub_pump(game, ctrl, *a, _p=_sp, _a=int(m.group(2)), _b=int(m.group(3)), **kw):
+            pool = [pm for pm in ctrl.creatures() if _p(pm)]
+            if pool:
+                pm = max(pool, key=lambda x: (x.attacking is not None, x.power))
+                pm.temp_pt[0] += _a
+                pm.temp_pt[1] += _b
+        return eff_sub_pump
+    m = re.fullmatch(r"destroy each (permanent|creature) with an? ([a-z]+) counter on it", t)
+    if m:
+        def eff_destroy_ctr(game, ctrl, *a, _k=m.group(2), **kw):
+            for pl in game.players:
+                for pm in list(pl.battlefield):
+                    if pm.counters.get(_k, 0) > 0:
+                        game.destroy(pm, "contador")
+        return eff_destroy_ctr
+    if t in ("return this aura to its owner's hand", "return ~ to its owner's hand"):
+        def eff_self_bounce(game, ctrl, *a, **kw):
+            src = _src_perm(game, a)
+            if src is not None and src in src.controller.battlefield:
+                src.controller.battlefield.remove(src)
+                game.note_departure(src, "bounced")
+                if not src.is_token:
+                    src.controller.hand.append(getattr(src.card, "_real", None) or src.card)
+        return eff_self_bounce
+    # ── batch 28: acciones dirigidas comunes de habilidades activadas (precons) ──
+    def _pick28(game, ctrl, cands, prompt, fn, a):
+        tg = [x for x in (a or ()) if x in cands]
+        if tg:
+            fn(tg[0])
+            return
+        if not cands:
+            return
+        _human_target_choice(game, ctrl, "etb_target", prompt,
+                             [(f"{pm.name} · {pm.controller.name}", pm) for pm in cands], fn)
+
+    m = re.fullmatch(r"untap (another )?target (.+?)", t)
+    if m and (_up := _kind_pred21(m.group(2))) is not None:
+        def eff_untap_tg(game, ctrl, *a, _p=_up, _an=bool(m.group(1)), **kw):
+            src = _src_perm(game, a)
+            cands = [pm for pm in ctrl.battlefield if pm.tapped and _p(pm) and not (_an and pm is src)]
+            cands.sort(key=lambda pm: (not pm.card.is_land(), pm.card.produces is None))
+
+            def _do(pm):
+                pm.tapped = False
+                game.log(f"{ctrl.name} endereza {pm.name}")
+            _pick28(game, ctrl, cands, "Elegí qué enderezar", _do, a[1:] if a else a)
+        return eff_untap_tg
+    m = re.fullmatch(r"adapt (\w+)", t)
+    if m and _count_word(m.group(1)):
+        def eff_adapt(game, ctrl, *a, _n=_count_word(m.group(1)), **kw):
+            src = _src_perm(game, a)
+            if src is not None and not src.counters.get("+1/+1"):
+                game.add_counters(src, "+1/+1", _n)
+                game.log(f"{src.name} se adapta ({_n})")
+        return eff_adapt
+    m = re.fullmatch(r"destroy target (non(?:white|blue|black|red|green|artifact) creature|(?:white|blue|black|red|green|"
+                     r"artifact|tapped|attacking|blocking|legendary) creature)", t)
+    if m and (_dp := _kind_pred21(m.group(1))) is not None:
+        def eff_destroy_q(game, ctrl, *a, _p=_dp, **kw):
+            cands = [pm for o in game.opponents(ctrl) for pm in o.battlefield if pm.is_creature() and _p(pm)
+                     and game.can_target(ctrl, pm)]
+            cands.sort(key=lambda pm: -(pm.power + pm.toughness + (pm.card.cost.cmc if pm.card.cost else 0)))
+            _pick28(game, ctrl, cands, "Elegí qué destruir", lambda pm: game.destroy(pm, "habilidad"), ())
+        return eff_destroy_q
+    if re.fullmatch(r"attach (?:this equipment |this aura |~ )?to target (?:creature|land) you control(?:\. "
+                    r"(?:equip|fortify) only as a sorcery)?", t):
+        def eff_attach_self(game, ctrl, *a, **kw):
+            src = _src_perm(game, a)
+            if src is None:
+                return
+            want_land = "land" in t
+            cands = [pm for pm in ctrl.battlefield if (pm.card.is_land() if want_land else pm.is_creature())]
+            cands.sort(key=lambda pm: -(pm.power if pm.is_creature() else 0))
+
+            def _do(pm):
+                src.enchanting = pm
+                game.log(f"{src.name} se anexa a {pm.name}")
+                game.sba()
+            _pick28(game, ctrl, cands, "Elegí a qué anexarlo", _do, ())
+        return eff_attach_self
+    m = re.fullmatch(r"double the number of (?:each kind of counter|\+1/\+1 counters) on target (.+?)", t)
+    if m and (_kp := _kind_pred21(m.group(1))) is not None:
+        def eff_double_ctr(game, ctrl, *a, _p=_kp, _all="each kind" in t, **kw):
+            cands = [pm for pm in ctrl.battlefield if _p(pm) and sum(pm.counters.values()) > 0]
+            cands.sort(key=lambda pm: -pm.counters.get("+1/+1", 0))
+
+            def _do(pm):
+                for k in list(pm.counters):
+                    if pm.counters.get(k, 0) > 0 and (_all or k == "+1/+1"):
+                        if k == "+1/+1":
+                            game.add_counters(pm, k, pm.counters[k])
+                        else:
+                            pm.counters[k] += pm.counters[k]
+                game.log(f"{ctrl.name} duplica los contadores de {pm.name}")
+            _pick28(game, ctrl, cands, "Elegí dónde duplicar contadores", _do, ())
+        return eff_double_ctr
+    m = re.fullmatch(r"(creature tokens|creatures|other creatures) you control gain ([a-z ,]+?) until end of turn", t)
+    if m:
+        _kwg = [key for nm, key in _KEYWORD_WORDS + [("shroud", "shroud")] if re.search(r"\b" + re.escape(nm) + r"\b",
+                                                                                          m.group(2))]
+        if _kwg:
+            def eff_team_kw(game, ctrl, *a, _k=tuple(_kwg), _w=m.group(1), **kw):
+                src = _src_perm(game, a)
+                for pm in ctrl.creatures():
+                    if (_w == "creature tokens" and not pm.is_token) or (_w == "other creatures" and pm is src):
+                        continue
+                    pm.temp_keywords |= set(_k)
+            return eff_team_kw
+    m = re.fullmatch(r"target (creature with an? [^,]+? counter on it|[a-z, ]+?) (?:you control )?gains ([a-z ,]+?) until end "
+                     r"of turn", t)
+    if m:
+        _ph = m.group(1)
+        _mc = re.fullmatch(r"creature with an? ([^ ]+) counter on it", _ph)
+        _tp = ((lambda pm, _k=_mc.group(1): pm.is_creature() and pm.counters.get(_k, 0) > 0) if _mc
+               else _kind_pred21(_ph))
+        _kwg = [key for nm, key in _KEYWORD_WORDS + [("shroud", "shroud")] if re.search(r"\b" + re.escape(nm) + r"\b",
+                                                                                          m.group(2))]
+        if _tp is not None and _kwg:
+            def eff_tg_kw28(game, ctrl, *a, _p=_tp, _k=tuple(_kwg), **kw):
+                cands = [pm for pm in ctrl.battlefield if pm.is_creature() and _p(pm)]
+                cands.sort(key=lambda pm: -pm.power)
+
+                def _do(pm):
+                    pm.temp_keywords |= set(_k)
+                _pick28(game, ctrl, cands, "Elegí la criatura", _do, ())
+            return eff_tg_kw28
+    m = re.fullmatch(r"put an? (\+1/\+1|-1/-1) counter on (another )?target (.+?)", t)
+    if m and (_cp28 := _kind_pred21(m.group(3))) is not None:
+        def eff_ctr_tg(game, ctrl, *a, _k=m.group(1), _p=_cp28, _an=bool(m.group(2)), **kw):
+            src = _src_perm(game, a)
+            if _k == "+1/+1":
+                cands = [pm for pm in ctrl.battlefield if _p(pm) and not (_an and pm is src)]
+                cands.sort(key=lambda pm: -pm.power)
+            else:
+                cands = [pm for o in game.opponents(ctrl) for pm in o.battlefield if _p(pm)]
+                cands.sort(key=lambda pm: pm.toughness)
+            _pick28(game, ctrl, cands, "Elegí la criatura", lambda pm: game.add_counters(pm, _k, 1), ())
+        return eff_ctr_tg
+    # ── batch 28: manlands / keyrunes: "until end of turn, this land becomes a 4/4 … creature
+    # with flying and vigilance. it's still a land" / "this artifact becomes a 2/2 … until end of turn"
+    m = re.fullmatch(r"(?:until end of turn, )?(?:this land|this artifact|this enchantment|this creature|this vehicle|~) "
+                     r"becomes an? (\d+|x)/(\d+|x) ([a-z ,'-]*?)creature(?: with ([a-z ,]+?))?(?: (?:and |with )?\"[^\"]*\")?"
+                     r"(?: until end of turn)?"
+                     r"(?: and (can't be blocked|gains [a-z ,]+?) this turn)?"
+                     r"(?:\. (?:it's|it is) still an? (?:land|artifact|enchantment))?", t)
+    if m:
+        _kw28 = [key for nm, key in _KEYWORD_WORDS + [("defender", "defender"), ("shroud", "shroud")]
+                 if re.search(r"\b" + re.escape(nm) + r"\b", (m.group(4) or "") + " " + (m.group(5) or ""))]
+        if m.group(5) and "can't be blocked" in m.group(5):
+            _kw28.append("unblockable")
+
+        def eff_self_animate(game, ctrl, *a, _p=m.group(1), _q=m.group(2), _k=tuple(_kw28), **kw):
+            src = _src_perm(game, a)
+            if src is None or src not in src.controller.battlefield:
+                return
+            _x = max(0, getattr(game, "_ability_x", 0) or 0)
+            _p = _x if _p == "x" else int(_p)
+            _q = _x if _q == "x" else int(_q)
+            old = src.set_base_pt
+            src.temp_creature = True
+            src.set_base_pt = (_p, _q)
+            src.temp_keywords |= set(_k)
+            game.delayed_end.append(lambda g, _pm=src, _o=old: setattr(_pm, "set_base_pt", _o))
+            game.log(f"{src.name} se vuelve una criatura {_p}/{_q} hasta el fin del turno")
+        return eff_self_animate
+    m = re.fullmatch(r"put (a|an|one|two|three|x) ([a-z+/1-]+) counters? on (?:this land|this artifact|this creature|"
+                     r"this enchantment|~|it)", t)
+    if m and m.group(2) not in ("+1/+1", "-1/-1"):
+        def eff_self_ctr(game, ctrl, *a, _n=_count_word(m.group(1)) if m.group(1) != "x" else None, _k=m.group(2), **kw):
+            src = _src_perm(game, a)
+            if src is None:
+                return
+            n = _n if _n is not None else max(0, getattr(game, "_ability_x", 0) or 0)
+            game.add_counters(src, _k, n)
+        return eff_self_ctr
+    if re.fullmatch(r"for each opponent, create a token copy (?:of (?:it|this card|~) )?that attacks that opponent this "
+                    r"turn if able\. (?:they|the tokens) gain haste\. sacrifice them at the beginning of the next end "
+                    r"step", t):
+        def eff_encore(game, ctrl, *a, **kw):
+            src = _src_perm(game, a)
+            card = getattr(src, "card", None) or getattr(game, "_resolving_card", None)
+            if card is None:
+                return
+            import copy as _cp
+            for o in game.opponents(ctrl):
+                if o.lost:
+                    continue
+                tok = game.move_to_battlefield(_cp.deepcopy(getattr(card, "_real", None) or card), ctrl, is_token=True)
+                if tok is None:
+                    continue
+                tok.temp_keywords.add("haste")
+                tok.summoning_sick = False
+                tok.must_attack = True
+                game.delayed_end.append(lambda g, _t=tok: (g.to_graveyard(_t, "encore")
+                                                         if _t in _t.controller.battlefield else None))
+            game.log(f"{ctrl.name}: encore de {card.name}")
+        return eff_encore
     # Dack Fayden, Helping Hand: revelar hasta X criaturas (X = rivales), entran
     # provocadas para siempre y cada rival recibe una
     if re.fullmatch(r"reveal cards from the top of your library until you reveal x creature cards, where x is the number "
