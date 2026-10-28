@@ -2827,7 +2827,9 @@ def _event_trigger_effect_impl(oracle: str):
     # "whenever you cast a(n) <tipo> spell, <efecto>" (magecraft, Young Pyromancer,
     # Talrand, disparos de fichas al lanzar criaturas, etc.). Filtra por el TIPO
     # de hechizo declarado; "your first ... each turn" se aproxima sin el límite.
-    mc = None
+    # todas las líneas "whenever you cast a <tipo> spell" (lieges: una para rojo y otra
+    # para blanco); antes se tomaba solo la PRIMERA
+    _cast_cbs = []
     for _ln in _ability_lines(oracle):
         mc = re.search(r"whenever you cast (?:or copy )?(?:your first |an? )"
                        r"([\w ]*?) ?spells?(?: from your hand)?(?: each turn)?,?\s*(.{0,400})",
@@ -2836,10 +2838,11 @@ def _event_trigger_effect_impl(oracle: str):
                          r"(?:greater|less)),\s*(.{0,400})", _ln, re.I)
         if mmv2:
             mc = mmv2
-        if mc:
-            break
-    _cfilt = _spell_filter(mc.group(1)) if mc else None
-    if mc and _cfilt is not None and "cast" not in out:
+        if not mc:
+            continue
+        _cfilt = _spell_filter(mc.group(1))
+        if _cfilt is None:
+            continue
         # disparo MODAL ("... , choose one — ..."): el modal se parsea del oráculo
         # COMPLETO (la captura del disparo se trunca a 160 y perdería modos).
         modal_run = (_modal_trigger_runner(t)
@@ -2854,7 +2857,15 @@ def _event_trigger_effect_impl(oracle: str):
                     _m(game, perm)                       # modal: abre UI / auto-elige
                 else:
                     _e(game, perm.controller)
-            out["cast"] = cbc
+            _cast_cbs.append(cbc)
+    if _cast_cbs and "cast" not in out:
+        if len(_cast_cbs) == 1:
+            out["cast"] = _cast_cbs[0]
+        else:
+            def cbc_multi(game, perm, _cbs=tuple(_cast_cbs), **kw):
+                for _cb in _cbs:
+                    _cb(game, perm, **kw)
+            out["cast"] = cbc_multi
 
     # "whenever another creature (you control) dies, put N +1/+1 counters on this
     # creature" (aristócratas que crecen). El efecto va al permanente que observa.
@@ -3816,10 +3827,31 @@ def _persist_undying_ondeath(oracle: str):
 def _qualified_anthem(t):
     """'creatures you control with flying get +1/+1', 'other black creatures get +1/+1',
     'creatures you control that are enchanted get +1/+1', 'white creatures get +1/+1'."""
-    m = re.search(r"(other )?(?:(white|blue|black|red|green|nonwhite|nonblack|nonred|nongreen|nonblue|"
-                  r"attacking|blocking|tapped|untapped|legendary|nontoken|artifact|enchantment) )?creatures"
-                  r"( you control)?( with [a-z ]+?| that are (?:enchanted|equipped)| of the chosen color)? "
-                  r"get ([+-]\d+)/([+-]\d+)(?:\.|$| and)", t)
+    # varias líneas calificadas en la misma carta (lieges: "other red creatures … +1/+1" y
+    # "other white creatures … +1/+1"): antes solo se tomaba la PRIMERA
+    _rx = (r"(other )?(?:(white|blue|black|red|green|nonwhite|nonblack|nonred|nongreen|nonblue|"
+           r"attacking|blocking|tapped|untapped|legendary|nontoken|artifact|enchantment) )?creatures"
+           r"( you control)?( with [a-z ]+?| that are (?:enchanted|equipped)| of the chosen color)? "
+           r"get ([+-]\d+)/([+-]\d+)(?:\.|$| and)")
+    _all = list(re.finditer(_rx, t))
+    if len(_all) > 1:
+        parts = [_qualified_anthem_one(t, mm) for mm in _all]
+        sms = [p for p in parts if callable(p)]
+        if not sms:
+            return "skip" if "skip" in parts else None
+
+        def sm_multi(source, target, _f=tuple(sms)):
+            a = b = 0
+            for f in _f:
+                x, y = f(source, target)
+                a += x
+                b += y
+            return (a, b)
+        return sm_multi
+    return _qualified_anthem_one(t, _all[0] if _all else None)
+
+
+def _qualified_anthem_one(t, m):
     if not m or (not m.group(2) and not m.group(4)) or "until end of turn" in t[m.end():m.end() + 25]:
         return None
     if m.group(4) and "chosen color" in m.group(4):

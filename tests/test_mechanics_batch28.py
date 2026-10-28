@@ -144,3 +144,21 @@ def test_group_counters_and_subtype_pump():
     assert _act(g, gb, "goblin")
     run(g)
     assert gob.power == 3
+
+
+def test_liege_two_color_anthems_and_two_cast_triggers():
+    g, me, ops = new_game()
+    cs = {nm: put(g, creature(nm, cost, 2, 2), me) for nm, cost in (("W", "1W"), ("R", "1R"), ("RW", "RW"), ("G", "1G"))}
+    put(g, build("Balefire Liege", "{2}{R/W}{R/W}{R/W}", "Creature — Spirit Horror", "Other red creatures you control "
+                 "get +1/+1.\nOther white creatures you control get +1/+1.\nWhenever you cast a red spell, this creature "
+                 "deals 3 damage to target player or planeswalker.\nWhenever you cast a white spell, you gain 3 life.",
+                 2, 4), me)
+    assert [cs[k].power for k in ("W", "R", "RW", "G")] == [3, 3, 4, 2]
+    give_lands(g, me, 2, colors=(R, W))
+    sp = build("Sp", "{R}{W}", "Sorcery", "Draw a card.")
+    me.library = [creature("L", "1G", 1, 1) for _ in range(3)]
+    me.hand.append(sp)
+    life, ol = me.life, ops[0].life
+    assert g.cast(me, sp)
+    run(g)
+    assert me.life == life + 3 and ol - ops[0].life == 3
