@@ -1709,10 +1709,67 @@ class Game:
         out.sort(key=lambda pm: (pm.card.produces is not None, not pm.summoning_sick, pm.power if pm.is_creature() else 0))
         return out
 
+    # -- decisiones del HUMANO al lanzar/activar (las arma la capa interactiva) -- #
+    def _hpref(self, player):
+        """Preferencias que eligió el jugador humano para ESTE lanzamiento/activación
+        (qué sacrificar, si paga kicker/bargain/…). None para bots o sin preferencias."""
+        hp = getattr(self, "_human_pref", None)
+        if hp is None or player is not getattr(self, "interactive_human", None):
+            return None
+        return hp
+
+    def _hopt(self, player, key, default=True):
+        """¿El humano quiere pagar el coste opcional `key`? (bots: `default`)."""
+        hp = self._hpref(player)
+        if hp is None or key not in hp:
+            return default
+        return bool(hp[key])
+
+    def addcost_sac_pool(self, player, card):
+        """Permanentes que sirven para el coste adicional "sacrifice a …" de `card`."""
+        sk = (getattr(card, "additional_cost", None) or {}).get("sacrifice")
+        if not sk:
+            return []
+        kinds = {"creature"} if sk is True else set(str(sk).split("|"))
+        _cw = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
+
+        def _pips(pm):
+            return {x for pp in (getattr(pm.card.cost, "pips", None) or ()) for x in str(pp).upper()}
+
+        def _sac_ok(pm, _k=kinds):
+            if pm.card is card or player.is_commander(pm.card):
+                return False
+            _qk = next((k for k in _k if k.startswith("qual:")), None)
+            if _qk:                      # "sacrifice a green/legendary/nontoken creature"
+                q = _qk[5:]
+                if not pm.is_creature():
+                    return False
+                if q in _cw:
+                    return _cw[q] in _pips(pm)
+                if q == "legendary":
+                    return "legendary" in pm.card.supertypes
+                if q == "nontoken":
+                    return not pm.is_token
+                return q in pm.card.types
+            if "nonland_permanent" in _k:
+                return not pm.card.is_land()
+            _ck = next((k for k in _k if k.startswith("color:")), None)
+            if _ck:
+                return _cw.get(_ck[6:]) in _pips(pm)
+            if "nontoken_creature" in _k:
+                return pm.is_creature() and not pm.is_token
+            return ("permanent" in _k or ("creature" in _k and pm.is_creature())
+                    or any(pm.has_subtype(k) for k in _k)
+                    or any(k in pm.card.types for k in _k if k != "creature")
+                    or ("token" in _k and pm.is_token))
+        return [pm for pm in player.battlefield if _sac_ok(pm)]
+
     def _pay_opt_add(self, player, card, oa):
         """Costes adicionales OPCIONALES (teamwork, blight, collect evidence, waterbend
         opcional). Los bots los pagan si tienen con qué sin perder algo valioso."""
         kind, n = oa
+        if not self._hopt(player, "opt_add"):
+            return False
         if kind == "teamwork":
             pool = sorted((pm for pm in player.creatures() if not pm.tapped),
                           key=lambda pm: (not pm.summoning_sick, pm.power))
@@ -2461,6 +2518,10 @@ class Game:
                 v += 100
             return v
         pool.sort(key=worth)
+        hp = self._hpref(ctrl)
+        if hp and hp.get("sac"):
+            chosen = [pm for pm in hp["sac"] if pm in pool]
+            pool = chosen + [pm for pm in pool if pm not in chosen]
         return pool[:n]
 
     def discard_card(self, ctrl, card):
@@ -3169,12 +3230,12 @@ class Game:
         kick = getattr(card, "_kicker_cost", 0) or 0
         if kick and pay_cost is not None:
             k_cost = Cost(generic=pay_cost.generic + kick, pips=pay_cost.pips)
-            if player.can_pay(k_cost):
+            if player.can_pay(k_cost) and self._hopt(player, "kicker"):
                 pay_cost = k_cost
                 card._kicked = True
         card._kick_victims = None
         _ks = getattr(card, "_kicker_sac", None)
-        if _ks and not card._kicked:
+        if _ks and not card._kicked and self._hopt(player, "kicker"):
             _n, _k = _ks
             _vic = self._sacrifice_candidates(player, _k, _n)
             _lands = sum(1 for pm in player.battlefield if pm.card.is_land())
@@ -3191,7 +3252,7 @@ class Game:
         bb = getattr(card, "_buyback_cost", 0) or 0
         if bb and pay_cost is not None:
             bb_cost = Cost(generic=pay_cost.generic + bb, pips=pay_cost.pips)
-            if player.can_pay(bb_cost):
+            if player.can_pay(bb_cost) and self._hopt(player, "buyback"):
                 pay_cost = bb_cost
                 card._buyback_used = True
         # Fuse: lanzar ambas mitades de una carta partida desde la mano.
@@ -3200,7 +3261,7 @@ class Game:
         if (getattr(card, "fuse", False) and _bf is not None and _bf.cost is not None and pay_cost is not None
                 and card in player.hand and _bf.on_cast_resolve is not None):
             fc = Cost(generic=pay_cost.generic + _bf.cost.generic, pips=pay_cost.pips + _bf.cost.pips)
-            if player.can_pay(fc):
+            if player.can_pay(fc) and self._hopt(player, "fuse"):
                 pay_cost = fc
                 card._fused = True
         # Spree: cada modo elegido suma su coste. Escalate: cada modo extra suma.
@@ -3264,14 +3325,23 @@ class Game:
         card._casualty_copy = False
         card._bargained = False
         cas_victim = barg_victim = None
-        if getattr(card, "casualty", 0):
+        _hp = self._hpref(player)
+        if getattr(card, "casualty", 0) and _hp is not None and "casualty" in _hp:
+            v = _hp.get("casualty")
+            if v is not None and v in player.battlefield and v.power >= card.casualty:
+                cas_victim = v
+        elif getattr(card, "casualty", 0):
             cands = [pm for pm in player.creatures() if pm.power >= card.casualty
                      and not player.is_commander(pm.card) and pm.card is not card]
             cands = [pm for pm in cands if pm.is_token or pm.power + pm.toughness <= 4]
             if cands:
                 cas_victim = min(cands, key=lambda pm: (not pm.is_token,
                                                         pm.power + pm.toughness))
-        if getattr(card, "bargain", False):
+        if getattr(card, "bargain", False) and _hp is not None and "bargain" in _hp:
+            v = _hp.get("bargain")
+            if v is not None and v in player.battlefield and v is not cas_victim:
+                barg_victim = v
+        elif getattr(card, "bargain", False):
             cands = [pm for pm in player.battlefield if pm.is_token or (
                 not pm.is_creature() and not pm.card.is_land()
                 and ({"artifact", "enchantment"} & pm.card.types)
@@ -3351,45 +3421,14 @@ class Game:
                 else:
                     card._blight_paid_mana = False
             if add.get("sacrifice"):
-                sk = add["sacrifice"]
-                kinds = {"creature"} if sk is True else set(str(sk).split("|"))
-
-                def _sac_ok(pm, _k=kinds):
-                    if pm.card is card or player.is_commander(pm.card):
-                        return False
-                    _qk = next((k for k in _k if k.startswith("qual:")), None)
-                    if _qk:                      # "sacrifice a green/legendary/nontoken creature"
-                        q = _qk[5:]
-                        if not pm.is_creature():
-                            return False
-                        _cw = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
-                        if q in _cw:
-                            return _cw[q] in {x for pp in (getattr(pm.card.cost, "pips", None) or ())
-                                              for x in str(pp).upper()}
-                        if q == "legendary":
-                            return "legendary" in pm.card.supertypes
-                        if q == "nontoken":
-                            return not pm.is_token
-                        return q in pm.card.types
-                    if "nonland_permanent" in _k:
-                        return not pm.card.is_land()
-                    _ck = next((k for k in _k if k.startswith("color:")), None)
-                    if _ck:
-                        _cw = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
-                        return _cw.get(_ck[6:]) in {x for pp in (getattr(pm.card.cost, "pips", None) or ())
-                                                    for x in str(pp).upper()}
-                    if "nontoken_creature" in _k:
-                        return pm.is_creature() and not pm.is_token
-                    return ("permanent" in _k or ("creature" in _k and pm.is_creature())
-                            or any(pm.has_subtype(k) for k in _k)
-                            or any(k in pm.card.types for k in _k if k != "creature")
-                            or ("token" in _k and pm.is_token))
-                creqs = [pm for pm in player.battlefield if _sac_ok(pm)]
+                creqs = self.addcost_sac_pool(player, card)
                 if not creqs:
                     return False
                 victim = min(creqs, key=lambda c: (not c.is_token, c.card.is_land(),
                                                    c.power + c.toughness if c.is_creature() else 0,
                                                    _cmc_card(c.card)))
+                if _hp and _hp.get("sac") and _hp["sac"][0] in creqs:
+                    victim = _hp["sac"][0]           # el humano eligió qué sacrificar
         # maná primero: una fuente girada (p. ej. un elfo) igual puede sacrificarse
         if not player.pay(pay_cost, exclude=excl):
             return False

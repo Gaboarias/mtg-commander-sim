@@ -5865,7 +5865,10 @@ _PRE_ATOMIC = re.compile(
     r"|choose target creature you control and target creature you don't control\. (?:those creatures|they) fight each other"
     r"|(?:choose any target\. )?(?:you may )?(?:reveal|exile) cards from the top of your library until you (?:reveal|exile) .+"
     r"|roll (?:a|an) d\d+\. .*the result.*"
-    r"|(?:destroy|exile) all (?:tapped|untapped|attacking|blocking) [^.]*creatures.*")
+    r"|(?:destroy|exile) all (?:tapped|untapped|attacking|blocking) [^.]*creatures.*"
+    r"|draw (?:a|an|one|two|three|four|\w+) cards?,? then discard (?:a|an|one|two|three|\w+) cards?\.?"
+    r"|discard (?:a|an|one|two|three|\w+) cards?,? then draw (?:a|an|one|two|three|\w+) cards?\.?"
+    r"|you may discard (?:a|an|one|two) cards?\. if you do, draw (?:a|an|one|two|three) cards?\.?")
 
 
 def _effect_any(body: str):
@@ -6100,26 +6103,67 @@ def _human_or_auto_sacrifice(game, player, prompt="Elegí una criatura para sacr
             game.sba()
 
     def _prompt():
-        cands = [(f"{pm.name} {pm.power}/{pm.toughness}", pm)
-                 for pm in player.creatures()]
+        cands = [(f"{pm.name} {pm.power}/{pm.toughness}" if pm.is_creature() else pm.name, pm)
+                 for pm in cr if pm in player.battlefield]
         if cands:
-            _human_target_choice(game, player, "etb_target", prompt, cands, _do)
+            _human_target_choice(game, player, "sacrifice", prompt, cands, _do)
     _route_choice(game, player, _prompt, lambda: _do(cr[0]))
 
 
-def _human_or_auto_discard(game, player, n):
-    """El jugador `player` descarta N cartas: humano elige (modal, una a una), bot auto."""
+def _choose_tgt(game, ctrl, cands, prompt, fn, a=()):
+    """Objetivo de un efecto: usa el ya elegido (si vino en `a`), si no el HUMANO elige
+    por modal y el bot toma el primero de `cands` (llegan ordenados por preferencia)."""
+    tg = [x for x in (a or ()) if x in cands]
+    if tg:
+        fn(tg[0])
+        return
+    if not cands:
+        return
+    if ctrl is getattr(game, "interactive_human", None) and len(cands) > 1:
+        _human_target_choice(game, ctrl, "etb_target", prompt,
+                             [(f"{pm.name} · {pm.controller.name}", pm) for pm in cands], fn)
+        return
+    fn(cands[0])
+
+
+def _human_keep_then_sac(game, player, pool, n, what="permanente(s)"):
+    """El jugador conserva `n` de `pool` y sacrifica el resto. El humano elige cuáles
+    conserva (de a uno); el bot conserva los primeros de `pool` (ya ordenado)."""
+    def _sac_rest(keep):
+        for pm in list(pool):
+            if pm not in keep and pm in pm.controller.battlefield:
+                game.to_graveyard(pm, "sacrificio")
+        game.sba()
+
+    def _ask(keep, k):
+        rest = [pm for pm in pool if pm not in keep and pm in player.battlefield]
+        if k <= 0 or not rest:
+            _sac_rest(keep)
+            return
+        _human_target_choice(game, player, "keep",
+                             f"Elegí qué conservar ({len(keep) + 1} de {min(n, len(pool))}); el resto se sacrifica",
+                             [(f"{pm.name} {pm.power}/{pm.toughness}" if pm.is_creature() else pm.name, pm)
+                              for pm in rest], lambda pm, _k=keep: _ask(_k + [pm], k - 1))
+    if len(pool) <= n:
+        return
+    _route_choice(game, player, lambda: _ask([], n), lambda: _sac_rest(list(pool[:n])))
+
+
+def _human_or_auto_discard(game, player, n, then=None):
+    """El jugador `player` descarta N cartas: humano elige (modal, una a una), bot auto.
+    `then()` corre al terminar de descartar (p. ej. "discard a card, then draw")."""
     n = len(player.hand) if n < 0 else n
 
     def _prompt_one(remaining):
         if remaining <= 0 or not player.hand:
+            if then is not None:
+                then()
             return
 
         def _apply(idx, _r=remaining):
             if idx is not None and 0 <= idx < len(player.hand):
                 c = player.hand.pop(idx)
-                player.graveyard.append(c)
-                game.emit("to_graveyard", player=player, card=c)
+                game.discard_card(player, c)
                 game.log(f"{player.name} descarta {c.name}")
             _prompt_one(_r - 1)                     # encadena la próxima
         game.pending_choice = {
@@ -6138,9 +6182,10 @@ def _human_or_auto_discard(game, player, n):
             else:
                 c = player.hand[-1]
             player.hand.remove(c)
-            player.graveyard.append(c)
-            game.emit("to_graveyard", player=player, card=c)
+            game.discard_card(player, c)
             rem -= 1
+        if then is not None:
+            then()
     _route_choice(game, player, lambda: _prompt_one(n), _auto)
 
 
@@ -7596,6 +7641,36 @@ def _atomic_effect(text):
                 pm.perma_goad = True
                 game.log(f"{o.name} recibe {c.name} (provocada para el resto de la partida)")
         return eff_dack_gift
+    # looting / rummaging: robar y DESCARTAR (antes solo robaba). El humano elige qué descartar.
+    m = (re.fullmatch(r"draw (a|an|one|two|three|four|\w+) cards?,? then discard (a|an|one|two|three|\w+) cards?", t)
+         or re.fullmatch(r"(discard) (a|an|one|two|three|\w+) cards?,? then draw (a|an|one|two|three|\w+) cards?", t)
+         or re.fullmatch(r"you may (discard) (a|an|one|two) cards?\. if you do, draw (a|an|one|two|three) cards?", t))
+    if m:
+        def _cw28(w):
+            return 1 if w in ("a", "an") else (_count_word(w) or 0)
+        if m.group(1) == "discard":
+            _first, _dn, _drn, _may = "discard", _cw28(m.group(2)), _cw28(m.group(3)), t.startswith("you may")
+        else:
+            _first, _drn, _dn, _may = "draw", _cw28(m.group(1)), _cw28(m.group(2)), False
+        if _dn and _drn:
+            def eff_loot(game, ctrl, *a, _f=_first, _d=_dn, _r=_drn, _mv=_may, **kw):
+                if _f == "draw":
+                    ctrl.draw(_r, game)
+                    _human_or_auto_discard(game, ctrl, _d)
+                    return
+                if not ctrl.hand or (_mv and ctrl is not getattr(game, "interactive_human", None)
+                                     and not any(c.is_land() for c in ctrl.hand) and len(ctrl.hand) < 3):
+                    return
+                if _mv and ctrl is getattr(game, "interactive_human", None):
+                    def _yes(v, _c=ctrl):
+                        if v:
+                            _human_or_auto_discard(game, _c, _d, then=lambda: _c.draw(_r, game))
+                    _route_choice(game, ctrl, lambda: _human_target_choice(
+                        game, ctrl, "may", f"¿Descartar {_d} carta(s) para robar {_r}?",
+                        [("Sí, descartar y robar", True), ("No", False)], _yes), lambda: None)
+                    return
+                _human_or_auto_discard(game, ctrl, _d, then=lambda: ctrl.draw(_r, game))
+            return eff_loot
     # Jace, Architect of Thought +1 / Jace, Reality Sculptor −3: debuff a los atacantes
     m = re.fullmatch(r"until your next turn, whenever a creature (an opponent controls attacks|attacks you or a planeswalker "
                      r"you control), it gets -(\d+)/-0 until end of turn", t)
@@ -10122,8 +10197,7 @@ def _atomic_effect(text):
             if pl is None:
                 return
             cr = sorted(pl.creatures(), key=lambda x: -(x.power + x.toughness))
-            for pm in cr[_n:]:
-                game.to_graveyard(pm, "sacrificio")
+            _human_keep_then_sac(game, pl, cr, _n, "criatura(s)")
         return eff_archfiend
     if t == "put all creature cards from all graveyards onto the battlefield under your control":
         def eff_dark_realms(game, ctrl, *a, **kw):
@@ -10184,14 +10258,12 @@ def _atomic_effect(text):
     if t.startswith("each player puts a vow counter on a creature they control and sacrifices the rest"):
         def eff_promise(game, ctrl, *a, **kw):
             for pl in game.players:
-                cr = pl.creatures()
+                cr = sorted(pl.creatures(), key=lambda x: (pl.is_commander(x.card), x.power + x.toughness),
+                            reverse=True)
                 if not cr:
                     continue
-                keep = max(cr, key=lambda x: (pl.is_commander(x.card), x.power + x.toughness))
-                keep.counters["vow"] = keep.counters.get("vow", 0) + 1
-                for pm in list(cr):
-                    if pm is not keep:
-                        game.to_graveyard(pm, "sacrificio")
+                cr[0].counters["vow"] = cr[0].counters.get("vow", 0) + 1
+                _human_keep_then_sac(game, pl, cr, 1, "criatura")
         return eff_promise
     if t.startswith("each player chooses an artifact, a creature, an enchantment, and a planeswalker from among the "
                     "nonland permanents they control, then sacrifices the rest"):
@@ -10299,29 +10371,30 @@ def _atomic_effect(text):
                            _n=_count_word(m.group(3)) if m.group(3) else 0, **kw):
             pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield if game.can_target(ctrl, pm)
                     and not pm.card.is_land()]
-            if not pool:
-                return
-            pm = max(pool, key=lambda x: (x.is_creature(), _cmc_of(x)))
-            pl = pm.controller
-            pl.battlefield.remove(pm)
-            if pm.card.on_leave:
-                pm.card.on_leave(game, pl, pm)
-            if not pm.is_token:
-                real = getattr(pm.card, "_real", None) or pm.card
-                owner = game.commander_owner(real)
-                if owner is not None:
-                    owner.command.append(real)
-                else:
-                    pl.library.append(real)
-                    game.rng.shuffle(pl.library)
-            game.log(f"{pm.name} se baraja en la biblioteca de {pl.name}")
-            if _rev and pl.library:
-                top = pl.library[-1]
-                if {"creature", "artifact", "enchantment", "planeswalker", "land", "battle"} & top.types:
-                    pl.library.pop()
-                    game.move_to_battlefield(top, pl)
-            if _n:
-                pl.draw(_n, game)
+            pool.sort(key=lambda x: (x.is_creature(), _cmc_of(x)), reverse=True)
+
+            def _do(pm):
+                pl = pm.controller
+                pl.battlefield.remove(pm)
+                if pm.card.on_leave:
+                    pm.card.on_leave(game, pl, pm)
+                if not pm.is_token:
+                    real = getattr(pm.card, "_real", None) or pm.card
+                    owner = game.commander_owner(real)
+                    if owner is not None:
+                        owner.command.append(real)
+                    else:
+                        pl.library.append(real)
+                        game.rng.shuffle(pl.library)
+                game.log(f"{pm.name} se baraja en la biblioteca de {pl.name}")
+                if _rev and pl.library:
+                    top = pl.library[-1]
+                    if {"creature", "artifact", "enchantment", "planeswalker", "land", "battle"} & top.types:
+                        pl.library.pop()
+                        game.move_to_battlefield(top, pl)
+                if _n:
+                    pl.draw(_n, game)
+            _choose_tgt(game, ctrl, pool, "Elegí qué permanente barajar en su biblioteca", _do, a[1:])
         return eff_chaos_warp
     m = re.fullmatch(r"~ deals (x|\d+) damage to each (nonartifact |non-?[a-z]+ )?creature( without flying| with "
                      r"flying)?(?: and each (player|planeswalker))?", t)
@@ -10455,18 +10528,19 @@ def _atomic_effect(text):
         def eff_condemn(game, ctrl, *a, **kw):
             pool = [pm for o in game.opponents(ctrl) for pm in o.creatures() if pm.attacking is not None
                     and game.can_target(ctrl, pm)]
-            if not pool:
-                return
-            pm = max(pool, key=lambda x: x.power)
-            pl, tough = pm.controller, max(0, pm.toughness)
-            pl.battlefield.remove(pm)
-            if pm.card.on_leave:
-                pm.card.on_leave(game, pl, pm)
-            if not pm.is_token:
-                real = getattr(pm.card, "_real", None) or pm.card
-                owner = game.commander_owner(real)
-                (owner.command.append(real) if owner else pl.library.insert(0, real))
-            game.gain_life(pl, tough)
+            pool.sort(key=lambda x: x.power, reverse=True)
+
+            def _do(pm):
+                pl, tough = pm.controller, max(0, pm.toughness)
+                pl.battlefield.remove(pm)
+                if pm.card.on_leave:
+                    pm.card.on_leave(game, pl, pm)
+                if not pm.is_token:
+                    real = getattr(pm.card, "_real", None) or pm.card
+                    owner = game.commander_owner(real)
+                    (owner.command.append(real) if owner else pl.library.insert(0, real))
+                game.gain_life(pl, tough)
+            _choose_tgt(game, ctrl, pool, "Elegí la criatura atacante", _do, a[1:])
         return eff_condemn
     m = re.fullmatch(r"creatures target player controls get \+(\d+)/\+(\d+) until end of turn\. untap them", t)
     if m:
@@ -10666,21 +10740,22 @@ def _atomic_effect(text):
                     and not (_f == "nonland" and pm.card.is_land())
                     and not (_f == "attacking or blocking" and pm.attacking is None
                              and not getattr(pm, "blocking", None))]
-            if not pool:
-                return
-            pm = max(pool, key=_cmc_of)
-            pl = pm.controller
-            pl.battlefield.remove(pm)
-            if pm.card.on_leave:
-                pm.card.on_leave(game, pl, pm)
-            if not pm.is_token:
-                real = getattr(pm.card, "_real", None) or pm.card
-                owner = game.commander_owner(real)
-                if owner is not None:
-                    owner.command.append(real)
-                else:
-                    pl.library.insert(max(0, len(pl.library) - _pos), real)
-            game.log(f"{pm.name} va a la biblioteca de {pl.name}")
+            pool.sort(key=_cmc_of, reverse=True)
+
+            def _do(pm):
+                pl = pm.controller
+                pl.battlefield.remove(pm)
+                if pm.card.on_leave:
+                    pm.card.on_leave(game, pl, pm)
+                if not pm.is_token:
+                    real = getattr(pm.card, "_real", None) or pm.card
+                    owner = game.commander_owner(real)
+                    if owner is not None:
+                        owner.command.append(real)
+                    else:
+                        pl.library.insert(max(0, len(pl.library) - _pos), real)
+                game.log(f"{pm.name} va a la biblioteca de {pl.name}")
+            _choose_tgt(game, ctrl, pool, "Elegí qué permanente poner en la biblioteca", _do, a[1:])
         return eff_tuck
     if t == "put target card from your graveyard on top of your library":
         def eff_gy_top(game, ctrl, *a, **kw):
@@ -10963,10 +11038,12 @@ def _atomic_effect(text):
     if m:
         def eff_stun(game, ctrl, *a, **kw):
             pool = [pm for o in game.opponents(ctrl) for pm in o.creatures() if game.can_target(ctrl, pm)]
-            if pool:
-                pm = max(pool, key=lambda x: x.power)
+            pool.sort(key=lambda x: x.power, reverse=True)
+
+            def _do(pm):
                 pm.tapped = True
                 pm.counters["stun"] = pm.counters.get("stun", 0) + 1
+            _choose_tgt(game, ctrl, pool, "Elegí qué criatura girar (contador de aturdimiento)", _do, a[1:])
         return eff_stun
     m = re.fullmatch(r"target (?:player|opponent) gets (\w+) rad counters?", t)
     if m and (n := _count_word(m.group(1))):
@@ -11328,13 +11405,14 @@ def _atomic_effect(text):
             if src is None or not src.counters:
                 return
             pool = [pm for pm in ctrl.creatures() if pm is not src]
-            if not pool:
-                return
-            tgt = max(pool, key=lambda x: x.power + x.toughness)
-            for k, v in list(src.counters.items()):
-                if v > 0:
-                    game.add_counters(tgt, k, v)
-            game.log(f"{tgt.name} recibe los contadores de {src.name}")
+            pool.sort(key=lambda x: x.power + x.toughness, reverse=True)
+
+            def _do(tgt):
+                for k, v in list(src.counters.items()):
+                    if v > 0:
+                        game.add_counters(tgt, k, v)
+                game.log(f"{tgt.name} recibe los contadores de {src.name}")
+            _choose_tgt(game, ctrl, pool, "Elegí a qué criatura mover los contadores", _do, a[1:])
         return eff_move_ctrs
     # ── batch 12: criatura encantada, "that much", fin de combate ──
     m = re.fullmatch(r"put (a|an|one|two|three|\w+) \+1/\+1 counters? on enchanted creature", t)
@@ -12035,10 +12113,13 @@ def _atomic_effect(text):
             pool = [pm for pm in ctrl.creatures() if pm is not src]
             if src is None or not pool:
                 return
-            host = max(pool, key=lambda pm: (pm.power + pm.toughness))
-            src.enchanting = host
-            game._trigger_subject = host
-            game.log(f"{ctrl.name}: {src.name} se anexa a {host.name}")
+            pool.sort(key=lambda pm: (pm.power + pm.toughness), reverse=True)
+
+            def _do(host):
+                src.enchanting = host
+                game._trigger_subject = host
+                game.log(f"{ctrl.name}: {src.name} se anexa a {host.name}")
+            _choose_tgt(game, ctrl, pool, "Elegí a qué criatura anexar", _do, a[1:])
         return eff_attach_eq
     m = re.fullmatch(r"(?:you )?get ((?:\{e\})+)", t)
     if m:
@@ -12217,12 +12298,22 @@ def _atomic_effect(text):
                 if pl.lost:
                     continue
                 k = "permanent" if _k == "nonland permanent" else _k
-                pool = game._sacrifice_candidates(pl, k, 5)
+                pool = game._sacrifice_candidates(pl, k, 999)
                 if _k == "nonland permanent":
                     pool = [pm for pm in pool if not pm.card.is_land()]
-                if pool:
-                    game.to_graveyard(pool[0], "sacrificio")
-                    game.log(f"{pl.name} sacrifica {pool[0].name}")
+                if not pool:
+                    continue
+
+                def _do(pm, _pl=pl):
+                    if pm in pm.controller.battlefield:
+                        game.to_graveyard(pm, "sacrificio")
+                        game.log(f"{_pl.name} sacrifica {pm.name}")
+                        game.sba()
+                _route_choice(game, pl, lambda _pl=pl, _p=pool, _d=_do: _human_target_choice(
+                    game, _pl, "sacrifice", f"Tenés que sacrificar un/a {_k}: elegí cuál",
+                    [(f"{pm.name} {pm.power}/{pm.toughness}" if pm.is_creature() else pm.name, pm)
+                     for pm in _p if pm in _pl.battlefield], _d),
+                    lambda _p=pool, _d=_do: _d(_p[0]))
             game.sba()
         return eff_each_sac
     m = re.fullmatch(r"return all (nonland permanents|creatures|other creatures|"

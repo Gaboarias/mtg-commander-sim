@@ -153,6 +153,7 @@ export default function Play() {
   const [thinking, setThinking] = useState(false);   // el motor está procesando
   const gameRef = useRef(0);       // id de la partida: descarta respuestas de una anterior
   const [choiceHidden, setChoiceHidden] = useState(false);  // modal de decisión minimizado
+  const [choicePick, setChoicePick] = useState<number | null>(null);  // opción elegida (feedback)
   const [status, setStatus] = useState<string>("");   // texto de carga
   const [booting, setBooting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -399,6 +400,16 @@ export default function Play() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBooting(false); }
+  }
+
+  // Elegir en el modal: marca la opción (animación de confirmación) y resuelve enseguida.
+  function pickChoice(index: number) {
+    if (choicePick !== null || thinking) return;
+    setChoicePick(index);
+    window.setTimeout(() => {
+      setChoicePick(null);
+      doAct("choose", { index });
+    }, 170);
   }
 
   async function doAct(kind: string, arg: object = {}) {
@@ -1471,6 +1482,8 @@ export default function Play() {
           cascade_target: "Cascada: elegí el objetivo",
           gy_shuffle: "Barajar cartas del cementerio",
           mode_choice: "Elegí un modo",
+          sacrifice: "Sacrificar", keep: "Elegí qué conservar",
+          opt_cost: "Coste opcional",
         };
         // Una línea que EXPLICA la mecánica (sobre todo la jerga de MTG), debajo del
         // título. El `prompt` del motor da el detalle puntual (qué carta, cuántas faltan).
@@ -1493,6 +1506,9 @@ export default function Play() {
           discard: "Elegí qué carta mandar al cementerio.",
           may: "Decidí si querés aplicar el efecto opcional.",
           mode_choice: "Al entrar elegís un modo; el permanente tiene solo la habilidad de ese modo.",
+          sacrifice: "Elegí qué permanente tuyo va al cementerio.",
+          keep: "Lo que no conserves se sacrifica.",
+          opt_cost: "Pagarlo es opcional: decidí antes de que el hechizo vaya a la pila.",
         };
         const title = titles[ch.kind] || "Elegí una carta";
         const hint = hints[ch.kind];
@@ -1500,8 +1516,9 @@ export default function Play() {
           : ch.kind === "gy_shuffle" ? "Ninguna más"
           : "No llevarme ninguna";
         return (
-          <div className="inspect-back" role="dialog" aria-modal="true" aria-label={title}>
-            <div className="inspect" onClick={(e) => e.stopPropagation()}>
+          <div className="inspect-back decide-back" role="dialog" aria-modal="true" aria-label={title}>
+            <div key={`${ch.kind}:${ch.prompt}`} className={`inspect decide decide-${ch.kind}`}
+              onClick={(e) => e.stopPropagation()}>
               {/* minimizar (no resuelve): deja ver el tablero y llegar a "Nueva partida" */}
               <button className="inspect-x" aria-label="Ocultar decisión" title="Ocultar (mirar el tablero)" onClick={() => setChoiceHidden(true)}><Icon name="x" size={16} /></button>
               <h3><Icon name="book" size={17} /> {title}</h3>
@@ -1537,13 +1554,14 @@ export default function Play() {
                 );
               })()}
               <div className="target-list">
-                {ch.options.map((o) => (
+                {ch.options.map((o, k) => (
                   <button
                     key={o.i}
-                    className="ghost"
-                    disabled={o.ok === false}
-                    onClick={() => doAct("choose", { index: o.i })}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    className={`ghost decide-opt${choicePick === o.i ? " picked" : ""}`}
+                    disabled={o.ok === false || choicePick !== null}
+                    onClick={() => pickChoice(o.i)}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6,
+                             animationDelay: `${Math.min(k, 10) * 40}ms` }}>
                     {art[o.name]
                       ? <span className="choice-thumb" style={{ backgroundImage: `url(${art[o.name]})` }} />
                       : <Icon name={isCardPick ? (o.is_land ? "land" : "cards") : "chevron-right"} size={13} />}
@@ -1554,7 +1572,7 @@ export default function Play() {
               </div>
               {ch.allow_none && (
                 <div className="act-block" style={{ marginTop: 10 }}>
-                  <button className="ghost" onClick={() => doAct("choose", { index: null })}>
+                  <button className="ghost decide-none" onClick={() => doAct("choose", { index: null })}>
                     {noneLabel}
                   </button>
                 </div>

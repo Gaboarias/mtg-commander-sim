@@ -943,3 +943,24 @@ h3 svg { color: currentColor; }
 /* aviso: perdiste una criatura (debajo del aviso de habilidades, no encima) */
 .ability-toast.leave-toast { top: 88px; border-color: #e0684f; background: #2a1512; }
 .ability-toast.leave-toast svg { color: #e0684f; }
+
+/* ── modal de decisión: entrada, opciones escalonadas y confirmación ── */
+.decide-back { animation: decide-fade .18s ease-out both; }
+.inspect.decide { animation: decide-in .26s cubic-bezier(.2,.9,.3,1.2) both; border-top: 3px solid var(--accent); }
+.inspect.decide-sacrifice, .inspect.decide-keep { border-top-color: #e0684f; }
+.inspect.decide-opt_cost, .inspect.decide-may, .inspect.decide-x { border-top-color: var(--accent); }
+.inspect.decide-mode_choice, .inspect.decide-etb_target { border-top-color: var(--accent-2); }
+.decide-opt { animation: decide-opt-in .24s ease-out both; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+.decide-opt:not(:disabled):hover { transform: translateX(3px); border-color: var(--accent); }
+.decide-opt:not(:disabled):active { transform: scale(.97); }
+.decide-opt.picked { animation: decide-pick .17s ease-out both; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 16px rgba(216,178,58,.55); }
+.decide-sacrifice .decide-opt.picked, .decide-keep .decide-opt.picked { border-color: #e0684f; box-shadow: 0 0 0 2px #e0684f, 0 0 16px rgba(224,104,79,.6); }
+.decide-opt:disabled:not(.picked) { opacity: .45; }
+.decide-none { animation: decide-opt-in .24s ease-out .12s both; }
+@keyframes decide-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes decide-in { from { opacity: 0; transform: translateY(14px) scale(.94); } to { opacity: 1; transform: none; } }
+@keyframes decide-opt-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+@keyframes decide-pick { 0% { transform: scale(1); } 45% { transform: scale(1.05); } 100% { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .decide-back, .inspect.decide, .decide-opt, .decide-none, .decide-opt.picked { animation: none; }
+}

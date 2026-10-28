@@ -6319,7 +6319,7 @@ def test_edict_human_chooses_on_own_turn_else_auto():
     g2, me2, op2 = _duel(); g2.interactive_human = me2; g2.active_index = 0
     g2.move_to_battlefield(cards.creature("A", "1G", 2, 2), me2)
     _human_or_auto_sacrifice(g2, me2, "elegí")
-    assert g2.pending_choice and g2.pending_choice["kind"] == "etb_target"
+    assert g2.pending_choice and g2.pending_choice["kind"] == "sacrifice"
     # en el turno de un bot NO se abre modal para el humano (evita que se cuelgue)
     g3, me3, op3 = _duel(); g3.interactive_human = me3; g3.active_index = 1
     g3.move_to_battlefield(cards.creature("A", "1G", 2, 2), me3)
@@ -7492,7 +7492,7 @@ def test_forced_sacrifice_prompt_names_the_forcing_opponent():
     f = res[0] if isinstance(res, tuple) else res
     f(ig.g, op)                       # el rival fuerza el edicto sobre el humano
     pc = ig.g.pending_choice
-    assert pc is not None and pc["kind"] == "etb_target"
+    assert pc is not None and pc["kind"] == "sacrifice"
     assert "Quintorius" not in pc["prompt"]          # no es el nombre del que sacrifica
     assert op.name in pc["prompt"]                   # sí nombra a quien lo fuerza
     assert "forzado" in pc["prompt"].lower()

@@ -1057,10 +1057,109 @@ class InteractiveGame:
             if getattr(card, "x_spell", False):
                 self._prompt_x(p, card, bool(from_command), targets, chosen)
             else:
-                self.g.cast(p, card, from_command=bool(from_command),
-                            targets=targets, chosen_modes=chosen)
-                self.g.sba()
+                self._cast_decided(p, card, bool(from_command), targets, chosen)
         return self.state()
+
+    # -- decisiones del humano al lanzar / activar ---------------------------- #
+    def _ask_chain(self, questions, finish):
+        """Pregunta en cadena (una decisión por vez) y al final llama finish(respuestas).
+        questions: [(clave, kind, prompt, [(etiqueta, valor), …])]."""
+        answers = {}
+
+        def step(k):
+            if k >= len(questions):
+                finish(answers)
+                return
+            key, kind, prompt, opts = questions[k]
+
+            def _apply(idx, _k=k, _key=key, _opts=opts):
+                val = _opts[idx][1] if idx is not None and 0 <= idx < len(_opts) else None
+                if _key == "sac":
+                    answers.setdefault("sac", []).append(val) if val is not None else None
+                else:
+                    answers[_key] = val
+                step(_k + 1)
+            self.g.pending_choice = {
+                "kind": kind, "prompt": prompt, "allow_none": False, "_apply": _apply,
+                "options": [{"i": i, "name": lab, "ok": True} for i, (lab, _v) in enumerate(opts)],
+            }
+        step(0)
+
+    @staticmethod
+    def _pm_label(pm):
+        return f"{pm.name} {pm.power}/{pm.toughness}" if pm.is_creature() else pm.name
+
+    def _cast_questions(self, p, card, from_command=False):
+        """Costes que el HUMANO decide al lanzar: qué sacrificar (coste adicional) y si
+        paga los opcionales (kicker, buyback, bargain, casualty, teamwork/blight/…, fuse)."""
+        g = self.g
+        qs = []
+        base = card.cost or Cost(0, ())
+        tax = p.tax_for(card) if from_command else 0
+        red = getattr(card, "cost_reduction", 0) or 0
+        gen0 = max(0, base.generic + tax - red)
+        add = getattr(card, "additional_cost", None) or {}
+        if add.get("sacrifice"):
+            pool = g.addcost_sac_pool(p, card)
+            if len(pool) > 1:
+                qs.append(("sac", "sacrifice", f"{card.name}: elegí qué sacrificar (coste adicional).",
+                           [(self._pm_label(pm), pm) for pm in pool]))
+        kick = getattr(card, "_kicker_cost", 0) or 0
+        if kick and p.can_pay(Cost(gen0 + kick, base.pips)):
+            qs.append(("kicker", "opt_cost", f"¿Pagar kicker ({{{kick}}} más) para {card.name}?",
+                       [(f"Sí, con kicker (+{{{kick}}})", True), ("No", False)]))
+        ks = getattr(card, "_kicker_sac", None)
+        if ks and len(g._sacrifice_candidates(p, ks[1], ks[0])) >= ks[0]:
+            qs.append(("kicker", "opt_cost", f"¿Kicker de {card.name}: sacrificar {ks[0]} {ks[1]}(s)?",
+                       [("Sí, sacrificar", True), ("No", False)]))
+        bb = getattr(card, "_buyback_cost", 0) or 0
+        if bb and p.can_pay(Cost(gen0 + bb, base.pips)):
+            qs.append(("buyback", "opt_cost", f"¿Pagar buyback ({{{bb}}} más)? La carta vuelve a tu mano.",
+                       [(f"Sí, buyback (+{{{bb}}})", True), ("No", False)]))
+        if getattr(card, "bargain", False):
+            pool = [pm for pm in p.battlefield if not p.is_commander(pm.card) and (pm.is_token or (
+                not pm.is_creature() and not pm.card.is_land() and {"artifact", "enchantment"} & pm.card.types))]
+            if pool:
+                qs.append(("bargain", "opt_cost", f"¿Bargain para {card.name}? (sacrificar un artefacto, encantamiento o ficha)",
+                           [("No hacer bargain", None)] + [(f"Sacrificar {self._pm_label(pm)}", pm) for pm in pool]))
+        cas = getattr(card, "casualty", 0)
+        if cas:
+            pool = [pm for pm in p.creatures() if pm.power >= cas and not p.is_commander(pm.card)]
+            if pool:
+                qs.append(("casualty", "opt_cost", f"¿Casualty {cas} para {card.name}? (sacrificar para copiar el hechizo)",
+                           [("No", None)] + [(f"Sacrificar {self._pm_label(pm)}", pm) for pm in pool]))
+        oa = getattr(card, "opt_add", None)
+        if oa:
+            names = {"teamwork": "teamwork (girar criaturas)", "blight": "blight (contador -1/-1)",
+                     "evidence": "reunir evidencia (exiliar del cementerio)", "waterbend": "waterbend"}
+            qs.append(("opt_add", "opt_cost", f"¿Pagar el coste opcional {names.get(oa[0], oa[0])} {oa[1]} de {card.name}?",
+                       [("Sí", True), ("No", False)]))
+        bf = getattr(card, "back_face", None)
+        if getattr(card, "fuse", False) and bf is not None and bf.cost is not None and \
+                p.can_pay(Cost(gen0 + bf.cost.generic, tuple(base.pips) + tuple(bf.cost.pips))):
+            qs.append(("fuse", "opt_cost", f"¿Lanzar {card.name} fusionada (las dos mitades)?",
+                       [("Sí, las dos mitades", True), ("No, solo esta mitad", False)]))
+        return qs
+
+    def _with_prefs(self, prefs, fn):
+        """Corre `fn` con las decisiones del humano visibles para el motor."""
+        self.g._human_pref = prefs
+        try:
+            return fn()
+        finally:
+            self.g._human_pref = None
+
+    def _cast_decided(self, p, card, from_command, targets, chosen, x_value=None):
+        """Lanza preguntando antes los costes que decide el humano."""
+        def _go(ans):
+            self._with_prefs(ans, lambda: self.g.cast(p, card, from_command=from_command, targets=targets,
+                                                      chosen_modes=chosen, x_value=x_value))
+            self.g.sba()
+        qs = self._cast_questions(p, card, from_command)
+        if not qs:
+            _go({})
+        else:
+            self._ask_chain(qs, _go)
 
     def _prompt_x(self, p, card, from_command, targets, chosen):
         """Deja que el HUMANO elija X (0..máximo pagable) antes de lanzar."""
@@ -1073,9 +1172,7 @@ class InteractiveGame:
 
         def _apply(idx):
             x = idx if idx is not None else 0
-            self.g.cast(p, card, from_command=from_command, targets=targets,
-                        chosen_modes=chosen, x_value=x)
-            self.g.sba()
+            self._cast_decided(p, card, from_command, targets, chosen, x_value=x)
 
         self.g.pending_choice = {
             "kind": "x",
@@ -1617,14 +1714,35 @@ class InteractiveGame:
             return self.state()
         spec = ab.get("target_spec")
         tgt = self._chosen_targets(pm.card, target_uids, spec=spec) if spec else None
+        # coste "Sacrifice a <tipo>": el humano elige QUÉ sacrificar (antes era automático)
+        sac_o = ab.get("sacrifice_other")
+        if sac_o and not getattr(self, "_sac_chosen", False):
+            p = self.human()
+            pool = self.g._sacrifice_candidates(p, sac_o["type"], 999, exclude=pm)
+            n = sac_o["count"]
+            if len(pool) > n:
+                qs = [("sac", "sacrifice", f"«{ab.get('label', '')}»: elegí qué sacrificar"
+                       + (f" ({k + 1} de {n})" if n > 1 else "") + ".",
+                       [(self._pm_label(x), x) for x in pool]) for k in range(n)]
+
+                def _go(ans, _uid=uid, _i=index, _tu=target_uids, _x=x):
+                    self._sac_chosen = True
+                    try:
+                        self._with_prefs({"sac": ans.get("sac") or []},
+                                         lambda: self.activate_ability(_uid, _i, _tu, _x))
+                    finally:
+                        self._sac_chosen = False
+                self._ask_chain(qs, _go)
+                return self.state()
         # habilidad con {X}: el humano elige X (0..máximo pagable) antes de activar.
         if ab.get("x_cost") and x is None:
             p = self.human()
             base = ab.get("cost").cmc if ab.get("cost") else 0
             maxx = min(20, max(0, p.available_mana() - base))
+            _hp = getattr(self.g, "_human_pref", None)
 
-            def _apply(idx, _pm=pm, _i=index, _tg=tgt):
-                self.g.activate_ability(_pm, _i, targets=_tg, x=(idx or 0))
+            def _apply(idx, _pm=pm, _i=index, _tg=tgt, _h=_hp):
+                self._with_prefs(_h, lambda: self.g.activate_ability(_pm, _i, targets=_tg, x=(idx or 0)))
                 self.g.sba()
 
             self.g.pending_choice = {
