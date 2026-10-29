@@ -5248,6 +5248,8 @@ def _wire_aura(card, oracle):
         ab_off = True
     if ab_off:
         card.aura_abilities_off = True
+    if "enchanted permanent is a colorless land" in t:
+        card.aura_moon = True            # Imprisoned in the Moon: deja de ser criatura, {T}: {C}
     # auras de BLOQUEO (Pacifism, Claustrophobia, Arrest…) y de CONTROL (Mind
     # Control): restricciones sobre el huésped que el motor consulta
     mca = re.search(r"enchanted (?:creature|permanent) can't ([a-z ,]+?)(?:\.|$| and its)", t)
@@ -5291,7 +5293,14 @@ def _wire_aura(card, oracle):
     _mland = re.search(r"enchant (land|forest|plains|island|swamp|mountain|nonbasic land)\b", t)
     _land_sub = _mland.group(1) if _mland else None
 
-    def _attach(game, ctrl, perm, _bad=bad, _ls=_land_sub):
+    _enc_art = bool(re.search(r"(?:^|\. |flash )enchant artifact(?! or| creature|,)\b", t))
+    _TK = r"(?:artifact|creature|land|planeswalker|enchantment)"
+    _mk = re.search(r"enchant (" + _TK + r"(?:, " + _TK + r")*,? or " + _TK + r")\b", t)
+    _kinds = tuple(re.findall(_TK, _mk.group(1))) if _mk else ()
+    if _kinds:
+        card.aura_enchant_kinds = _kinds   # "enchant creature, land, or planeswalker"
+
+    def _attach(game, ctrl, perm, _bad=bad, _ls=_land_sub, _then=None, _ea=_enc_art, _kd=_kinds):
         if _ls is not None:                       # aura de TIERRA (Wild Growth, Utopia Sprawl)
             lands = [pm for pm in (game.opponents(ctrl)[0].battlefield if (_bad and game.opponents(ctrl))
                                    else ctrl.battlefield)
@@ -5300,12 +5309,26 @@ def _wire_aura(card, oracle):
             taken = {id(getattr(x, "enchanting", None)) for x in ctrl.battlefield}
             free = [pm for pm in lands if id(pm) not in taken] or lands
             if free:
-                host = free[0]
-                perm.enchanting = host
-                game.log(f"{ctrl.name}: {perm.name} se anexa a {host.name}")
-                _grant_to_host(game, perm, host)
+                def _lh(host, _perm=perm):
+                    _perm._awaiting_host = False
+                    if _perm not in _perm.controller.battlefield or host not in host.controller.battlefield:
+                        return
+                    _perm.enchanting = host
+                    game.log(f"{ctrl.name}: {_perm.name} se anexa a {host.name}")
+                    _grant_to_host(game, _perm, host)
+                    if _then is not None:
+                        _then()
+                if ctrl is getattr(game, "interactive_human", None) and len(free) > 1:
+                    perm._awaiting_host = True
+                _choose_tgt(game, ctrl, free, f"{perm.name}: elegí a qué tierra anexarla", _lh)
+                return
+            if _then is not None:
+                _then()
             return
-        if _bad:
+        if _ea:                                   # "enchant artifact (you control)"
+            pool = [pm for pm in ([x for o in game.opponents(ctrl) for x in o.battlefield] if _bad
+                                  else ctrl.battlefield) if "artifact" in pm.card.types and pm is not perm]
+        elif _bad:
             pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield if pm.is_creature()]
         else:
             pool = [pm for pm in ctrl.battlefield if pm.is_creature() and pm is not perm]
@@ -5313,22 +5336,44 @@ def _wire_aura(card, oracle):
             pool = [pm for pm in pool if game.can_target(ctrl, pm)] or pool
             if getattr(perm.card, "aura_no_untap", False) or getattr(perm.card, "aura_tap_etb", False):
                 pool.sort(key=lambda x: x.tapped, reverse=True)
-        if pool:
-            host = max(pool, key=lambda x: (x.power, x.toughness))
-            perm.enchanting = host
-            game.log(f"{ctrl.name}: {perm.name} se anexa a {host.name}")
-            _grant_to_host(game, perm, host)
-            if getattr(perm.card, "aura_tap_etb", False):
+        if _kd and not _ea and set(_kd) - {"creature"}:
+            scope = ([x for o in game.opponents(ctrl) for x in o.battlefield] if _bad
+                     else [x for x in ctrl.battlefield if x is not perm])
+            extra = [pm for pm in scope if not pm.is_creature() and any(
+                k in pm.card.types for k in _kd if k != "creature") and (not _bad or game.can_target(ctrl, pm))]
+            pool = (pool if "creature" in _kd else []) + extra
+        if not pool:
+            if _then is not None:
+                _then()
+            return
+        # el preferido primero (orden estable: con aura_no_untap, las giradas primero)
+        _crs = [x for x in pool if x.is_creature()]
+        best = max(_crs, key=lambda x: (x.power, x.toughness)) if _crs else pool[0]
+        pool = [best] + [pm for pm in pool if pm is not best]
+
+        def _host(host, _perm=perm):
+            _perm._awaiting_host = False
+            if _perm not in _perm.controller.battlefield or host not in host.controller.battlefield:
+                return
+            _perm.enchanting = host
+            game.log(f"{ctrl.name}: {_perm.name} se anexa a {host.name}")
+            _grant_to_host(game, _perm, host)
+            if getattr(_perm.card, "aura_tap_etb", False):
                 host.tapped = True
-            if getattr(perm.card, "aura_control", False) and host.controller is not ctrl:
+            if getattr(_perm.card, "aura_control", False) and host.controller is not ctrl:
                 old = host.controller
                 old.battlefield.remove(host)
                 host.controller = ctrl
                 ctrl.battlefield.append(host)
                 host.summoning_sick = True
                 host.attacking = None
-                perm._stolen = (host, old)
-                game.log(f"{ctrl.name} toma el control de {host.name} ({perm.name})")
+                _perm._stolen = (host, old)
+                game.log(f"{ctrl.name} toma el control de {host.name} ({_perm.name})")
+            if _then is not None:
+                _then()
+        if ctrl is getattr(game, "interactive_human", None) and len(pool) > 1:
+            perm._awaiting_host = True
+        _choose_tgt(game, ctrl, pool, f"{perm.name}: elegí a qué criatura anexarla", _host)
 
     # el ETB propio del Aura (scry, robar, incubate…) se ejecuta tras anexarse
     _aura_body, _ = _self_etb_body(oracle, card.name)
@@ -5336,8 +5381,9 @@ def _wire_aura(card, oracle):
         r"(?i)\s*(?:attach|enchant|tap enchanted)", _aura_body)) else None
 
     def _attach_and_etb(game, ctrl, perm, _a=_attach, _e=_aura_etb):
-        _a(game, ctrl, perm)
-        if _e is not None:
+        def _after():
+            if _e is None:
+                return
             prev = (getattr(game, "_trigger_subject", None),
                     getattr(game, "_trigger_source", None))
             game._trigger_subject = getattr(perm, "enchanting", None)
@@ -5346,6 +5392,7 @@ def _wire_aura(card, oracle):
                 _e(game, ctrl, perm)
             finally:
                 game._trigger_subject, game._trigger_source = prev
+        _a(game, ctrl, perm, _then=_after)
     card.on_etb = _attach_and_etb
     if _aura_etb is not None:
         card.aura_etb = True             # ETB propio cableado (visible para la auditoría)
@@ -15623,6 +15670,440 @@ def _wire_b29(card, data, name, types):
 
 
 # ── batch 30: más cartas frecuentes de precons ──
+def _b31_cmc(c):
+    return c.cost.cmc if getattr(c, "cost", None) else 0
+
+
+def _b31_free_cast(game, ctrl, card, owner=None):
+    """Lanzar gratis una carta que ya salió de su zona (biblioteca, mano rival…): el
+    permanente entra bajo `ctrl`; el hechizo resuelve y va al cementerio de su dueño."""
+    owner = owner or ctrl
+    _cascade_cast_hit(game, ctrl, card)
+    if owner is not ctrl and card in ctrl.graveyard:
+        ctrl.graveyard.remove(card)
+        owner.graveyard.append(card)
+
+
+def _b31_pick_card(game, ctrl, cards_, prompt, fn, allow_none=True, on_none=None):
+    """Elegir una carta (no permanente) de una lista: humano por modal; bot la primera."""
+    if not cards_:
+        if on_none is not None:
+            on_none()
+        return
+    if ctrl is getattr(game, "interactive_human", None):
+        opts = [(f"{c.name} (VM {_b31_cmc(c)})", c) for c in cards_]
+        _route_choice(game, ctrl, lambda: _human_target_choice(
+            game, ctrl, "etb_target", prompt, opts, fn, allow_none=allow_none, on_none=on_none),
+            lambda: fn(cards_[0]))
+        return
+    fn(cards_[0])
+
+
+def _b31_steal(game, ctrl, tgt, why=""):
+    if tgt not in tgt.controller.battlefield or tgt.controller is ctrl:
+        return
+    old = tgt.controller
+    old.battlefield.remove(tgt)
+    tgt.controller = ctrl
+    ctrl.battlefield.append(tgt)
+    tgt.summoning_sick = True
+    tgt.attacking = None
+    game.log(f"{ctrl.name} toma el control de {tgt.name}{why}")
+
+
+def _wire_b31(card, data, name, types):
+    raw = data.get("_orig_text") or data.get("oracle_text", "") or ""
+    t = re.sub(r"\s+", " ", raw.lower())
+    for nm in sorted((x for x in _self_names(name) if x), key=len, reverse=True):
+        t = t.replace(nm, "~")
+    t = re.sub(r"\bthis (?:creature|artifact|enchantment|equipment|land|aura)\b", "~", t)
+    trg = dict(card.triggers or {})
+
+    def _add_trig(key, fn):
+        prev = trg.get(key)
+        trg[key] = fn if prev is None else (lambda g, perm, _a=prev, _b=fn, **kw: (_a(g, perm, **kw), _b(g, perm, **kw)))
+
+    # "whenever equipped/enchanted creature deals combat damage to a player, …": el disparo
+    # vive en el equipo/aura (el motor lo dispara con el huésped; antes nunca se disparaba)
+    mh = re.search(r"whenever (?:equipped|enchanted) creature deals combat damage to (?:a player|an opponent),? (.+?)"
+                   r"(?:\.$|\. (?=equip|enchant|\{))", t + "." if not t.endswith(".") else t)
+    if mh:
+        card.host_cdmg = True
+        body = mh.group(1)
+        hfn = None
+        if body.startswith("create a token that's a copy of ~"):
+            def hfn(g, perm, **kw):             # Bloodforged Battle-Axe
+                cards.make_copy_token(g, perm.controller, perm.card)
+                g.log(f"{perm.name}: se crea una copia")
+        elif body.startswith("you draw that many cards"):
+            def hfn(g, perm, **kw):             # Robe of the Archmagi
+                n = int(kw.get("amount") or 0)
+                if n:
+                    perm.controller.draw(n, g)
+                    g.log(f"{perm.controller.name} roba {n} ({perm.name})")
+        elif body.startswith("double its controller's life total"):
+            def hfn(g, perm, **kw):             # Celestial Mantle
+                h = kw.get("host")
+                c = h.controller if h is not None else perm.controller
+                if c.life > 0:
+                    g.gain_life(c, c.life)
+        elif body.startswith("that player sacrifices a land"):
+            def hfn(g, perm, **kw):             # Destructive Urge
+                d = kw.get("defender")
+                lands = sorted((x for x in getattr(d, "battlefield", ()) if x.card.is_land()),
+                               key=lambda x: (len(x.card.produces(x, g) or {}) if x.card.produces else 0))
+                if lands:
+                    g.to_graveyard(lands[0], "sacrificio")
+        elif body.startswith("you may destroy target equipment that player controls"):
+            def hfn(g, perm, **kw):             # Hammer of Ruin
+                d = kw.get("defender")
+                eqs = [x for x in getattr(d, "battlefield", ()) if "equipment" in {s.lower() for s in x.card.subtypes}
+                       and g.can_target(perm.controller, x)]
+                eqs.sort(key=lambda x: -_b31_cmc(x.card))
+                _choose_tgt(g, perm.controller, eqs, f"{perm.name}: ¿destruir un equipo de {getattr(d, 'name', '')}?",
+                            lambda x: g.destroy(x, perm.name), allow_none=True)
+        if hfn is not None:
+            trg["combat_damage_to_player"] = hfn
+
+    # Hooded Horror: "can't be blocked as long as defending player controls the most creatures or is tied"
+    if "can't be blocked as long as defending player controls the most creatures or is tied for the most" in t:
+        card.unblock_most_cr = True
+
+    # Sidar Kondo: "creatures your opponents control without flying or reach can't block creatures with power 2 or less"
+    if "creatures your opponents control without flying or reach can't block creatures with power 2 or less" in t:
+        card.sidar = True
+
+    # Fumiko: "has bushido x, where x is the number of attacking creatures"
+    if re.search(r"has bushido x, where x is the number of attacking creatures", t):
+        card.bushido_dyn = "attackers"
+
+    # Disaster Radius: revelar una criatura de la mano; X = su VM a cada criatura rival
+    if {"sorcery", "instant"} & types and "reveal a creature card from your hand" in t and \
+            re.search(r"deals x damage to each creature your opponents control, where x is the revealed card's mana value",
+                      t):
+        def _dr(g, c, tg):
+            crs = sorted((x for x in c.hand if x.is_creature()), key=lambda x: -_b31_cmc(x))
+
+            def _go(x):
+                n = _b31_cmc(x)
+                g.log(f"{c.name} revela {x.name} (VM {n}): {n} de daño a cada criatura rival")
+                for o in g.opponents(c):
+                    for pm in list(o.creatures()):
+                        g.deal_damage(None, pm, n)
+                g.sba()
+            if not crs:
+                g.log(f"{c.name} no tiene criatura para revelar (Disaster Radius sin efecto)")
+                return
+            _b31_pick_card(g, c, crs, "Disaster Radius: revelá una criatura de tu mano (X = su VM)", _go,
+                           allow_none=False)
+        card.on_cast_resolve = _dr
+
+    # Confiscation Coup: 4 energía; pagar VM en energía para robar el permanente
+    if re.search(r"choose target artifact or creature\. you get \{e\}\{e\}\{e\}\{e\}[^.]*?, then you may pay an amount "
+                 r"of \{e\} equal to that permanent's mana value\. if you do, gain control of it", t):
+        def _coup(g, c, tg):
+            c.energy = getattr(c, "energy", 0) + 4
+            g.log(f"{c.name} obtiene 4 energía (tiene {c.energy})")
+            pool = [pm for o in g.opponents(c) for pm in o.battlefield
+                    if (pm.is_creature() or "artifact" in pm.card.types) and g.can_target(c, pm)]
+            pool.sort(key=lambda pm: (_b31_cmc(pm.card) > c.energy, -_b31_cmc(pm.card), -pm.power))
+
+            def _take(pm):
+                v = _b31_cmc(pm.card)
+                if v > c.energy:
+                    g.log(f"{c.name} no tiene energía suficiente para {pm.name} ({v})")
+                    return
+
+                def _pay():
+                    c.energy -= v
+                    _b31_steal(g, c, pm, f" (Confiscation Coup, paga {v} energía)")
+                _human_may(g, c, f"¿Pagar {v} energía para tomar {pm.name}? (tenés {c.energy})", _pay)
+            _choose_tgt(g, c, pool, "Confiscation Coup: elegí un artefacto o criatura", _take, a=tg)
+        card.on_cast_resolve = _coup
+
+    # Aetherworks Marvel
+    if "whenever a permanent you control is put into a graveyard, you get {e}" in t:
+        def _am(g, perm, card=None, **kw):
+            if kw.get("player") is perm.controller and card is not None \
+                    and getattr(card, "_left_bf_turn", None) == g.turn:
+                perm.controller.energy = getattr(perm.controller, "energy", 0) + 1
+        _add_trig("to_graveyard", _am)
+    if re.search(r"\{t\}, pay six \{e\}: look at the top six cards of your library\. you may cast a spell from among them "
+                 r"without paying its mana cost\. put the rest on the bottom of your library in a random order", t):
+        def _amx(g, ctrl, perm, targets=None):
+            look = ctrl.library[-6:][::-1]
+            for c in look:
+                ctrl.library.remove(c)
+            g.log(f"{ctrl.name} mira las 6 de arriba ({perm.name})")
+            spells = sorted((c for c in look if not c.is_land()), key=lambda c: -_b31_cmc(c))
+
+            def _rest(exclude=None):
+                rest = [c for c in look if c is not exclude]
+                g.rng.shuffle(rest)
+                for c in rest:
+                    ctrl.library.insert(0, c)
+
+            def _cast(c):
+                _rest(c)
+                _b31_free_cast(g, ctrl, c)
+            _b31_pick_card(g, ctrl, spells, f"{perm.name}: ¿qué hechizo lanzás gratis?", _cast,
+                           on_none=lambda: _rest())
+        card.activated_abilities = tuple(ab for ab in (card.activated_abilities or ())
+                                         if not str(ab.get("label", "")).lower().startswith("look at the top six")) + ({
+            "cost": parse_cost("0"), "tap": True, "sacrifice_self": False, "sacrifice_other": None,
+            "pay_life": 0, "discard": 0, "energy": 6, "label": "Pagar 6 energía: mirar 6 y lanzar gratis",
+            "effect": _amx, "target_spec": None, "target_count": 0, "is_copy_ability": False,
+            "sorcery_speed": False},)
+
+    # Era of Innovation
+    if re.search(r"whenever an artifact or artificer you control enters, you may pay \{1\}\. if you do, you get \{e\}\{e\}",
+                 t):
+        def _era(g, perm, subject=None, **kw):
+            c = perm.controller
+            if subject is None or subject.controller is not c or not (
+                    "artifact" in subject.card.types or subject.has_subtype("artificer")):
+                return
+            cost = parse_cost("1")
+            if not c.can_pay(cost):
+                return
+
+            def _do():
+                if c.can_pay(cost):
+                    c.pay(cost)
+                    c.energy = getattr(c, "energy", 0) + 2
+                    g.log(f"{c.name} paga {{1}} y obtiene 2 energía ({perm.name})")
+            _human_may(g, c, f"{perm.name}: ¿pagar {{1}} para obtener 2 energía?", _do,
+                       auto=lambda: _do() if len(c.mana_sources()) > 3 else None)
+        _add_trig("etb", _era)
+    if re.search(r"pay six \{e\}, sacrifice ~: draw three cards", t):
+        def _era2(g, ctrl, perm, targets=None):
+            ctrl.draw(3, g)
+            g.log(f"{ctrl.name} roba 3 ({perm.name})")
+        card.activated_abilities = tuple(card.activated_abilities or ()) + ({
+            "cost": parse_cost("0"), "tap": False, "sacrifice_self": True, "sacrifice_other": None,
+            "pay_life": 0, "discard": 0, "energy": 6, "label": "Pagar 6 energía, sacrificar: robar 3",
+            "effect": _era2, "target_spec": None, "target_count": 0, "is_copy_ability": False,
+            "sorcery_speed": False},)
+
+    # Mechanized Production
+    if re.search(r"at the beginning of your upkeep, create a token that's a copy of enchanted artifact\. then if you "
+                 r"control eight or more artifacts with the same name as one another, you win the game", t):
+        def _mp(g, perm, **kw):
+            c = perm.controller
+            if kw.get("player") not in (None, c):
+                return
+            h = getattr(perm, "enchanting", None)
+            if h is None or h not in h.controller.battlefield:
+                return
+            cards.make_copy_token(g, c, h.card)
+            g.log(f"{c.name} crea una copia de {h.name} ({perm.name})")
+            from collections import Counter as _Ct
+            cnt = _Ct(x.name for x in c.battlefield if "artifact" in x.card.types)
+            if cnt and max(cnt.values()) >= 8:
+                for o in g.opponents(c):
+                    o.lost = True
+                g.log(f"{c.name} gana la partida ({perm.name})")
+        _add_trig("upkeep", _mp)
+        card.aura_own_artifact = True
+
+    # Hunter's Insight
+    if re.search(r"choose target creature you control\. whenever that creature deals combat damage to a player or "
+                 r"planeswalker this turn, draw that many cards", t):
+        def _hi(g, c, tg):
+            pool = sorted(c.creatures(), key=lambda x: (-x.power, -x.toughness))
+
+            def _mark(pm):
+                lst = [x for x in (getattr(pm, "_cdmg_this_turn", None) or ()) if x[0] == g.turn]
+                lst.append((g.turn, c, lambda gg, src, tgt, n, _c=c: (
+                    _c.draw(n, gg), gg.log(f"{_c.name} roba {n} (Hunter's Insight)"))))
+                pm._cdmg_this_turn = lst
+                g.log(f"{c.name} elige a {pm.name} (Hunter's Insight)")
+            _choose_tgt(g, c, pool, "Hunter's Insight: elegí una criatura tuya", _mark, a=tg)
+        card.on_cast_resolve = _hi
+
+    # Geode Golem: lanzar el comandante gratis (pagando solo el impuesto)
+    if re.search(r"whenever ~ deals combat damage to a player, you may cast your commander from the command zone without "
+                 r"paying its mana cost", t):
+        def _gg(g, perm, **kw):
+            c = perm.controller
+            cmds = [x for x in c.command if c.is_commander(x)]
+
+            def _cast(cm):
+                tax = c.tax_for(cm)
+                cost = parse_cost(str(tax)) if tax else parse_cost("0")
+                if cm not in c.command or not c.can_pay(cost):
+                    g.log(f"{c.name} no puede pagar el impuesto de {cm.name}")
+                    return
+                g.log(f"{c.name} lanza {cm.name} gratis desde la zona de mando ({perm.name})")
+                c.add_tax(cm)
+                g._cast_with(c, cm, cost, remove_from=c.command)
+            _b31_pick_card(g, c, cmds, f"{perm.name}: ¿lanzar tu comandante gratis?", _cast)
+        trg["combat_damage_to_player"] = _gg
+
+    # Silent-Blade Oni: mirar la mano del jugador y lanzar gratis un hechizo de ahí
+    if re.search(r"whenever ~ deals combat damage to a player, look at that player's hand\. you may cast a spell from "
+                 r"among those cards without paying its mana cost", t):
+        def _sbo(g, perm, **kw):
+            d = kw.get("defender")
+            c = perm.controller
+            if d is None or not hasattr(d, "hand"):
+                return
+            g.log(f"{c.name} mira la mano de {d.name}: " + ", ".join(x.name for x in d.hand))
+            spells = sorted((x for x in d.hand if not x.is_land()), key=lambda x: -_b31_cmc(x))
+
+            def _cast(x):
+                if x in d.hand:
+                    d.hand.remove(x)
+                    _b31_free_cast(g, c, x, owner=d)
+            _b31_pick_card(g, c, spells, f"{perm.name}: ¿qué hechizo de {d.name} lanzás gratis?", _cast)
+        trg["combat_damage_to_player"] = _sbo
+
+    # Aethermage's Touch
+    if re.search(r"reveal the top four cards of your library\. you may put a creature card from among them onto the "
+                 r"battlefield\. it gains \"at the beginning of your end step, return (?:this creature|~) to its owner's hand", t):
+        def _at(g, c, tg):
+            look = c.library[-4:][::-1]
+            for x in look:
+                c.library.remove(x)
+            g.log(f"{c.name} revela: " + ", ".join(x.name for x in look))
+            crs = sorted((x for x in look if x.is_creature()), key=lambda x: -_b31_cmc(x))
+
+            def _rest(exclude=None):
+                for x in look:
+                    if x is not exclude:
+                        c.library.insert(0, x)
+
+            def _put(x):
+                _rest(x)
+                pm = g.move_to_battlefield(x, c)
+                if pm is not None:
+                    pm._eot_bounce = True
+            _b31_pick_card(g, c, crs, "Aethermage's Touch: ¿qué criatura ponés en el campo?", _put,
+                           on_none=lambda: _rest())
+        card.on_cast_resolve = _at
+
+    # Vedalken Humiliator: metalcraft al atacar -> criaturas rivales 1/1 sin habilidades hasta fin de turno
+    if re.search(r"metalcraft — whenever ~ attacks, if you control three or more artifacts, creatures your opponents "
+                 r"control lose all abilities and have base power and toughness 1/1 until end of turn", t):
+        def _vh(g, perm, **kw):
+            c = perm.controller
+            if sum(1 for x in c.battlefield if "artifact" in x.card.types) < 3:
+                return
+            for o in g.opponents(c):
+                for pm in o.creatures():
+                    pm._abil_off_turn = g.turn
+                    old = pm.set_base_pt
+                    pm.set_base_pt = (1, 1)
+                    g.delayed_end.append(lambda gg, _p=pm, _o=old: setattr(_p, "set_base_pt", _o))
+            g.log(f"{perm.name}: las criaturas rivales son 1/1 sin habilidades hasta fin de turno")
+        _add_trig("attacks", _vh)
+
+    # Scourge of Nel Toth: desde el cementerio por {B}{B} + sacrificar dos criaturas
+    if re.search(r"you may cast ~ from your graveyard by paying \{b\}\{b\} and sacrificing two creatures rather than "
+                 r"paying its mana cost", t):
+        card.gy_play = {"mode": "gy_cast", "cost": parse_cost("BB"), "after": "graveyard", "sac_n": 2,
+                        "cond": (lambda g, p: sum(1 for x in p.creatures() if not p.is_commander(x.card)) >= 2)}
+
+    # Crawling Sensation: tierras al cementerio -> Insecto 1/1 (una vez por turno)
+    if re.search(r"whenever one or more land cards are put into your graveyard from anywhere for the first time each turn, "
+                 r"create a 1/1 green insect creature token", t):
+        def _cs(g, perm, card=None, **kw):
+            if kw.get("player") is not perm.controller or card is None or not card.is_land():
+                return
+            if getattr(perm, "_cs_turn", None) == g.turn:
+                return
+            perm._cs_turn = g.turn
+            cards.make_token(g, perm.controller, "Insect", 1, 1, subtypes=("Insect",))
+            g.log(f"{perm.name}: crea un Insecto 1/1")
+        _add_trig("to_graveyard", _cs)
+
+    # Trail of Mystery
+    if "whenever a face-down creature you control enters, you may search your library for a basic land card, reveal it, " \
+       "put it into your hand, then shuffle" in t:
+        def _tm(g, perm, subject=None, **kw):
+            c = perm.controller
+            if subject is None or subject.controller is not c or "face_down" not in (subject.card.tags or ()):
+                return
+            basics = [x for x in c.library if x.is_land() and "basic" in x.supertypes]
+            uniq = []
+            for x in basics:
+                if x.name not in {u.name for u in uniq}:
+                    uniq.append(x)
+
+            def _get(x):
+                if x in c.library:
+                    c.library.remove(x)
+                    c.hand.append(x)
+                    g.rng.shuffle(c.library)
+                    g.log(f"{c.name} busca {x.name} ({perm.name})")
+            _b31_pick_card(g, c, uniq, f"{perm.name}: ¿qué tierra básica buscás?", _get)
+        _add_trig("etb", _tm)
+    if "whenever a permanent you control is turned face up, if it's a creature, it gets +2/+2 until end of turn" in t:
+        def _tm2(g, perm, subject=None, **kw):
+            if subject is not None and subject.controller is perm.controller and subject.is_creature():
+                subject.temp_pt[0] += 2
+                subject.temp_pt[1] += 2
+                g.log(f"{subject.name} recibe +2/+2 ({perm.name})")
+        _add_trig("turned_face_up", _tm2)
+
+    # Deathmist Raptor: vuelve del cementerio cuando das vuelta un permanente
+    if re.search(r"whenever a permanent you control is turned face up, you may return (?:~|this card) from your graveyard "
+                 r"to the battlefield", t):
+        card.gy_face_up_return = True
+
+    # Frontier Warmonger: las que atacan a un rival ganan menace
+    if "whenever one or more creatures attack one of your opponents or a planeswalker they control, those creatures " \
+       "gain menace until end of turn" in t:
+        def _fw(g, perm, attacker=None, defender=None, **kw):
+            dp = defender if not hasattr(defender, "card") else getattr(defender, "controller", None)
+            if attacker is None or dp is None or dp is perm.controller:
+                return
+            attacker.temp_keywords.add("menace")
+        _add_trig("creature_attacks", _fw)
+
+    # Dispatch: metalcraft -> exiliar
+    if {"instant"} & types and re.search(r"metalcraft — if you control three or more artifacts, exile that creature", t):
+        card.metalcraft_exile = True
+        def _dsp(g, c, tg):
+            pool = sorted((pm for o in g.opponents(c) for pm in o.creatures() if g.can_target(c, pm)),
+                          key=lambda x: (-x.power, -x.toughness))
+
+            def _do(pm):
+                pm.tapped = True
+                if sum(1 for x in c.battlefield if "artifact" in x.card.types) >= 3:
+                    g.exile_permanent(pm, "Dispatch")
+                else:
+                    g.log(f"{c.name} gira {pm.name} (Dispatch)")
+            _choose_tgt(g, c, pool, "Dispatch: elegí una criatura", _do, a=tg)
+        card.on_cast_resolve = _dsp
+
+    # Dearly Departed (desde el cementerio): las Humanas entran con un +1/+1 extra
+    if "as long as ~ is in your graveyard, each human creature you control enters with an additional +1/+1 counter" in t:
+        card.gy_human_bonus = True
+
+    # Resurrection Orb
+    if "whenever equipped creature dies, return that card to the battlefield under its owner's control at the beginning " \
+       "of the next end step" in t:
+        def _ro(g, perm, **kw):
+            h = kw.get("subject") or getattr(g, "_trigger_subject", None)
+            real = getattr(getattr(h, "card", None), "_real", None) or getattr(h, "card", None)
+            if real is None or getattr(h, "is_token", False):
+                return
+
+            def _back(gg, _c=real):
+                for pl in gg.players:
+                    if _c in pl.graveyard:
+                        pl.graveyard.remove(_c)
+                        gg.move_to_battlefield(_c, pl)
+                        gg.log(f"{_c.name} vuelve al campo ({perm.name})")
+                        return
+            g.delayed_end.append(_back)
+        trg["enchanted_dies"] = _ro
+
+    if trg != (card.triggers or {}):
+        card.triggers = trg
+
+
 def _wire_b30(card, data, name, types):
     raw = data.get("_orig_text") or data.get("oracle_text", "") or ""
     t = re.sub(r"\s+", " ", raw.lower())
@@ -19675,6 +20156,7 @@ def _build_card_from_data_impl(data: dict) -> Card:
 
     _wire_b29(card, data, name, types)
     _wire_b30(card, data, name, types)
+    _wire_b31(card, data, name, types)
     if card_dice:
         card.dice_table = card_dice
     # efecto genérico POR TAG: en un hechizo, al resolver; en un permanente, solo si

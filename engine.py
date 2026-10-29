@@ -388,7 +388,17 @@ class Permanent:
             ks |= self._cond_kws()
         return ks
 
+    def _mooned(self) -> bool:
+        """Imprisoned in the Moon: el permanente encantado es una tierra incolora con {T}: {C}."""
+        g = self.game
+        if g is None or not getattr(g, "_any_moon", False):
+            return False
+        return any(getattr(src, "enchanting", None) is self and getattr(src.card, "aura_moon", False)
+                   for pl in g.players for src in pl.battlefield)
+
     def is_creature(self) -> bool:
+        if self._mooned():
+            return False
         dv = getattr(self.card, "devotion_req", None)
         if dv and self.controller is not None and self.controller.devotion(dv[0]) < dv[1]:
             return False                 # dioses de Theros: no es criatura sin devoción
@@ -732,7 +742,7 @@ class Player:
             getattr(pm.card, "artifact_act_off", False) and not pm.abilities_off()
             for pl in _g.players for pm in pl.battlefield)
         return [p for p in self.battlefield
-                if p.card.produces is not None and not p.tapped
+                if (p.card.produces is not None or p._mooned()) and not p.tapped
                 and not (_art_off and "artifact" in p.card.types)
                 and not (exclude and p in exclude)
                 and not (p.is_creature() and p.summoning_sick and not p.has("haste")
@@ -743,6 +753,8 @@ class Player:
         """Opciones de maná de la fuente `p`, con los bonos por tierra: auras de
         tierra (Wild Growth, Utopia Sprawl), 'whenever you tap a land for mana, add
         one more' (Mana Reflection/Zendikar Resurgent) y los globales (Mana Flare)."""
+        if p._mooned():
+            return {"C": 1}
         opts = p.card.produces(p, self)
         if not opts or getattr(p, "game", None) is None:
             return opts
@@ -2080,6 +2092,8 @@ class Game:
         perm.game = self
         if is_token:
             player._token_turn = self.turn      # "if you created a token this turn"
+        if getattr(card, "aura_moon", False):
+            self._any_moon = True
         if getattr(card, "archetype_lose", None):
             self._any_archetype = True
         if getattr(card, "all_types_own", False):
@@ -2149,6 +2163,11 @@ class Game:
                     n = val
                 if n:
                     perm.counters["+1/+1"] = perm.counters.get("+1/+1", 0) + n
+            # Dearly Departed: "as long as this is in your graveyard, each Human creature you
+            # control enters with an additional +1/+1 counter on it"
+            _dd = sum(1 for c in player.graveyard if getattr(c, "gy_human_bonus", False))
+            if _dd and "human" in {x.lower() for x in card.subtypes}:
+                perm.counters["+1/+1"] = perm.counters.get("+1/+1", 0) + _dd
         player.battlefield.append(perm)
         if getattr(card, "prevent_static", None):
             self._prev_static_on = True
@@ -2585,6 +2604,7 @@ class Game:
         for x in extra_cards:                         # el resto de la pila mutada
             ctrl.graveyard.append(x)
         ctrl.graveyard.append(card)
+        card._left_bf_turn = self.turn          # "whenever a permanent you control is put into a graveyard"
         self.emit("to_graveyard", player=ctrl, card=card)
         if getattr(perm, "_earthbent", False) and card in ctrl.graveyard:
             ctrl.graveyard.remove(card)
@@ -2904,6 +2924,26 @@ class Game:
                         source=source, label=f"cdmg:{source.name}"))
                     self.note_ability(source.card, "daño de combate a un jugador",
                                       controller=source.controller)
+                # "whenever equipped/enchanted creature deals combat damage to a player": el
+                # disparo vive en el equipo/aura anexado (Swords, Masks, Bloodforged Battle-Axe…)
+                for src in self.all_permanents():
+                    if getattr(src, "enchanting", None) is source and getattr(src.card, "host_cdmg", False) \
+                            and not src.abilities_off():
+                        hcb = (src.card.triggers or {}).get("combat_damage_to_player")
+                        if hcb:
+                            self.stack.append(StackObject(
+                                src.controller,
+                                (lambda g, _cb=hcb, _s=src, _t=target, _n=amount, _h=source:
+                                 g._run_trigger(_cb, _s, {"defender": _t, "amount": _n, "host": _h}, subject=_h)),
+                                source=src, label=f"cdmg:{src.name}", kind="trigger", perm=src))
+                            self.note_ability(src.card, "daño de combate de la criatura equipada",
+                                              controller=src.controller)
+                # Hunter's Insight y similares: "whenever that creature deals combat damage … this turn"
+                for _hx in list(getattr(source, "_cdmg_this_turn", None) or ()):
+                    if _hx[0] == self.turn:
+                        self.stack.append(StackObject(
+                            _hx[1], (lambda g, _f=_hx[2], _t=target, _n=amount, _s=source: _f(g, _s, _t, _n)),
+                            source=source, label=f"cdmg_turn:{source.name}"))
         elif isinstance(target, Permanent):
             if "planeswalker" in target.card.types:
                 # el dano a un planeswalker le quita lealtad (P2.3)
@@ -5270,6 +5310,16 @@ class Game:
                          lambda: self._run_trigger(lambda g, pm, **kw: cb(g, p, pm),
                                                    perm, {}))
         self.emit("turned_face_up", player=p, perm=perm)
+        # Deathmist Raptor: "whenever a permanent you control is turned face up, you may return
+        # this card from your graveyard to the battlefield"
+        for _c in [x for x in p.graveyard if getattr(x, "gy_face_up_return", False)]:
+            def _ret(_c=_c):
+                if _c in p.graveyard:
+                    p.graveyard.remove(_c)
+                    self.move_to_battlefield(_c, p)
+                    self.log(f"{_c.name} vuelve del cementerio al campo")
+            import cardsdb as _cdb
+            _cdb._human_may(self, p, f"¿Devolver {_c.name} del cementerio al campo?", _ret)
         self.sba()
         return True
 
@@ -6562,9 +6612,26 @@ class Game:
             attacker.blocked_by.append(blocker)
             blocker.blocking.append(attacker)
 
+    def _bushido(self, perm) -> int:
+        """Bushido N (fijo) o dinámico (Fumiko: N = criaturas atacando)."""
+        if perm.abilities_off():
+            return 0
+        if getattr(perm.card, "bushido_dyn", None) == "attackers":
+            return sum(1 for pl in self.players for x in pl.battlefield if x.attacking is not None)
+        return getattr(perm.card, "bushido", 0) or 0
+
     def _can_block_evasion(self, attacker, blocker) -> bool:
         """Reglas de evasión no-vuelo: fear, intimidate, shadow, horsemanship, skulk."""
         b_art = "artifact" in blocker.card.types
+        if getattr(attacker.card, "unblock_most_cr", False) and not attacker.abilities_off():
+            _dc = sum(1 for x in blocker.controller.battlefield if x.is_creature())
+            if all(_dc >= sum(1 for x in pl.battlefield if x.is_creature())
+                   for pl in self.players if not pl.lost):
+                return False         # Hooded Horror: el defensor tiene más criaturas (o empata)
+        if attacker.power <= 2 and not (blocker.has("flying") or blocker.has("reach")) and any(
+                getattr(pm.card, "sidar", False) and not pm.abilities_off()
+                for pm in attacker.controller.battlefield):
+            return False             # Sidar Kondo: las de fuerza 2 o menos no las bloquean sin vuelo/alcance
         if attacker.has("shadow") and not blocker.has("shadow") and not getattr(blocker.card, "block_shadow", False):
             return False
         if blocker.has("shadow") and not attacker.has("shadow"):
@@ -6735,7 +6802,7 @@ class Game:
                 a.temp_pt[1] += bonus
                 self.log(f"Arrasar {r}: {a.name} recibe +{bonus}/+{bonus}")
             # bushido N: al ser bloqueada, +N/+N hasta fin de turno.
-            bu = getattr(a.card, "bushido", 0)
+            bu = self._bushido(a)
             if bu:
                 a.temp_pt[0] += bu
                 a.temp_pt[1] += bu
@@ -6744,7 +6811,7 @@ class Game:
         seen = set()
         for a in declared:
             for b in a.blocked_by:
-                bu = getattr(b.card, "bushido", 0)
+                bu = self._bushido(b)
                 if bu and id(b) not in seen:
                     seen.add(id(b))
                     b.temp_pt[0] += bu
@@ -7061,6 +7128,9 @@ class Game:
         self.emit("end_step", player=p)
         self.emit("each_end_step", active=p)
         self.resolve_stack()
+        for perm in [x for x in p.battlefield if getattr(x, "_eot_bounce", False)]:
+            self._run_fx("vuelve a la mano (fin de turno)",
+                         lambda _pm=perm: __import__("cardsdb")._bounce_pm(self, _pm, "vuelve a la mano (fin de turno)"))
         # limpieza: el daño marcado y los efectos "hasta el fin del turno" se van de
         # TODOS los permanentes a la vez (antes el daño solo del jugador activo: un
         # bloqueador rival seguía dañado en el turno siguiente, y uno potenciado
