@@ -280,6 +280,7 @@ class Permanent:
                     and self.counters.get("+1/+1", 0) > 0)
                 or getattr(self, "_detained_by", None) is not None
                 or getattr(self, "suspected", False)
+                or getattr(self, "_od_lock", False)
                 or self.aura_flag("aura_no_block")
                 or self._color_cant_block()
                 or (self.game is not None and any(getattr(pm.card, "global_no_block", False) and not pm.abilities_off()
@@ -317,6 +318,8 @@ class Permanent:
     def abilities_off(self) -> bool:
         if self.game is not None and getattr(self, "_abil_off_turn", None) == self.game.turn:
             return True                  # "loses all abilities until end of turn"
+        if getattr(self, "_abil_off_perm", False):
+            return True                  # Opportunistic Dragon: pierde sus habilidades
         return self._mutation()[1]
 
     def _static_delta(self):
@@ -491,7 +494,8 @@ class Permanent:
     def can_attack(self) -> bool:
         if not self.is_creature() or self.tapped:
             return False
-        if self.aura_flag("aura_no_attack") or getattr(self.card, "cant_attack_static", False):
+        if self.aura_flag("aura_no_attack") or getattr(self.card, "cant_attack_static", False) \
+                or getattr(self, "_od_lock", False):
             return False
         _aud = getattr(self.card, "attack_unless_def", None)
         if _aud and self.game is not None and not any(
@@ -1496,6 +1500,10 @@ class Game:
                 import cardsdb as _cdb
                 if _cdb._cond_eval(_cnd, src):
                     return True
+        # Deathleaper: "creatures you control that entered this turn have double strike"
+        if kw == "double_strike" and getattr(perm, "_etb_turn", None) == self.turn and any(
+                getattr(x.card, "_dl_entered", False) and not x.abilities_off() for x in ctrl.battlefield):
+            return True
         # "each creature you control with a +1/+1 counter on it has trample"
         for src in ctrl.battlefield:
             cg = getattr(src.card, "counter_grants", None)
@@ -2330,7 +2338,7 @@ class Game:
 
     def destroy(self, perm: Permanent, reason: str = ""):
         """Respeta indestructible y umbra armor."""
-        if perm.has("indestructible"):
+        if perm.has("indestructible") and getattr(perm, "_no_indestr_turn", None) != self.turn:
             return
         if perm.counters.get("shield", 0) > 0:          # contador escudo: se quita en su lugar
             perm.counters["shield"] -= 1

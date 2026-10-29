@@ -1162,7 +1162,8 @@ class Policy:
         # solo atacar con criaturas que hacen daño (>0): mandar una 0/x no aporta
         # y solo la expone a morir.
         _fa = any(getattr(pm.card, "forced_attack", None) == "all" or (
-            getattr(pm.card, "forced_attack", None) == "opp" and pl is not me)
+            getattr(pm.card, "forced_attack", None) == "opp" and pl is not me) or (
+            getattr(pm.card, "forced_attack", None) == "own" and pl is me)
             for pl in game.players for pm in pl.battlefield)
         forced = [p for p in me.creatures() if p.can_attack()
                   and (p.goaded or p.must_attack or _fa
