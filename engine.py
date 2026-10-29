@@ -2088,8 +2088,26 @@ class Game:
                 player.graveyard.append(card)
             self.log(f"{card.name} no puede entrar al campo (no es permanente)")
             return None
+        # Containment Priest: una criatura no ficha que entra sin haber sido lanzada se exilia
+        if not is_token and card.is_creature() and not getattr(card, "_resolving_cast", False) and \
+                getattr(card, "_real", None) is None and any(
+                    getattr(pm.card, "containment", False) and not pm.abilities_off()
+                    for pl in self.players for pm in pl.battlefield):
+            for pl in self.players:
+                for z in (pl.graveyard, pl.hand, pl.exile):
+                    if card in z:
+                        z.remove(card)
+            owner = self.commander_owner(card) or player
+            (owner.command if self.commander_owner(card) else owner.exile).append(card)
+            self.log(f"{card.name} se exilia en vez de entrar (Containment Priest)")
+            return None
         perm = Permanent(card, player, is_token=is_token)
         perm.game = self
+        # Blind Obedience: artefactos y criaturas de los rivales entran girados
+        if ({"artifact", "creature"} & set(card.types)) and any(
+                getattr(pm.card, "opp_enter_tapped", False) and not pm.abilities_off()
+                for pl in self.players if pl is not player for pm in pl.battlefield):
+            perm.tapped = True
         if is_token:
             player._token_turn = self.turn      # "if you created a token this turn"
         if getattr(card, "aura_moon", False):
@@ -2190,6 +2208,8 @@ class Game:
         for _k in ({"artifact", "enchantment", "land", "planeswalker"} & set(card.types)) | (
                 {"creature"} if card.is_creature() else set()):
             _ek[1][_k] = _ek[1].get(_k, 0) + 1
+        if card.is_creature() and not is_token:
+            _ek[1]["nontoken_creature"] = _ek[1].get("nontoken_creature", 0) + 1   # Gyome
         if getattr(card, "_resolving_cast", False):   # "if you cast it" / "if it was kicked"
             card._resolving_cast = False
             perm._was_cast = True
@@ -2903,6 +2923,14 @@ class Game:
                     target.poison += getattr(source.card, "toxic_n", 1)
             else:
                 target.life -= amount
+            # "whenever you're dealt damage" (Darien, Sun Droplet)
+            for _w in list(target.battlefield):
+                _wc = (_w.card.triggers or {}).get("you_dealt_damage")
+                if _wc and not _w.abilities_off():
+                    self.stack.append(StackObject(
+                        target, (lambda g, _cb=_wc, _s=_w, _n=amount, _src=source:
+                                 g._run_trigger(_cb, _s, {"amount": _n, "source": _src})),
+                        source=_w, label=f"you_dealt_damage:{_w.name}", kind="trigger", perm=_w))
             # dano de comandante
             # dano de comandante (por identidad: cuenta aunque lo controle otro)
             _cc = source.card if src_perm else None
@@ -3028,7 +3056,7 @@ class Game:
                     target.damage = max(target.damage, target.toughness)
             if amount > 0:
                 self._push_self_trigger(target, "dealt_damage", "recibe daño (enrage)",
-                                        amount=amount)
+                                        amount=amount, dmg_source=source)
                 if combat and src_perm:
                     self._push_self_trigger(source, "combat_damage_creature",
                                             "daño de combate a una criatura",
@@ -3764,6 +3792,13 @@ class Game:
             if card in player.command:
                 player.command.remove(card)
             player.add_tax(card)
+            # Skyfire Phoenix / Jocasta: "when you cast your commander, return this card from your graveyard"
+            for _ph in [x for x in player.graveyard if getattr(x, "cmdr_cast_return", False)]:
+                self.stack.append(StackObject(
+                    player, (lambda g, _c=_ph, _p=player: (
+                        _c in _p.graveyard and (_p.graveyard.remove(_c), g.move_to_battlefield(_c, _p),
+                                                g.log(f"{_c.name} vuelve del cementerio al campo")))),
+                    source=_ph, label=f"cmdr_cast_return:{_ph.name}"))
         else:
             card._cast_from_hand = card in player.hand
             if card in player.hand:
@@ -3807,6 +3842,9 @@ class Game:
         if getattr(card, "flash_sac", False) and getattr(self, "_fast_cast", None) is player:
             card._flash_sac_pending = True   # lanzado a velocidad de instantáneo: se sacrifica
         if not card.is_creature():
+            if getattr(player, "_noncr_cast_turn", None) != self.turn:
+                player._noncr_n = 0
+            player._noncr_n = getattr(player, "_noncr_n", 0) + 1     # Lyse Hext
             player._noncr_cast_turn = self.turn
         if {"instant", "sorcery"} & card.types:
             player._is_cast_turn = self.turn
@@ -4142,9 +4180,10 @@ class Game:
     def _uncounterable(self, obj, card) -> bool:
         if getattr(card, "uncounterable", False):
             return True
-        if card.is_creature() and any(getattr(pm.card, "global_uncounterable", None) == "creature"
-                                      and not pm.abilities_off() for pm in self.all_permanents()):
-            return True
+        if any((getattr(pm.card, "global_uncounterable", None) == "all" or (
+                card.is_creature() and getattr(pm.card, "global_uncounterable", None) == "creature"))
+               and not pm.abilities_off() for pm in self.all_permanents()):
+            return True                  # Lier: "spells can't be countered"
         ctrl = getattr(obj, "controller", None)
         for pm in (ctrl.battlefield if ctrl is not None else []):
             g = getattr(pm.card, "grants_uncounterable", None)
@@ -7146,7 +7185,8 @@ class Game:
         if not (self.turn == 1 and self.active_index == 0) and not any(
                 getattr(pm.card, "skip_draw", False) for pm in p.battlefield):
             extra = sum(1 for pl in self.players for pm in pl.battlefield
-                        if getattr(pm.card, "each_draw_extra", False) and not pm.abilities_off())
+                        if getattr(pm.card, "each_draw_extra", False) and not pm.abilities_off()
+                        and not (pm.tapped and getattr(pm.card, "each_draw_untapped", False)))
             p.draw(1 + extra, self)
             self.resolve_stack()
         self.sba()

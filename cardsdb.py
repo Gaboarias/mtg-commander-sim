@@ -16589,6 +16589,436 @@ def _wire_b32(card, data, name, types):
         card.triggers = trg
 
 
+def _b33_vibranium(game, ctrl, n=1):
+    """Ficha Vibranium: artefacto indestructible, {T}: {C}; entra girada."""
+    for _ in range(n):
+        tok = cards.Card(name="Vibranium", types={"artifact"}, cost=None, power=0, toughness=0,
+                         keywords={"indestructible"}, subtypes={"Vibranium"}, tags={"token", "vibranium"},
+                         produces=(lambda perm, pl: {"C": 1}))
+        pm = game.move_to_battlefield(tok, ctrl, is_token=True)
+        if pm is not None:
+            pm.tapped = True
+
+
+def _b33_equipped(src):
+    return any(getattr(x, "enchanting", None) is src and "equipment" in {s.lower() for s in x.card.subtypes}
+               for x in src.controller.battlefield)
+
+
+def _wire_b33(card, data, name, types):
+    raw = data.get("_orig_text") or data.get("oracle_text", "") or ""
+    t = re.sub(r"\s+", " ", raw.lower())
+    for nm in sorted((x for x in _self_names(name) if x), key=len, reverse=True):
+        t = t.replace(nm, "~")
+    t = re.sub(r"\bthis (?:creature|artifact|enchantment|equipment|land|aura|vehicle)\b", "~", t)
+    trg = dict(card.triggers or {})
+
+    def _add_trig(key, fn):
+        prev = trg.get(key)
+        trg[key] = fn if prev is None else (lambda g, perm, _a=prev, _b=fn, **kw: (_a(g, perm, **kw), _b(g, perm, **kw)))
+
+    def _etb(fn):
+        def _w(g, c, perm, _prev=card.on_etb, _f=fn):
+            _f(g, c, perm)
+            if _prev:
+                _prev(g, c, perm)
+        card.on_etb = _w
+
+    # Howling Mine
+    if "at the beginning of each player's draw step, if ~ is untapped, that player draws an additional card" in t:
+        card.each_draw_extra = True
+        card.each_draw_untapped = True
+
+    # Exsanguinate
+    if "each opponent loses x life. you gain life equal to the life lost this way" in t:
+        def _ex(g, c, tg):
+            x = max(0, getattr(g, "spell_x", 0) or 0)
+            tot = 0
+            for o in g.opponents(c):
+                if not o.lost:
+                    o.life -= x
+                    tot += x
+            g.log(f"Cada rival pierde {x}; {c.name} gana {tot}")
+            g.gain_life(c, tot)
+        card.on_cast_resolve = _ex
+
+    # Recurring Insight
+    if "draw cards equal to the number of cards in target opponent's hand" in t:
+        def _ri(g, c, tg, _prev=card.on_cast_resolve):
+            opps = [o for o in g.opponents(c) if not o.lost]
+            if not opps:
+                return
+            tgt = next((x for x in (tg or ()) if x in opps), None)
+
+            def _do(o):
+                n = len(o.hand)
+                c.draw(n, g)
+                g.log(f"{c.name} roba {n} (mano de {o.name})")
+            if tgt is not None:
+                _do(tgt)
+            else:
+                _pick_player(g, c, _do, include_self=False, bot=lambda cs: max(cs, key=lambda o: len(o.hand)),
+                             prompt="Recurring Insight: ¿la mano de qué rival?")
+        card.on_cast_resolve = _ri
+
+    if "if a nontoken creature would enter and it wasn't cast, exile it instead" in t:
+        card.containment = True
+    if "artifacts and creatures your opponents control enter tapped" in t:
+        card.opp_enter_tapped = True
+
+    # Embercleave
+    if "this spell costs {1} less to cast for each attacking creature you control" in t:
+        card.cost_reduction_fn = (lambda g, p: sum(1 for x in p.battlefield if x.attacking is not None))
+
+    # Coat of Arms
+    if "each creature gets +1/+1 for each other creature on the battlefield that shares at least one creature type " \
+       "with it" in t:
+        def _coa(src, target):
+            if src.game is None or not target.is_creature():
+                return (0, 0)
+            st = {s.lower() for s in target.card.subtypes}
+            if not st:
+                return (0, 0)
+            n = sum(1 for x in src.game.all_permanents() if x is not target and x.is_creature()
+                    and st & {s.lower() for s in x.card.subtypes})
+            return (n, n)
+        card.static_mod = _coa
+
+    # Gravitational Shift
+    if "creatures with flying get +2/+0" in t and "creatures without flying get -2/-0" in t:
+        card.static_mod = (lambda src, target: (2, 0) if target.has("flying") else (-2, 0))
+
+    # Balan
+    if re.search(r"~ has double strike as long as two or more equipment are attached to it", t):
+        card.cond_keywords = tuple(getattr(card, "cond_keywords", None) or ()) + (
+            ("double_strike", lambda pm: sum(1 for x in pm.controller.battlefield
+                                             if getattr(x, "enchanting", None) is pm) >= 2),)
+
+    # Raksha Golden Cub
+    if "as long as ~ is equipped, cat creatures you control get +2/+2 and have double strike" in t:
+        card.static_mod = (lambda src, target: (2, 2) if (target.controller is src.controller and target.is_creature()
+                                                          and target.has_subtype("cat") and _b33_equipped(src))
+                           else (0, 0))
+        card.cond_anthem_kw = tuple(getattr(card, "cond_anthem_kw", None) or ()) + (
+            (False, "cat", "you", {"double_strike"},
+             lambda g, p: _b33_equipped(getattr(g, "_static_src", None)) if getattr(g, "_static_src", None) else False),)
+
+    # Kardur
+    if "when ~ enters, until your next turn, creatures your opponents control attack each combat if able and attack a " \
+       "player other than you if able" in t:
+        def _kd(g, c, perm):
+            for o in g.opponents(c):
+                for x in o.creatures():
+                    x.goaded = True
+            g.log(f"{perm.name}: las criaturas rivales quedan provocadas (goad)")
+        _etb(_kd)
+    # Ant-Man
+    if "whenever ~ deals combat damage to a player, create that many treasure tokens" in t:
+        def _am(g, perm, **kw):
+            for _ in range(min(20, int(kw.get("amount") or 0))):
+                cards.make_resource_token(g, perm.controller, "treasure")
+        trg["combat_damage_to_player"] = _am
+
+    # Crimson Honor Guard / Titan Hunter (paso final de cada jugador)
+    if "at the beginning of each player's end step, ~ deals 4 damage to that player unless they control a commander" in t:
+        def _chg(g, perm, active=None, **kw):
+            if active is not None and not active.lost and not any(
+                    active.is_commander(getattr(x.card, "_real", None) or x.card) for x in active.battlefield):
+                g.deal_damage(perm, active, 4)
+        _add_trig("each_end_step", _chg)
+    if "at the beginning of each player's end step, if no creatures died this turn, ~ deals 4 damage to that player" in t:
+        def _th(g, perm, active=None, **kw):
+            died = getattr(g, "_deaths_turn", None) == g.turn and getattr(g, "deaths_count", 0) > 0
+            if active is not None and not active.lost and not died:
+                g.deal_damage(perm, active, 4)
+        _add_trig("each_end_step", _th)
+
+    # Darien / Sun Droplet
+    if "whenever you're dealt damage, you may create that many 1/1 white soldier creature tokens" in t:
+        def _dr(g, perm, amount=0, **kw):
+            n = min(20, int(amount or 0))
+            if n:
+                _human_may(g, perm.controller, f"{perm.name}: ¿crear {n} Soldado(s) 1/1?",
+                           lambda: [cards.make_token(g, perm.controller, "Soldier", 1, 1, subtypes=("Soldier",))
+                                    for _ in range(n)])
+        _add_trig("you_dealt_damage", _dr)
+    if "whenever you're dealt damage, put that many charge counters on ~" in t:
+        _add_trig("you_dealt_damage", lambda g, perm, amount=0, **kw: g.add_counters(perm, "charge", int(amount or 0)))
+        if "at the beginning of each upkeep, you may remove a charge counter from ~. if you do, you gain 1 life" in t:
+            def _sd(g, perm, **kw):
+                if perm.counters.get("charge", 0) > 0:
+                    perm.counters["charge"] -= 1
+                    g.gain_life(perm.controller, 1)
+            _add_trig("each_upkeep", _sd)
+
+    # Mystic Sanctuary
+    if "when ~ enters untapped, you may put target instant or sorcery card from your graveyard on top of your library" in t:
+        def _ms(g, c, perm):
+            if perm.tapped:
+                return
+            pool = sorted((x for x in c.graveyard if {"instant", "sorcery"} & x.types), key=lambda x: -_b31_cmc(x))
+
+            def _top(x):
+                if x in c.graveyard:
+                    c.graveyard.remove(x)
+                    c.library.append(x)
+                    g.log(f"{c.name} pone {x.name} arriba de su biblioteca")
+            _b31_pick_card(g, c, pool, f"{perm.name}: ¿qué instantáneo/conjuro ponés arriba?", _top)
+        _etb(_ms)
+
+    # Twilight Shepherd / Garna: devolver lo que fue al cementerio este turno
+    m = re.search(r"when ~ enters, return to your hand all (cards|creature cards) in your graveyard that were put there "
+                  r"(?:from the battlefield|from anywhere) this turn", t)
+    if m:
+        _cr = m.group(1) == "creature cards"
+
+        def _ts(g, c, perm, _cr=_cr):
+            back = [x for x in c.graveyard if getattr(x, "_left_bf_turn", None) == g.turn and (not _cr or x.is_creature())]
+            for x in back:
+                c.graveyard.remove(x)
+                c.hand.append(x)
+            if back:
+                g.log(f"{c.name} devuelve a la mano: " + ", ".join(x.name for x in back))
+        _etb(_ts)
+
+    if "when you cast your commander, return ~ from your graveyard to the battlefield" in t or \
+            "when you cast your commander, return this card from your graveyard to the battlefield" in t:
+        card.cmdr_cast_return = True
+
+    # Bone Miser
+    if "whenever you discard a creature card, create a 2/2 black zombie creature token" in t:
+        def _bm(g, perm, card=None, **kw):
+            if kw.get("player") is not perm.controller or card is None:
+                return
+            if card.is_creature():
+                cards.make_token(g, perm.controller, "Zombie", 2, 2, subtypes=("Zombie",))
+            elif card.is_land() and "whenever you discard a land card, add {b}{b}" in t:
+                perm.controller.mana_pool += 2
+                g.log(f"{perm.controller.name} agrega {{B}}{{B}} ({perm.name})")
+        _add_trig("discarded", _bm)
+
+    # Archfiend of Spite
+    if "whenever a source an opponent controls deals damage to ~, that source's controller loses that much life unless " \
+       "they sacrifice that many permanents of their choice" in t:
+        def _as(g, perm, amount=0, dmg_source=None, **kw):
+            c = getattr(dmg_source, "controller", None)
+            if c is None or c is perm.controller or not amount:
+                return
+            c.life -= int(amount)
+            g.log(f"{c.name} pierde {amount} ({perm.name})")
+        _add_trig("dealt_damage", _as)
+
+    # Hunted Dragon
+    if "when ~ enters, target opponent creates three 2/2 white knight creature tokens with first strike" in t:
+        def _hd(g, c, perm):
+            def _give(o):
+                for _ in range(3):
+                    cards.make_token(g, o, "Knight", 2, 2, kw=("first_strike",), subtypes=("Knight",))
+                g.log(f"{o.name} crea tres Caballeros 2/2 con dañar primero")
+            _pick_player(g, c, _give, include_self=False, prompt=f"{perm.name}: ¿qué rival recibe los Caballeros?")
+        _etb(_hd)
+
+    # Gyome
+    if "at the beginning of your end step, create a number of food tokens equal to the number of nontoken creatures you " \
+       "had enter the battlefield under your control this turn" in t:
+        def _gy(g, perm, **kw):
+            c = perm.controller
+            if kw.get("player") not in (None, c):
+                return
+            ek = getattr(c, "_entered_kinds", None)
+            n = ek[1].get("nontoken_creature", 0) if ek and ek[0] == g.turn else 0
+            for _ in range(min(n, 10)):
+                cards.make_resource_token(g, c, "food")
+        _add_trig("end_step", _gy)
+
+    # Gahiji
+    if "whenever a creature attacks one of your opponents or a planeswalker an opponent controls, that creature gets " \
+       "+2/+0 until end of turn" in t:
+        def _gh(g, perm, attacker=None, defender=None, **kw):
+            dp = defender if not hasattr(defender, "card") else getattr(defender, "controller", None)
+            if attacker is not None and dp is not None and dp is not perm.controller:
+                attacker.temp_pt[0] += 2
+        _add_trig("creature_attacks", _gh)
+
+    # Daxos of Meletis
+    if "whenever ~ deals combat damage to a player, exile the top card of that player's library. you gain life equal to " \
+       "that card's mana value" in t:
+        def _dx(g, perm, **kw):
+            d, c = kw.get("defender"), perm.controller
+            if d is None or not getattr(d, "library", None):
+                return
+            x = d.library.pop()
+            g.log(f"{c.name} exilia {x.name} de {d.name}")
+            g.gain_life(c, _b31_cmc(x))
+            if x.is_land():
+                d.exile.append(x)
+            else:
+                x._play_cost = x.cost
+                c.exile_play.append(x)
+        trg["combat_damage_to_player"] = _dx
+
+    # Marisi
+    if "whenever a creature you control deals combat damage to a player, goad each creature that player controls" in t:
+        def _mr(g, perm, damaged=None, **kw):
+            for x in getattr(damaged, "battlefield", ()):
+                if x.is_creature():
+                    x.goaded = True
+            if damaged is not None:
+                g.log(f"{perm.name}: las criaturas de {damaged.name} quedan provocadas")
+        _add_trig("group_combat_damage", _mr)
+
+    # Crystal: X = colores del hechizo
+    if "whenever you cast a noncreature spell, ~ deals x damage to each opponent, where x is the number of colors that " \
+       "spell is" in t:
+        def _cy(g, perm, card=None, **kw):
+            if card is None or card.is_creature():
+                return
+            cols = set()
+            for pp in (getattr(card.cost, "pips", None) or ()):
+                cols |= set(str(pp).upper()) & set("WUBRG")
+            if cols:
+                for o in g.opponents(perm.controller):
+                    g.deal_damage(perm, o, len(cols))
+        _add_trig("cast", _cy)
+
+    # Lyse Hext
+    if re.search(r"as long as you've cast two or more noncreature spells this turn, ~ has double strike", t):
+        card.cond_keywords = tuple(getattr(card, "cond_keywords", None) or ()) + (
+            ("double_strike", lambda pm: getattr(pm.controller, "_noncr_cast_turn", None) == pm.game.turn
+             and getattr(pm.controller, "_noncr_n", 0) >= 2),)
+
+    # Vibranium (Wakanda)
+    m = re.search(r"when ~ enters, create two tapped vibranium tokens", t)
+    if m:
+        _etb(lambda g, c, perm: _b33_vibranium(g, c, 2))
+    if re.search(r"whenever ~ enters or attacks, create a tapped vibranium token", t):
+        _etb(lambda g, c, perm: _b33_vibranium(g, c, 1))
+        _add_trig("attacks", lambda g, perm, **kw: _b33_vibranium(g, perm.controller, 1))
+
+    # Nakia
+    if "whenever your commander enters, you become the monarch" in t:
+        def _nk(g, perm, subject=None, **kw):
+            c = perm.controller
+            if subject is not None and subject.controller is c and c.is_commander(
+                    getattr(subject.card, "_real", None) or subject.card):
+                g.set_monarch(c)
+        _add_trig("etb", _nk)
+
+    # Hercules
+    if re.search(r"whenever ~ attacks, put a \+1/\+1 counter on him\. he gains indestructible until end of turn", t):
+        def _hc(g, perm, **kw):
+            g.add_counters(perm, "+1/+1", 1)
+            perm.temp_keywords.add("indestructible")
+        _add_trig("attacks", _hc)
+    if "whenever ~ is dealt damage for the first time each turn, put that many +1/+1 counters on him" in t:
+        def _hc2(g, perm, amount=0, **kw):
+            if getattr(perm, "_herc_turn", None) == g.turn:
+                return
+            perm._herc_turn = g.turn
+            if perm in perm.controller.battlefield:
+                g.add_counters(perm, "+1/+1", int(amount or 0))
+        _add_trig("dealt_damage", _hc2)
+
+    # Firebird
+    if "whenever ~ attacks, other attacking creatures get +x/+0 until end of turn, where x is ~'s power" in t:
+        def _fb(g, perm, **kw):
+            for x in perm.controller.battlefield:
+                if x is not perm and x.attacking is not None:
+                    x.temp_pt[0] += max(0, perm.power)
+        _add_trig("attacks", _fb)
+
+    # Winter Soldier
+    if "whenever ~ attacks, return target creature card with mana value less than or equal to ~'s power from your " \
+       "graveyard to the battlefield" in t:
+        def _ws(g, perm, **kw):
+            c = perm.controller
+            pool = sorted((x for x in c.graveyard if x.is_creature() and _b31_cmc(x) <= perm.power),
+                          key=lambda x: -_b31_cmc(x))
+
+            def _ret(x):
+                if x in c.graveyard:
+                    c.graveyard.remove(x)
+                    pm = g.move_to_battlefield(x, c)
+                    if pm is not None and pm.has_subtype("hero"):
+                        g.add_counters(pm, "+1/+1", 1)
+            _b31_pick_card(g, c, pool, f"{perm.name}: ¿qué criatura devolvés al campo?", _ret)
+        _add_trig("attacks", _ws)
+
+    # Greven
+    if re.search(r"~ gets \+x/\+0, where x is the amount of life you've lost this turn", t):
+        card.dyn_power = (lambda g, pm, _b=card.power: _b + (getattr(pm.controller, "life_lost_amt", 0)
+                                                             if getattr(pm.controller, "life_lost_turn", None) == g.turn
+                                                             else 0))
+    if "whenever ~ attacks, you may sacrifice another creature. if you do, you draw cards equal to that creature's " \
+       "power and you lose life equal to that creature's toughness" in t:
+        def _gv(g, perm, **kw):
+            c = perm.controller
+            pool = sorted((x for x in c.creatures() if x is not perm and x.attacking is None and x.toughness < c.life - 5),
+                          key=lambda x: -(x.power - x.toughness))
+            if c is not getattr(g, "interactive_human", None):
+                pool = [x for x in pool if x.power > x.toughness]
+
+            def _sac(x):
+                pw, tg = max(0, x.power), max(0, x.toughness)
+                g.to_graveyard(x, "sacrificio")
+                c.draw(pw, g)
+                c.life -= tg
+                g.log(f"{c.name} sacrifica {x.name}: roba {pw} y pierde {tg}")
+            _choose_tgt(g, c, pool, f"{perm.name}: ¿sacrificar otra criatura?", _sac, allow_none=True)
+        _add_trig("attacks", _gv)
+
+    # Killer Service
+    if "when ~ enters, create a number of food tokens equal to the number of opponents you have" in t:
+        _etb(lambda g, c, perm: [cards.make_resource_token(g, c, "food") for o in g.opponents(c) if not o.lost])
+
+    # Twilight Drover
+    if "whenever a creature token leaves the battlefield, put a +1/+1 counter on ~" in t:
+        def _td(g, perm, subject=None, **kw):
+            if subject is not None and getattr(subject, "is_token", False) and subject is not perm \
+                    and perm in perm.controller.battlefield:
+                g.add_counters(perm, "+1/+1", 1)
+        _add_trig("__x_death", _td)
+
+    # Vela the Night-Clad
+    if "whenever vela or another creature you control leaves the battlefield, each opponent loses 1 life" in t or \
+            "whenever ~ or another creature you control leaves the battlefield, each opponent loses 1 life" in t:
+        def _vl(g, perm, subject=None, **kw):
+            if subject is not None and subject.controller is perm.controller:
+                for o in g.opponents(perm.controller):
+                    o.life -= 1
+        _add_trig("__x_death", _vl)
+
+    # Thrilling Encore
+    if "put onto the battlefield under your control all creature cards in all graveyards that were put there from the " \
+       "battlefield this turn" in t:
+        def _te(g, c, tg):
+            for pl in g.players:
+                for x in [y for y in pl.graveyard if y.is_creature() and getattr(y, "_left_bf_turn", None) == g.turn]:
+                    pl.graveyard.remove(x)
+                    g.move_to_battlefield(x, c)
+                    g.log(f"{c.name} pone {x.name} en el campo (Thrilling Encore)")
+        card.on_cast_resolve = _te
+
+    # Lier
+    if t.startswith("spells can't be countered") or "\nspells can't be countered" in raw.lower() or \
+            ". spells can't be countered" in t:
+        card.global_uncounterable = "all"
+
+    # Caldera Pyremaw
+    if "whenever you cast an instant or sorcery spell, put a +1/+1 counter on ~. then ~ deals damage equal to its power " \
+       "to target opponent" in t:
+        def _cp(g, perm, card=None, **kw):
+            if card is None or not ({"instant", "sorcery"} & card.types):
+                return
+            g.add_counters(perm, "+1/+1", 1)
+            _pick_player(g, perm.controller, lambda o: g.deal_damage(perm, o, max(0, perm.power)), include_self=False,
+                         prompt=f"{perm.name}: ¿a qué rival le hace daño?")
+        _add_trig("cast", _cp)
+
+    if trg != (card.triggers or {}):
+        card.triggers = trg
+
+
 def _wire_b30(card, data, name, types):
     raw = data.get("_orig_text") or data.get("oracle_text", "") or ""
     t = re.sub(r"\s+", " ", raw.lower())
@@ -20645,6 +21075,7 @@ def _build_card_from_data_impl(data: dict) -> Card:
     _wire_b30(card, data, name, types)
     _wire_b31(card, data, name, types)
     _wire_b32(card, data, name, types)
+    _wire_b33(card, data, name, types)
     if card_dice:
         card.dice_table = card_dice
     # efecto genérico POR TAG: en un hechizo, al resolver; en un permanente, solo si
