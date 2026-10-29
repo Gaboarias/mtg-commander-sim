@@ -1311,6 +1311,11 @@ class Game:
             "types": sorted(pm.card.types),
             "subtypes": sorted(set(pm.card.subtypes) | pm.added_subtypes),
             "abilities": _carddesc.describe(pm.card),
+            # equipo/aura anexado: a qué permanente (la UI lo agrupa con su huésped)
+            "attached_to": (pm.enchanting.uid if isinstance(getattr(pm, "enchanting", None), Permanent)
+                            and pm.enchanting in pm.enchanting.controller.battlefield else None),
+            "attached_name": (pm.enchanting.name if isinstance(getattr(pm, "enchanting", None), Permanent)
+                              and pm.enchanting in pm.enchanting.controller.battlefield else None),
         }
 
     def _player_state(self, p: "Player") -> dict:
@@ -2831,9 +2836,13 @@ class Game:
                 target.life -= amount
             # dano de comandante
             # dano de comandante (por identidad: cuenta aunque lo controle otro)
-            cowner = self.commander_owner(source.card) if (combat and src_perm) else None
+            _cc = source.card if src_perm else None
+            cowner = self.commander_owner(_cc) if (combat and src_perm) else None
+            if cowner is None and combat and src_perm and getattr(_cc, "_real", None) is not None:
+                _cc = _cc._real                       # comandante boca abajo / mutado / proxy
+                cowner = self.commander_owner(_cc)
             if cowner is not None:
-                key = self.cmdr_key(cowner, source.card)
+                key = self.cmdr_key(cowner, _cc)
                 target.cmdr_damage[key] = target.cmdr_damage.get(key, 0) + amount
             # Cipher: al pegar daño de combate a un jugador, lanzar una copia GRATIS
             # de cada hechizo cifrado en esta criatura.

@@ -510,6 +510,10 @@ class Policy:
                 if str(ab.get("label", "")).startswith("Ensillar") and (
                         second or not perm.can_attack()):
                     continue            # ensillar solo si la montura va a atacar
+                _eh = getattr(perm, "enchanting", None)
+                if str(ab.get("label", "")).startswith("Equipar") and _eh is not None \
+                        and _eh in _eh.controller.battlefield:
+                    continue            # ya equipado: no gastar maná re-equipándolo
                 if not game.ability_allowed(perm, j, ab):
                     continue
                 if not me.can_pay(ab.get("cost")):

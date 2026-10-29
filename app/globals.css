@@ -968,3 +968,14 @@ h3 svg { color: currentColor; }
 @media (prefers-reduced-motion: reduce) {
   .decide-back, .inspect.decide, .decide-opt, .decide-none, .decide-opt.picked { animation: none; }
 }
+
+/* equipos y auras agrupados con la criatura que los lleva */
+.attach-group { display: inline-flex; flex-direction: column; align-items: center; padding: 3px 3px 4px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.attach-group .attach-list { display: flex; flex-direction: column; align-items: center; margin-top: -10px; }
+.attach-group .attach-item { transform: scale(.86); transform-origin: top center; margin-top: -14px; }
+.attach-group .attach-item:first-child { margin-top: 0; }
+.cardmini .cm-badge.att { top: auto; bottom: 2px; left: 2px; right: 2px; text-align: center; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; background: color-mix(in srgb, var(--accent) 85%, #000);
+  color: #1a1508; text-transform: none; letter-spacing: 0; display: flex; align-items: center; gap: 2px; justify-content: center; }

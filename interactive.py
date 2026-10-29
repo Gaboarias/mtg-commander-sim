@@ -1654,12 +1654,19 @@ class InteractiveGame:
                               else "condición no cumplida")
                 else:
                     reason = self._extra_cost_reason(p, pm, ab)
+                _lbl = ab.get("label", f"Habilidad {i + 1}")
+                _host = getattr(pm, "enchanting", None)
+                if str(_lbl).startswith("Equipar") and _host is not None and _host in _host.controller.battlefield:
+                    # ya está equipado: solo se puede MOVER a otra criatura tuya
+                    if not any(c is not _host for c in p.creatures()):
+                        reason = reason or f"ya equipada a {_host.name}"
+                    _lbl = f"Mover equipo (está en {_host.name})"
                 spec = ab.get("target_spec")
                 ab_tgts = self._targets_for_spec(spec)
                 if (reason is None and spec in self._MUST_TARGET
                         and ab.get("target_count", 1) >= 1 and not ab_tgts):
                     reason = "sin objetivos legales"
-                usable.append({"i": i, "label": ab.get("label", f"Habilidad {i + 1}"),
+                usable.append({"i": i, "label": _lbl,
                                "cost": _cost_str_cost(ab.get("cost")), "tap": bool(ab.get("tap")),
                                "target_spec": spec, "target_count": ab.get("target_count", 1),
                                "targets": ab_tgts,

@@ -11,6 +11,7 @@ export type Perm = {
   is_planeswalker?: boolean; loyalty?: number | null;
   loyalty_abilities?: { i: number; cost: number }[]; activated?: boolean;
   keywords?: string[]; types?: string[]; subtypes?: string[]; abilities?: string[];
+  attached_to?: number | null; attached_name?: string | null;   // equipo/aura anexado a…
 };
 // salida del campo registrada por el motor (destruida, exiliada, devuelta…)
 export type Departure = {
@@ -33,6 +34,7 @@ export type PlayerState = {
 
 export function CardMini({
   perm, art, reduce, selectable, selected, onClick, onInspect, isCommander, leaving, leaveSource, targeted,
+  attachedLabel,
 }: {
   perm: Perm; art?: string; reduce: boolean;
   selectable?: boolean; selected?: boolean; onClick?: () => void; onInspect?: () => void;
@@ -40,6 +42,7 @@ export function CardMini({
   leaving?: string;            // se está yendo del campo (destroyed/exiled/…): se anima
   leaveSource?: string | null; // carta que lo causó
   targeted?: boolean;          // objetivo de un hechizo/habilidad en la pila
+  attachedLabel?: string;      // "equipada a X" / "encanta a X" (anexado a otro permanente)
 }) {
   const plus = perm.counters["+1/+1"] || 0;
   const minus = perm.counters["-1/-1"] || 0;
@@ -82,6 +85,11 @@ export function CardMini({
           <span className="cm-leave-k">{LEAVE_LABEL[leaving] || "deja el campo"}</span>
           {leaveSource ? <span className="cm-leave-src">{leaveSource}</span> : null}
         </div>
+      )}
+      {attachedLabel && !leaving && (
+        <span className="cm-badge att" title={attachedLabel}>
+          <Icon name="link" size={9} /> {attachedLabel}
+        </span>
       )}
       {targeted && !leaving && (
         <span className="cm-badge tgt" title="objetivo de un hechizo o habilidad en la pila">
@@ -302,12 +310,14 @@ export function Seat({
               <Icon name="poison" size={12} /> {p.poison}/10 veneno
             </span>
           )}
-          {maxCmdr > 0 && (
-            <span className={`status-chip danger ${maxCmdr >= 18 ? "near" : ""} ${maxCmdr >= 21 ? "fatal" : ""}`}
-              title="daño de comandante recibido (21 elimina)">
-              <Icon name="sword" size={12} /> {maxCmdr}/21 cmdr
-            </span>
-          )}
+          {/* daño de comandante RECIBIDO, uno por comandante (21 de un mismo comandante elimina) */}
+          {Object.entries(p.cmdr_damage || {}).filter(([, v]) => v > 0)
+            .sort((a, b) => b[1] - a[1]).map(([src, v]) => (
+              <span key={src} className={`status-chip danger ${v >= 18 ? "near" : ""} ${v >= 21 ? "fatal" : ""}`}
+                title={`daño de comandante recibido de ${src}: ${v} (21 de un mismo comandante elimina)`}>
+                <Icon name="sword" size={12} /> {v}/21 {src.split(",")[0].split(" (")[0]}
+              </span>
+            ))}
           {(p.experience || 0) > 0 && (
             <span className="status-chip res" title="contadores de experiencia">
               <Icon name="medal" size={12} /> {p.experience} exp
@@ -325,7 +335,20 @@ export function Seat({
         // (seleccionable/seleccionada) o no es ficha se dibuja individual
         const individuals: Perm[] = [];
         const groups = new Map<string, Perm[]>();
+        // equipos/auras anexados a una criatura de ESTA mesa: se dibujan pegados a ella
+        const hostUids = new Set(nonlands.map((x) => x.uid));
+        const attachedBy = new Map<number, Perm[]>();
         for (const pm of nonlands) {
+          if (pm.attached_to != null && hostUids.has(pm.attached_to) && pm.attached_to !== pm.uid) {
+            (attachedBy.get(pm.attached_to) || attachedBy.set(pm.attached_to, []).get(pm.attached_to)!).push(pm);
+          }
+        }
+        const isAttached = (pm: Perm) => pm.attached_to != null && attachedBy.get(pm.attached_to)?.includes(pm);
+        const attLabel = (pm: Perm) => pm.attached_name
+          ? `${(pm.subtypes || []).some((x) => x.toLowerCase() === "aura") ? "en" : "equipa a"} ${pm.attached_name}` : undefined;
+        for (const pm of nonlands) {
+          if (isAttached(pm)) continue;
+          if (attachedBy.has(pm.uid)) { individuals.push(pm); continue; }
           const interactive = selectableUids?.has(pm.uid) || selectedUids?.has(pm.uid)
             || ghostBy.has(pm.uid) || targetedUids?.has(pm.uid);
           if (pm.is_token && !interactive) {
@@ -339,19 +362,36 @@ export function Seat({
         return (
           <motion.div layout={!reduce} className="row-cards">
             <AnimatePresence>
-              {individuals.map((pm) => (
-                <CardMini
-                  key={pm.uid} perm={pm} art={pm.is_token ? undefined : art[pm.name]} reduce={reduce}
-                  selectable={!ghostBy.has(pm.uid) && selectableUids?.has(pm.uid)}
-                  selected={selectedUids?.has(pm.uid)}
-                  isCommander={p.commander.includes(pm.name)}
-                  onClick={onCard && !ghostBy.has(pm.uid) && selectableUids?.has(pm.uid) ? () => onCard(pm.uid) : undefined}
-                  onInspect={onInspect && !ghostBy.has(pm.uid) ? () => onInspect(pm) : undefined}
-                  leaving={ghostBy.get(pm.uid)?.kind}
-                  leaveSource={ghostBy.get(pm.uid)?.source}
-                  targeted={targetedUids?.has(pm.uid)}
-                />
-              ))}
+              {individuals.map((pm) => {
+                const card = (x: Perm, extra?: { attachedLabel?: string }) => (
+                  <CardMini
+                    key={x.uid} perm={x} art={x.is_token ? undefined : art[x.name]} reduce={reduce}
+                    selectable={!ghostBy.has(x.uid) && selectableUids?.has(x.uid)}
+                    selected={selectedUids?.has(x.uid)}
+                    isCommander={p.commander.includes(x.name)}
+                    onClick={onCard && !ghostBy.has(x.uid) && selectableUids?.has(x.uid) ? () => onCard(x.uid) : undefined}
+                    onInspect={onInspect && !ghostBy.has(x.uid) ? () => onInspect(x) : undefined}
+                    leaving={ghostBy.get(x.uid)?.kind}
+                    leaveSource={ghostBy.get(x.uid)?.source}
+                    targeted={targetedUids?.has(x.uid)}
+                    attachedLabel={extra?.attachedLabel}
+                  />
+                );
+                const atts = attachedBy.get(pm.uid);
+                if (!atts) return card(pm, { attachedLabel: attLabel(pm) });
+                // la criatura con lo que tiene anexado, agrupado (los equipos asoman debajo)
+                return (
+                  <motion.div key={pm.uid} layout={!reduce} className="attach-group"
+                    title={`${pm.name} + ${atts.map((a) => a.name).join(", ")}`}>
+                    {card(pm)}
+                    <div className="attach-list">
+                      {atts.map((a) => (
+                        <div key={a.uid} className="attach-item">{card(a, { attachedLabel: attLabel(a) })}</div>
+                      ))}
+                    </div>
+                  </motion.div>
+                );
+              })}
             </AnimatePresence>
             {stacks.map((members) => (
               members.length === 1 ? (

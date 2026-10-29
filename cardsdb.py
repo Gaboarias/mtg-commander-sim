@@ -5415,7 +5415,9 @@ def _wire_equipment(card, oracle):
         eq_cost = parse_cost(meq2.group(1)) if meq2 else parse_cost("2")
 
     def _equip_eff(game, ctrl, perm, targets=None, _flt=None):
-        pool = [pm for pm in ctrl.battlefield if pm.is_creature() and (_flt is None or _flt(pm))]
+        # no se "re-equipa" a la criatura que ya lo lleva (gastaba el maná sin efecto)
+        pool = [pm for pm in ctrl.battlefield if pm.is_creature() and (_flt is None or _flt(pm))
+                and pm is not getattr(perm, "enchanting", None)]
         if not pool:
             return
         pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
