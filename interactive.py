@@ -110,6 +110,11 @@ class InteractiveGame:
         self.players = run.build_players_from_defs(deck_defs, level=level)
         self.n = len(self.players)
         self.human_index = max(0, min(int(human_index), self.n - 1))
+        # la dificultad es de los RIVALES: el humano no recibe ventajas de Experto
+        # (su política solo se usa para decisiones automáticas de respaldo)
+        if level in ("avanzado", "experto"):
+            from policy import Policy as _P
+            self.players[self.human_index].policy = _P("intermedio")
         self.g = Game(self.players, seed=int(seed), max_turns=max_turns,
                       trace=False)
         self.phase = "mulligan"     # mulligan | main | defense | over

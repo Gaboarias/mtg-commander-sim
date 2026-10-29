@@ -198,6 +198,7 @@ export default function Watch() {
               <option value="novato">Novato</option>
               <option value="intermedio">Intermedio</option>
               <option value="avanzado">Avanzado</option>
+              <option value="experto">Experto</option>
             </select>
           </label>
           <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>

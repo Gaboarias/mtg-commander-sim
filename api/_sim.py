@@ -304,7 +304,7 @@ def _build_deck_defs(specs):
     return deck_defs, max_turns, unresolved
 
 
-_LEVELS = ("novato", "intermedio", "avanzado")
+_LEVELS = ("novato", "intermedio", "avanzado", "experto")
 
 
 def _lvl(level):

@@ -1098,11 +1098,34 @@ class Game:
         self.last_ability = None
         for p in players:
             p.setup(self.rng)
+            if getattr(getattr(p, "policy", None), "level", None) == "experto":
+                self._experto_bonus(p)
         if mulligan:
             for p in players:
                 self._mulligan(p)
         if self.trace_enabled:
             self._snapshot("inicio de la partida")
+
+    def _experto_bonus(self, p: "Player"):
+        """Nivel EXPERTO: ventajas de recursos explícitas (además de jugar como Avanzado):
+        mano inicial "ideal" (re-baraja gratis hasta tener 3-4 tierras), una carta más y
+        vida extra. Los valores salen de `policy.tune` (exp_cards, exp_life)."""
+        tune = getattr(p.policy, "tune", {}) or {}
+        for _ in range(int(tune.get("exp_redraws", 4))):
+            lands = sum(1 for c in p.hand if c.is_land())
+            if 3 <= lands <= 4:
+                break
+            p.library.extend(p.hand)
+            p.hand = []
+            self.rng.shuffle(p.library)
+            for _ in range(7):
+                if p.library:
+                    p.hand.append(p.library.pop())
+        for _ in range(int(tune.get("exp_cards", 1))):
+            if p.library:
+                p.hand.append(p.library.pop())
+        p.life += int(tune.get("exp_life", 10))
+        p.experto = True
 
     # -- mulligan (regla de Londres, P2.5) -------------------------------- #
     def _mulligan(self, p: "Player", max_mulls: int = 3):

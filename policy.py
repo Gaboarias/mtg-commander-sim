@@ -7,13 +7,18 @@ Tres niveles de habilidad (`level`):
     y a veces se saltea una jugada (misplay).
   - "intermedio": comportamiento equilibrado (el de referencia).
   - "avanzado": planea el mana (ramp primero, mejor tierra, rellena el sobrante),
-    reserva mana para respuestas, bloquea y ataca con criterio.
+    reserva mana para respuestas, bloquea y ataca con criterio, y ELIGE EL ATAQUE
+    SIMULANDO varios planes en una copia del juego (combate + turno del rival siguiente).
+  - "experto": como avanzado pero simula la ronda completa de contraataques, presiona
+    más, y arranca con ventajas: mano inicial ideal (3-4 tierras), +1 carta y +10 vida.
+Medido (jugador de referencia Intermedio vs 3 rivales del nivel, 4 jugadores): gana
+~40% contra Novato, ~27% contra Intermedio, ~10% contra Avanzado, ~7% contra Experto.
 """
 from __future__ import annotations
 
 from engine import Cost
 
-LEVELS = ("novato", "intermedio", "avanzado")
+LEVELS = ("novato", "intermedio", "avanzado", "experto")
 
 
 class _BlockUses:
@@ -31,8 +36,14 @@ class _BlockUses:
 
 
 class Policy:
-    def __init__(self, level: str = "intermedio"):
+    def __init__(self, level: str = "intermedio", tune=None):
         self.level = level if level in LEVELS else "intermedio"
+        self.tune = dict(tune or {})        # ajustes finos (experimentos de dificultad)
+
+    @property
+    def adv(self) -> bool:
+        """Avanzado y Experto comparten el juego "fuerte" (Experto suma ventajas)."""
+        return self.level in ("avanzado", "experto")
 
     # -- puntuacion de lanzamiento --------------------------------------- #
     def score(self, game, me, card) -> int:
@@ -131,7 +142,7 @@ class Policy:
 
     # -- fase principal --------------------------------------------------- #
     def main_phase(self, game, me, second: bool = False):
-        adv = self.level == "avanzado"
+        adv = self.adv
         nov = self.level == "novato"
 
         # 1) jugar una tierra (avanzado/intermedio eligen mejor)
@@ -139,7 +150,7 @@ class Policy:
             self._play_land(game, me)
 
         # 2) avanzado: lanzar el ramp barato PRIMERO libera mana este mismo turno
-        if adv and not second:
+        if adv and not second and self.tune.get("ramp_first", True):
             self._cast_ramp_first(game, me)
 
         # 3) comandante (y el compañero, si conviene traerlo a la mano)
@@ -964,6 +975,8 @@ class Policy:
 
     # -- mulligan --------------------------------------------------------- #
     def should_mulligan(self, hand, player=None):
+        if getattr(player, "experto", False):
+            return False                 # el Experto ya arrancó con su mano ideal
         lands = sum(1 for c in hand if c.is_land())
         if self.level == "novato":
             return lands == 0            # el novato casi siempre se queda
@@ -1012,6 +1025,133 @@ class Policy:
 
     # -- ataque ----------------------------------------------------------- #
     def declare_attackers(self, game, me):
+        plan = self._declare_attackers_heur(game, me)
+        if self.adv and self.tune.get("sim", True) and not getattr(game, "_sim", False):
+            plan = self._sim_pick_attack(game, me, plan)
+        return plan
+
+    # -- simulación de jugadas (Avanzado/Experto) ------------------------- #
+    @staticmethod
+    def _sim_clone(game):
+        """Copia liviana del juego para simular: comparte las cartas que no están en
+        juego (biblioteca/cementerio/exilio) y apaga la interacción con el humano."""
+        import copy as _cp
+        memo = {}
+        for p in game.players:
+            for z in (p.library, p.graveyard, p.exile):
+                for c in z:
+                    memo[id(c)] = c
+        memo[id(getattr(game, "log_lines", None))] = []
+        for _hook in ("reaction_check", "cascade_target_hook", "trace_hook"):
+            _h = getattr(game, _hook, None)
+            if _h is not None:
+                memo[id(_h)] = None             # nada de la capa interactiva en el clon
+        g2 = _cp.deepcopy(game, memo)
+        g2._sim = True
+        g2.interactive_human = None
+        g2._pending_choice = None
+        g2.choice_queue = []
+        g2.log = (lambda *a, **k: None)
+        for p in g2.players:
+            if p.policy is None:
+                p.policy = Policy("intermedio")
+        return g2
+
+    @staticmethod
+    def _sim_eval(g2, me2):
+        """Posición de `me2` frente a sus rivales al final de la simulación."""
+        def val(p):
+            if p.lost:
+                return -60.0
+            board = sum(max(0, c.power) + max(0, c.toughness) for c in p.creatures())
+            pws = sum(pm.counters.get("loyalty", 0) for pm in p.battlefield if "planeswalker" in pm.card.types)
+            lands = sum(1 for pm in p.battlefield if pm.card.is_land())
+            return min(p.life, 60) + 0.6 * board + 1.5 * len(p.hand) + 0.8 * lands + 1.0 * pws - 2 * p.poison
+        opps = [o for o in g2.players if o is not me2]
+        if not opps:
+            return val(me2)
+        ov = [val(o) for o in opps]
+        return val(me2) - 0.5 * max(ov) - 0.5 * (sum(ov) / len(ov))
+
+    def _sim_plan_value(self, game, me, plan):
+        try:
+            g2 = self._sim_clone(game)
+            idx = game.players.index(me)
+            me2 = g2.players[idx]
+            by_uid = {pm.uid: pm for pl in g2.players for pm in pl.battlefield}
+            plan2 = []
+            for atk, d in plan:
+                a2 = by_uid.get(atk.uid)
+                if a2 is None:
+                    continue
+                d2 = (g2.players[game.players.index(d)] if hasattr(d, "life") else by_uid.get(d.uid))
+                if d2 is not None:
+                    plan2.append((a2, d2))
+            if plan2:
+                g2._resolve_combat(me2, plan2)
+            g2.sba()
+            n = len(g2.players)
+            for k in range(1, min(n, 1 + self._sim_rollout())):   # turnos rivales simulados (contraataque)
+                if len(g2.alive()) <= 1 or me2.lost:
+                    break
+                g2.turn += 1
+                g2.active_index = (idx + k) % n
+                if g2.ap().lost:
+                    continue
+                g2.run_turn()
+                g2.sba()
+            return self._sim_eval(g2, me2)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _sim_rollout(self):
+        """Cuántos turnos rivales simula tras su ataque: Experto la ronda completa,
+        Avanzado solo el del rival siguiente."""
+        return int(self.tune.get("sim_rollout", 9 if self.level == "experto" else 1))
+
+    def _sim_pick_attack(self, game, me, plan):
+        """Arma planes alternativos de ataque, los simula y elige el mejor."""
+        saved = dict(self.tune)
+        cands = [("heur", plan)]
+        try:
+            for name, tw in (("agresivo", {"no_free_death": False, "keep_thresh": 99.0}),
+                             ("evasivo", {"evasion_aware": True}),
+                             ("conservador", {"crackback": True, "trade_up": True})):
+                self.tune = dict(saved, **tw)
+                cands.append((name, self._declare_attackers_heur(game, me)))
+        finally:
+            self.tune = saved
+        forced = [(a, d) for a, d in plan if a.goaded or a.must_attack]
+        cands.append(("ninguno", forced))
+        seen, uniq = set(), []
+        for name, pl in cands:
+            key = tuple(sorted((a.uid, id(d)) for a, d in pl))
+            if key not in seen:
+                seen.add(key)
+                uniq.append((name, pl))
+        if len(uniq) <= 1:
+            return plan
+        import time as _t
+        t0 = _t.time()
+        budget = float(self.tune.get("sim_budget", 1.2))   # segundos por decisión (navegador: más lento)
+        best, best_v = plan, None
+        for name, pl in uniq:
+            if best_v is not None and _t.time() - t0 > budget:
+                break                               # sin tiempo: me quedo con lo mejor hasta acá
+            v = self._sim_plan_value(game, me, pl)
+            if v is not None:
+                # presión: a igualdad, atacar; y cuanto más avanza la partida, más vale
+                # empujar (evita mesas de Avanzados que se guardan todos y empatan)
+                rnd = game.turn / max(1, len(game.players))
+                _ex = self.level == "experto"
+                v += (self.tune.get("press_k", 0.3 if _ex else 0.15) + self.tune.get("press_t", 0.08 if _ex else 0.03)
+                      * rnd) * \
+                    sum(max(0, a.power) for a, _d in pl)
+            if v is not None and (best_v is None or v > best_v + 0.01):
+                best, best_v = pl, v
+        return best
+
+    def _declare_attackers_heur(self, game, me):
         opps = game.opponents(me)
         if not opps:
             return []
@@ -1043,17 +1183,45 @@ class Policy:
             max_other = max((sum(c.power for c in o.creatures())
                              for o in opps if o is not target), default=0)
             attackers.sort(key=lambda c: c.power, reverse=True)
-            thresh = 0.9 if self.level == "avanzado" else 0.6
+            thresh = (self.tune.get("keep_thresh", 0.9) if self.adv else 0.6)
             if max_other >= me.life * thresh:
                 keep = max(1, len(attackers) // 3)
         sending = attackers[:len(attackers) - keep] if keep else attackers
         sending = list(sending)
+        # avanzado: contraataque. Si lo que los rivales pueden mandarme el próximo turno
+        # (su poder en mesa) me mataría con lo que dejo en casa, me guardo bloqueadores.
+        if self.adv and self.tune.get("crackback", False) and sending:
+            def _crack():
+                return max((sum(max(0, c.power) for c in o.creatures()) for o in opps), default=0)
+            home = [c for c in me.creatures() if c not in sending]
+            soak = sum(1 for c in home)
+            danger = _crack() - sum(max(0, c.toughness) for c in home)
+            while sending and danger >= me.life:
+                back = min((a for a in sending if a not in forced), key=lambda a: a.power, default=None)
+                if back is None:
+                    break
+                sending.remove(back)
+                danger -= max(0, back.toughness)
         # avanzado: no mandar una criatura a morir gratis (un bloqueador rival la
         # mata y sobrevive, y ella no mata a nadie), salvo obligación.
-        if self.level == "avanzado":
+        if self.adv and self.tune.get("no_free_death", True):
+            _evas = self.tune.get("evasion_aware", False)
+
+            def _blockable(b, atk):
+                if not _evas:
+                    return True
+                if atk.has("unblockable"):
+                    return False
+                if atk.has("flying") and not (b.has("flying") or b.has("reach")):
+                    return False
+                try:
+                    return game._can_block_evasion(atk, b)
+                except Exception:  # noqa: BLE001
+                    return True
+
             def dies_for_free(atk):
                 for b in target.creatures():
-                    if b.tapped:
+                    if b.tapped or getattr(b, "cant_block", False) or not _blockable(b, atk):
                         continue
                     b_kills = b.power >= atk.toughness or (b.has("deathtouch") and b.power > 0)
                     b_survives = b.toughness > atk.power and not atk.has("deathtouch")
@@ -1131,7 +1299,8 @@ class Policy:
         # avanzado concentra: al ARQUIENEMIGO le da cuota doble antes de desbordar,
         # para cerrarle la partida al que va ganando en vez de repartir parejo.
         arch = next((o for o in opps if rank[id(o)] == 0), None)
-        fair_of = {id(o): (fair * 2 if (self.level == "avanzado" and o is arch) else fair)
+        fair_of = {id(o): (fair * 2 if (self.adv and o is arch and self.tune.get("arch_focus", True))
+                           else fair)
                    for o in opps}
         assign = {}
         for atk in sorted(sending, key=lambda c: c.power, reverse=True):
@@ -1209,6 +1378,16 @@ class Policy:
                 result.append((atk, safe))
                 used.add(safe)
                 continue
+            # 1b) avanzado: CAMBIO favorable (mi bloqueador mata al atacante y vale menos)
+            if self.adv and self.tune.get("trade_up", False) and need == 1:
+                def _val(x):
+                    return x.power + x.toughness + (x.card.cost.cmc if x.card.cost else 0) + \
+                        (6 if x.controller.is_commander(x.card) else 0)
+                tr = sorted((b for b in avail if kills(b, atk) and _val(b) < _val(atk)), key=_val)
+                if tr:
+                    result.append((atk, tr[0]))
+                    used.add(tr[0])
+                    continue
             big = atk.power >= 3 or atk.has("flying") or atk.has("trample")
             # 2) GANG para MATAR una amenaza grande, perdiendo lo mínimo (fodder primero).
             if big:
