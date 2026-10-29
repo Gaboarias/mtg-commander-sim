@@ -2094,6 +2094,8 @@ class Game:
             player._token_turn = self.turn      # "if you created a token this turn"
         if getattr(card, "aura_moon", False):
             self._any_moon = True
+        if getattr(card, "global_wither", False):
+            self._any_gwither = True
         if getattr(card, "archetype_lose", None):
             self._any_archetype = True
         if getattr(card, "all_types_own", False):
@@ -2159,6 +2161,13 @@ class Game:
                     n = max(0, src.power)
                 elif kind == "nonhuman":                  # Grumgully
                     n = 0 if "human" in {x.lower() for x in card.subtypes} else val
+                elif kind == "nontoken":                  # Tromell
+                    n = 0 if is_token else val
+                elif kind == "self_p1":                   # Bloodspore Thrinax: X = sus contadores +1/+1
+                    n = src.counters.get("+1/+1", 0)
+                elif kind == "angels":                    # Giada: por cada Ángel que ya controlás
+                    n = (sum(1 for x in player.battlefield if x.is_creature() and x.has_subtype("angel"))
+                         if "angel" in {x.lower() for x in card.subtypes} else 0)
                 else:
                     n = val
                 if n:
@@ -2417,6 +2426,30 @@ class Game:
                         n += v
         return max(0, fixed if fixed is not None else n)
 
+    def _kharn_betray(self, perm):
+        """Khârn the Betrayer: se previene el daño y un rival (elegido por su controlador)
+        gana el control; el que lo pierde roba dos cartas."""
+        old = perm.controller
+        opps = [o for o in self.opponents(old) if not o.lost]
+        if not opps or perm not in old.battlefield:
+            return
+
+        def _give(o, _p=perm, _old=old):
+            if _p not in _old.battlefield or o.lost:
+                return
+            _old.battlefield.remove(_p)
+            _p.controller = o
+            o.battlefield.append(_p)
+            _p.attacking = None
+            _p.summoning_sick = True
+            self.log(f"Se previene el daño a {_p.name}: {o.name} gana su control; {_old.name} roba 2")
+            _old.draw(2, self)
+        import cardsdb as _cdb
+        opps.sort(key=lambda o: o.life)
+        _cdb._human_target_choice(self, old, "player_target", f"{perm.name}: ¿qué rival gana su control?",
+                                  [(o.name, o) for o in opps], _give) if old is getattr(self, "interactive_human", None) \
+            else _give(opps[0])
+
     def attack_tax(self, defender) -> int:
         """Ghostly Prison / Propaganda: cuánto cuesta atacar a `defender` por criatura."""
         tot = 0
@@ -2424,6 +2457,8 @@ class Game:
             if pm.abilities_off():
                 continue
             tot += getattr(pm.card, "attack_tax", 0) or 0
+            if getattr(pm.card, "tithes_tax", False) and not pm.tapped:
+                tot += 1                         # Archangel of Tithes (mientras esté enderezada)
             if getattr(pm.card, "attack_tax_ench", False):     # Sphere of Safety: X = tus encantamientos
                 tot += sum(1 for x in defender.battlefield if "enchantment" in x.card.types)
         return tot
@@ -2830,6 +2865,20 @@ class Game:
             return                    # "prevent all damage that would be dealt by enchanted creature"
         if not no_prev and combat and isinstance(target, Permanent) and target.aura_flag("aura_no_combat_dmg_out"):
             return
+        # Szadek: "if ~ would deal combat damage to a player, instead put that many +1/+1 counters on ~
+        # and that player mills that many cards"
+        if combat and src_perm and isinstance(target, Player) and getattr(source.card, "szadek", False) \
+                and not source.abilities_off():
+            import cards as _cards
+            self.add_counters(source, "+1/+1", amount)
+            self.log(f"{source.name}: en vez de daño, {amount} contador(es) +1/+1 y {target.name} muele {amount}")
+            _cards.mill(self, target, amount)
+            return
+        # Khârn the Betrayer: previene el daño y un rival elegido gana su control
+        if not no_prev and isinstance(target, Permanent) and getattr(target.card, "kharn", False) \
+                and not target.abilities_off():
+            self._kharn_betray(target)
+            return
         if src_perm and isinstance(target, Permanent):
             # "whenever a creature dealt damage by this creature this turn dies"
             if getattr(target, "_dmg_by_turn", None) != self.turn:
@@ -2948,11 +2997,14 @@ class Game:
             if "planeswalker" in target.card.types:
                 # el dano a un planeswalker le quita lealtad (P2.3)
                 target.counters["loyalty"] = target.counters.get("loyalty", 0) - amount
-            elif src_perm and (source.has("infect") or source.has("wither")):
+            elif src_perm and (source.has("infect") or source.has("wither")) or (
+                    getattr(self, "_any_gwither", False) and any(
+                        getattr(pm.card, "global_wither", False) and not pm.abilities_off()
+                        for pl in self.players for pm in pl.battlefield)):
                 # infect/wither: el daño se pone como contadores -1/-1 (no cura al
                 # enderezar). Con deathtouch, alcanza para matarla.
                 self.add_counters(target, "-1/-1", amount)
-                if source.has("deathtouch") and target.toughness > 0:
+                if src_perm and source.has("deathtouch") and target.toughness > 0:
                     self.add_counters(target, "-1/-1", target.toughness)
             elif getattr(target.card, "dmg_to_counters", None) and not target.abilities_off() and (
                     not target.card.dmg_to_counters[1] or (combat and src_perm and source.is_creature())):
@@ -4408,6 +4460,19 @@ class Game:
             label=f"ability:{perm.name}:{ab.get('label', '')}", kind="ability",
             perm=perm, is_copy_ability=is_copy))
         obj = self.stack[-1]
+        # Harsh Mentor / Avalanche of Sector 7: "whenever an opponent activates an ability of …"
+        if any((pm.card.triggers or {}).get("opp_activated") for pl in self.players if pl is not ctrl
+               for pm in pl.battlefield):
+            for pl in self.players:
+                if pl is ctrl or pl.lost:
+                    continue
+                for src in list(pl.battlefield):
+                    cb = (src.card.triggers or {}).get("opp_activated")
+                    if cb and not src.abilities_off():
+                        self.stack.append(StackObject(
+                            pl, (lambda g, _cb=cb, _s=src, _pm=perm, _c=ctrl:
+                                 g._run_trigger(_cb, _s, {"activator": _c, "subject": _pm})),
+                            source=src, label=f"opp_activated:{src.name}", kind="trigger", perm=src))
         self._targeted_triggers(ctrl, _t, spell=False)
         return self._after_stack_push(ctrl, obj)
 
@@ -6628,6 +6693,10 @@ class Game:
             if all(_dc >= sum(1 for x in pl.battlefield if x.is_creature())
                    for pl in self.players if not pl.lost):
                 return False         # Hooded Horror: el defensor tiene más criaturas (o empata)
+        _equ = [x.card.eq_unblock_pow_le for x in attacker.controller.battlefield
+                if getattr(x.card, "eq_unblock_pow_le", None) is not None and getattr(x, "enchanting", None) is attacker]
+        if _equ and blocker.power <= max(_equ):
+            return False             # Wrecking Ball Arm: no la bloquean las de fuerza 2 o menos
         if attacker.power <= 2 and not (blocker.has("flying") or blocker.has("reach")) and any(
                 getattr(pm.card, "sidar", False) and not pm.abilities_off()
                 for pm in attacker.controller.battlefield):
@@ -6957,6 +7026,10 @@ class Game:
                 for pm in _q.battlefield:
                     if getattr(pm.card, "untap_others_turn", False) and not pm.aura_flag("aura_no_untap"):
                         pm.tapped = False
+                if any(getattr(x.card, "drumbellower", False) and not x.abilities_off() for x in _q.battlefield):
+                    for pm in _q.battlefield:      # Drumbellower: sus criaturas se enderezan en cada turno
+                        if pm.is_creature() and not pm.aura_flag("aura_no_untap"):
+                            pm.tapped = False
         _was_tapped = [pm for pm in p.battlefield if pm.tapped]
         _gnu = {getattr(pm.card, "global_no_untap", None) for pl in self.players for pm in pl.battlefield
                 if getattr(pm.card, "global_no_untap", None) and not pm.abilities_off()}

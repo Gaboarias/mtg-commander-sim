@@ -352,12 +352,33 @@ export default function Play() {
     setFoeIds((f) => (f.includes(id) ? f.filter((x) => x !== id) : f.length < 3 ? [...f, id] : f));
   }
 
-  async function start() {
+  // código de partida al azar (6 cifras)
+  function randomCode() {
+    return 100000 + Math.floor(Math.random() * 900000);
+  }
+
+  // partida random: código nuevo y 3 rivales elegidos al azar (sin repetir, distintos de tu deck)
+  function randomGame() {
+    const pool = pickables.filter((p) => p.id !== mineId).map((p) => p.id);
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const foes = pool.slice(0, 3);
+    const code = randomCode();
+    setFoeIds(foes);
+    setSeed(code);
+    start({ foes, seed: code });
+  }
+
+  async function start(over?: { foes: string[]; seed: number }) {
     setError(null); setBooting(true);
     const gid = ++gameRef.current;
+    const useFoes = over?.foes ?? foeIds;
+    const seed0 = over?.seed ?? seed;
     try {
       const mineP = pickables.find((p) => p.id === mineId);
-      const foesP = foeIds.map((id) => pickables.find((p) => p.id === id)).filter(Boolean) as Pickable[];
+      const foesP = useFoes.map((id) => pickables.find((p) => p.id === id)).filter(Boolean) as Pickable[];
       if (!mineP || foesP.length < 1) { setError("Elegí tu deck y al menos un rival."); setBooting(false); return; }
       const specs: Spec[] = [mineP.spec, ...foesP.map((p) => p.spec)];
 
@@ -392,7 +413,7 @@ export default function Play() {
 
       await ensureEngine();
       const raw = await callWorker("new_game", {
-        specs: JSON.stringify(specs), datamap: JSON.stringify(datamap), seed, level,
+        specs: JSON.stringify(specs), datamap: JSON.stringify(datamap), seed: seed0, level,
       });
       if (gid !== gameRef.current) return;      // el usuario ya salió de esta partida
       applyState(raw);
@@ -667,7 +688,10 @@ export default function Play() {
               Código de partida
               <Help label="código de partida" text="Fija el azar de la partida: con el mismo código y los mismos decks sale exactamente la misma partida. Cambialo para ver otra (o compartilo para que otra persona vea la misma)." />
               &nbsp;
-              <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} style={{ width: 90 }} />
+              <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} style={{ width: 110 }} />
+              <button className="ghost" type="button" title="Generar un código al azar" aria-label="Generar un código al azar"
+                style={{ padding: "6px 8px", display: "inline-flex", alignItems: "center" }}
+                onClick={() => setSeed(randomCode())}><Icon name="dice" size={15} /></button>
             </label>
           </div>
           <p className="muted" style={{ marginTop: 12, marginBottom: 6 }}>Rivales ({foeIds.length}/3):</p>
@@ -680,8 +704,13 @@ export default function Play() {
             ))}
           </div>
           <div className="row" style={{ marginTop: 14 }}>
-            <button className="go" onClick={start} disabled={booting || !mineId || foeIds.length < 1}>
+            <button className="go" onClick={() => start()} disabled={booting || !mineId || foeIds.length < 1}>
               {booting ? "Preparando…" : "Empezar partida"}
+            </button>
+            <button className="ghost" onClick={randomGame} disabled={booting || !mineId || pickables.length < 2}
+              title="Código nuevo y 3 rivales elegidos al azar"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <Icon name="dice" size={15} /> Partida random
             </button>
           </div>
           {status && <p className="muted" style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6 }}><Icon name="hourglass" size={14} /> {status}</p>}
