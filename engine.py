@@ -1583,6 +1583,14 @@ class Game:
         disparan permanentes de ese jugador.
         """
         who = kw.get("player")
+        # Centaur Vinecrasher: "whenever a land card is put into a graveyard from anywhere, you may
+        # pay {G}{G}. If you do, return this card from your graveyard to your hand" (dispara desde el cementerio)
+        if event == "to_graveyard" and getattr(kw.get("card"), "is_land", lambda: False)():
+            for _pl in self.players:
+                for _gc in [x for x in _pl.graveyard if getattr(x, "gy_land_ret", None)]:
+                    self.stack.append(StackObject(
+                        _pl, (lambda g, _c=_gc, _p=_pl: _c.gy_land_ret(g, _p, _c)),
+                        source=_gc, label=f"gy_land_ret:{_gc.name}"))
         # registro genérico para condiciones "if a card left your graveyard this turn"
         if event == "leaves_graveyard" and who is not None:
             who.gy_left_turn = self.turn
@@ -6700,6 +6708,8 @@ class Game:
                 continue
             if blocker.tapped or not blocker.is_creature() or blocker.attacking:
                 continue
+            if getattr(blocker, "_no_block_turn", None) == self.turn:
+                continue                 # "can't block this turn" (Stoneshock Giant)
             if len(blocker.blocking) >= 1 + (getattr(blocker.card, "extra_blocks", 0) or 0):
                 continue                 # ya bloquea todo lo que puede
             if blocker.cant_block:              # "can't block" (propia o este turno)
