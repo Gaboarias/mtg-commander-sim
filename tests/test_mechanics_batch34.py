@@ -34,6 +34,7 @@ def test_comet_storm_kicked_two_targets():
     a = put(g, creature("A", "G", 3, 3), ops[0])
     g.spell_x = 3
     cs._kicked = True
+    cs._kick_n = 1
     l0 = ops[0].life
     cs.on_cast_resolve(g, me, [])
     assert a not in ops[0].battlefield and ops[0].life == l0 - 3
@@ -141,8 +142,8 @@ def test_sudden_spoiling_and_solidarity():
     sh = build("Solidarity of Heroes", "{1}{G}", "Instant", "Strive — This spell costs {1}{G} more to cast for each "
                "target beyond the first.\nChoose any number of target creatures. Double the number of +1/+1 counters "
                "on each of them.")
-    sh.on_cast_resolve(g, me, [])
-    assert c.counters["+1/+1"] == 6
+    sh.on_cast_resolve(g, me, [c])            # los objetivos se eligen al lanzar (strive)
+    assert c.counters["+1/+1"] == 6 and sh.target_spec == "own_creature"
 
 
 def test_stoneshock_giant_no_block():

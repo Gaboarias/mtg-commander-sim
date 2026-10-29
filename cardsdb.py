@@ -5506,6 +5506,15 @@ def _wire_equipment(card, oracle):
             leg_ab = None
     else:
         leg_ab = None
+        # "Equip Shaman, Warlock, or Wizard {1}" / "Equip Hero {1}": equipar más barato a esos tipos
+        _msub = re.search(r"equip ((?!legendary|commander)[a-z]+(?:, [a-z]+)*(?:,? or [a-z]+)?) ((?:\{[^}]+\})+)", t)
+        if _msub:
+            _subs = tuple(x.strip() for x in re.split(r",\s*(?:or\s+)?|\s+or\s+", _msub.group(1)) if x.strip())
+            leg_ab = dict(equip_ab, cost=parse_cost(re.sub(r"[{}]", "", _msub.group(2))),
+                          label="Equipar (" + "/".join(s.capitalize() for s in _subs) + ")",
+                          effect=(lambda game, ctrl, perm, targets=None, _e=_equip_eff, _ss=_subs:
+                                  _e(game, ctrl, perm, targets, _flt=lambda pm: any(pm.has_subtype(s) for s in _ss))),
+                          sacrifice_other=None, pay_life=0, discard=0)
     card.activated_abilities = tuple(card.activated_abilities or ()) + (equip_ab,) + ((leg_ab,) if leg_ab else ())
 
     # Living weapon: al entrar, crea una ficha Germen 0/0 negra y se equipa a ella.
@@ -16056,10 +16065,10 @@ def _wire_b31(card, data, name, types):
        "gain menace until end of turn" in t:
         def _fw(g, perm, attacker=None, defender=None, **kw):
             dp = defender if not hasattr(defender, "card") else getattr(defender, "controller", None)
-            if attacker is None or dp is None or dp is perm.controller:
+            if attacker is None or dp is None or dp not in g.opponents(perm.controller):
                 return
             attacker.temp_keywords.add("menace")
-        _add_trig("creature_attacks", _fw)
+        _add_trig("any_creature_attacks", _fw)
 
     # Dispatch: metalcraft -> exiliar
     if {"instant"} & types and re.search(r"metalcraft — if you control three or more artifacts, exile that creature", t):
@@ -16419,6 +16428,10 @@ def _wire_b32(card, data, name, types):
         def _dd(g, perm, card=None, **kw):
             if kw.get("player") is not perm.controller or card is None or not card.is_land():
                 return
+            key = getattr(card, "_evt_batch", None) or (g.turn, id(card))
+            if getattr(perm, "_dd_key", None) == key:
+                return                       # "one or more land cards": una vez por descarte
+            perm._dd_key = key
             for o in g.opponents(perm.controller):
                 o.life -= 2
             g.log(f"{perm.name}: cada rival pierde 2")
@@ -16456,17 +16469,14 @@ def _wire_b32(card, data, name, types):
             perm._mg_turn = g.turn
             _shrink(g, perm)
             g.log(f"{perm.name}: las demás criaturas reciben -1/-1")
+            # disparo retrasado del turno: sigue aunque Massacre Girl deje el campo
+            if getattr(g, "_death_watch", None) is None:
+                g._death_watch = []
+            g._death_watch.append((g.turn, c, lambda gg, _s, _p=perm: (_shrink(gg, _p), gg.sba())))
             g.sba()
             if _prev:
                 _prev(g, c, perm)
         card.on_etb = _mg
-
-        def _mgd(g, perm, subject=None, **kw):
-            if getattr(perm, "_mg_turn", None) != g.turn or subject is perm:
-                return
-            _shrink(g, perm)
-            g.sba()
-        _add_trig("__x_death", _mgd)
 
     # Chocobo Knights
     if "whenever you attack, creatures you control with counters on them gain double strike until end of turn" in t:
@@ -16551,16 +16561,12 @@ def _wire_b32(card, data, name, types):
             if d is None or not hasattr(d, "library"):
                 return
             top = [d.library.pop() for _ in range(min(2, len(d.library)))]
-            g.log(f"{d.name} exilia " + ", ".join(x.name for x in top))
+            g.log(f"{d.name} exilia " + ", ".join(x.name for x in top) + f"; {c.name} puede jugarlas gratis este turno")
             for x in top:
-                if x.is_land():
-                    d.exile.append(x)
-                    continue
-
-                def _cast(_x=x):
-                    _b31_free_cast(g, c, _x, owner=d)
-                _human_may(g, c, f"{perm.name}: ¿lanzar {x.name} gratis?", _cast,
-                           auto=lambda _x=x: _b31_free_cast(g, c, _x, owner=d))
+                x._play_cost = Cost(0, ())
+                x._ep_until = g.turn
+                x._ep_owner = d
+                c.exile_play.append(x)
         trg["combat_damage_to_player"] = _fs
 
     # Thief of Sanity
@@ -16772,8 +16778,11 @@ def _wire_b33(card, data, name, types):
     if m:
         _cr = m.group(1) == "creature cards"
 
-        def _ts(g, c, perm, _cr=_cr):
-            back = [x for x in c.graveyard if getattr(x, "_left_bf_turn", None) == g.turn and (not _cr or x.is_creature())]
+        _any = "from anywhere" in m.group(0)
+
+        def _ts(g, c, perm, _cr=_cr, _any=_any):
+            back = [x for x in c.graveyard if getattr(x, "_gy_turn" if _any else "_left_bf_turn", None) == g.turn
+                    and (not _cr or x.is_creature())]
             for x in back:
                 c.graveyard.remove(x)
                 c.hand.append(x)
@@ -16802,10 +16811,32 @@ def _wire_b33(card, data, name, types):
        "they sacrifice that many permanents of their choice" in t:
         def _as(g, perm, amount=0, dmg_source=None, **kw):
             c = getattr(dmg_source, "controller", None)
-            if c is None or c is perm.controller or not amount:
+            n = int(amount or 0)
+            if c is None or c is perm.controller or not n:
                 return
-            c.life -= int(amount)
-            g.log(f"{c.name} pierde {amount} ({perm.name})")
+            pool = sorted(c.battlefield, key=lambda x: (not x.is_token, x.card.is_land() is False,
+                                                        _b31_cmc(getattr(x.card, "_real", None) or x.card)))
+
+            def _lose():
+                c.life -= n
+                g.log(f"{c.name} pierde {n} ({perm.name})")
+
+            def _sac_n():
+                for x in pool[:n]:
+                    g.to_graveyard(x, "sacrificio (Archfiend of Spite)")
+                g.log(f"{c.name} sacrifica {n} permanente(s) ({perm.name})")
+            if len(pool) < n:
+                _lose()
+            elif c is getattr(g, "interactive_human", None):
+                _route_choice(g, c, lambda: _human_target_choice(
+                    g, c, "may", f"{perm.name}: ¿perdés {n} vida o sacrificás {n} permanente(s)?",
+                    [(f"Perder {n} vida", True), (f"Sacrificar {n} permanente(s)", False)],
+                    lambda lose: _lose() if lose else _human_keep_then_sac(g, c, list(c.battlefield), len(pool) - n)),
+                    lambda: None)
+            elif c.life - n <= 5 or sum(1 for x in pool[:n] if x.is_token) == n:
+                _sac_n()
+            else:
+                _lose()
         _add_trig("dealt_damage", _as)
 
     # Hunted Dragon
@@ -16836,9 +16867,9 @@ def _wire_b33(card, data, name, types):
        "+2/+0 until end of turn" in t:
         def _gh(g, perm, attacker=None, defender=None, **kw):
             dp = defender if not hasattr(defender, "card") else getattr(defender, "controller", None)
-            if attacker is not None and dp is not None and dp is not perm.controller:
+            if attacker is not None and dp is not None and dp in g.opponents(perm.controller):
                 attacker.temp_pt[0] += 2
-        _add_trig("creature_attacks", _gh)
+        _add_trig("any_creature_attacks", _gh)
 
     # Daxos of Meletis
     if "whenever ~ deals combat damage to a player, exile the top card of that player's library. you gain life equal to " \
@@ -16854,6 +16885,8 @@ def _wire_b33(card, data, name, types):
                 d.exile.append(x)
             else:
                 x._play_cost = x.cost
+                x._ep_until = g.turn                 # "until end of turn, you may cast that card"
+                x._ep_owner = d
                 c.exile_play.append(x)
         trg["combat_damage_to_player"] = _dx
 
@@ -16975,18 +17008,19 @@ def _wire_b33(card, data, name, types):
     if "whenever a creature token leaves the battlefield, put a +1/+1 counter on ~" in t:
         def _td(g, perm, subject=None, **kw):
             if subject is not None and getattr(subject, "is_token", False) and subject is not perm \
-                    and perm in perm.controller.battlefield:
+                    and subject.is_creature() and perm in perm.controller.battlefield:
                 g.add_counters(perm, "+1/+1", 1)
-        _add_trig("__x_death", _td)
+        _add_trig("perm_leaves", _td)
 
     # Vela the Night-Clad
     if "whenever vela or another creature you control leaves the battlefield, each opponent loses 1 life" in t or \
             "whenever ~ or another creature you control leaves the battlefield, each opponent loses 1 life" in t:
         def _vl(g, perm, subject=None, **kw):
-            if subject is not None and subject.controller is perm.controller:
+            if subject is not None and subject.controller is perm.controller and subject.is_creature():
                 for o in g.opponents(perm.controller):
                     o.life -= 1
-        _add_trig("__x_death", _vl)
+        _add_trig("perm_leaves", _vl)
+        card.leaves_self_too = True
 
     # Thrilling Encore
     if "put onto the battlefield under your control all creature cards in all graveyards that were put there from the " \
@@ -17080,12 +17114,19 @@ def _wire_b34(card, data, name, types):
             _human_may(g, c, f"{perm.name}: ¿{active.name} toma {h.name} este turno?", _give)
         _add_trig("each_upkeep", _as)
 
-    # Comet Storm
+    # Comet Storm: un objetivo + uno por cada vez que se pagó multikicker
     if "choose any target, then choose another target for each time this spell was kicked. ~ deals x damage to each " \
        "of them" in t:
+        def _cs_cap(g, p):
+            x0 = max(0, p.available_mana() - 2)
+            opps = [o for o in g.opponents(p) if not o.lost]
+            useful = len(opps) + sum(1 for o in opps for pm in o.creatures() if pm.toughness <= max(1, x0 // 2))
+            return max(0, useful - 1)
+        card._multikick_cap = _cs_cap
+
         def _cs(g, c, tg, _card=card):
             x = max(0, getattr(g, "spell_x", 0) or 0)
-            n = 1 + (1 if getattr(_card, "_kicked", False) else 0)
+            n = 1 + int(getattr(_card, "_kick_n", 0) or 0)
             opps = [o for o in g.opponents(c) if not o.lost]
             crs = sorted((pm for o in opps for pm in o.creatures() if g.can_target(c, pm)
                           and pm.toughness - pm.damage <= x), key=lambda pm: -(pm.power + pm.toughness))
@@ -17100,15 +17141,19 @@ def _wire_b34(card, data, name, types):
                     _hit(y)
                 return
             if c is getattr(g, "interactive_human", None):
-                allc = [pm for o in opps for pm in o.creatures()] + [pm for pm in c.creatures()] + opps + [c]
+                allc = [pm for o in g.players for pm in o.battlefield
+                        if pm.is_creature() or "planeswalker" in pm.card.types] + [o for o in g.players if not o.lost]
                 opts = [(_tgt_label(g, y) if hasattr(y, "card") else f"{y.name} ({y.life})", y) for y in allc]
+                picked = []
 
-                def _step(k, used=()):
-                    if k <= 0:
+                def _step(k):
+                    left = [(lb, y) for lb, y in opts if y not in picked]
+                    if k <= 0 or not left:
+                        for y in picked:
+                            _hit(y)
                         return
-                    left = [(lb, y) for lb, y in opts if y not in used]
-                    _human_target_choice(g, c, "etb_target", f"Comet Storm: objetivo {n - k + 1} de {n} ({x} de daño)",
-                                         left, lambda y, _k=k, _u=used: (_hit(y), _step(_k - 1, _u + (y,))))
+                    _human_target_choice(g, c, "etb_target", f"Comet Storm: objetivo {n - k + 1} de {n} ({x} de daño c/u)",
+                                         left, lambda y, _k=k: (picked.append(y), _step(_k - 1)))
                 _route_choice(g, c, lambda: _step(n), lambda: None)
                 return
             for y in cands[:n]:
@@ -17132,15 +17177,19 @@ def _wire_b34(card, data, name, types):
                 return
             mine = [x for x in o.battlefield if x.attacking is not None and
                     (x.attacking is perm.controller or getattr(x.attacking, "controller", None) is perm.controller)]
-            if mine and attacker is not max(mine, key=lambda x: (x.power, x.toughness)):
-                return
+            key = (g.turn, id(o))
+            if getattr(perm, "_leonin_key", None) == key:
+                return                   # una sola decisión por ataque de ese jugador
+            perm._leonin_key = key
+            mine.sort(key=lambda x: (-x.power, -x.toughness))
 
-            def _do():
-                if attacker in attacker.controller.battlefield and not getattr(perm, "_leonin_used", False):
+            def _do(x):
+                if x in x.controller.battlefield and not getattr(perm, "_leonin_used", False):
                     perm._leonin_used = True
-                    g.log(f"{perm.name} revela a {o.name}: exilia {attacker.name}")
-                    g.exile_permanent(attacker, perm.name)
-            _human_may(g, perm.controller, f"{perm.name}: ¿revelar y exiliar a {attacker.name}?", _do)
+                    g.log(f"{perm.name} revela a {o.name}: exilia {x.name}")
+                    g.exile_permanent(x, perm.name)
+            _choose_tgt(g, perm.controller, mine, f"{perm.name}: ¿revelar a {o.name} y exiliar a cuál atacante?",
+                        _do, allow_none=True)
         _add_trig("attacks_you", _sla)
 
     # Centaur Vinecrasher (desde el cementerio)
@@ -17358,29 +17407,22 @@ def _wire_b34(card, data, name, types):
     # Solidarity of Heroes
     if "choose any number of target creatures. double the number of +1/+1 counters on each of them" in t:
         def _sh(g, c, tg):
-            pool = sorted((pm for pm in c.creatures() if pm.counters.get("+1/+1", 0) > 0),
-                          key=lambda pm: -pm.counters.get("+1/+1", 0))
-            chosen = [y for y in (tg or ()) if hasattr(y, "counters")]
-
-            def _dbl(pm):
+            chosen = [y for y in (tg or ()) if hasattr(y, "counters") and y in y.controller.battlefield]
+            for pm in chosen:          # los objetivos (y el coste de strive) se eligen al lanzar
                 n = pm.counters.get("+1/+1", 0)
                 if n:
                     g.add_counters(pm, "+1/+1", n)
-            if chosen:
-                for pm in chosen:
-                    _dbl(pm)
-            else:
-                _choose_tgts(g, c, pool, len(pool), "Solidarity of Heroes: ¿a cuáles les duplicás los contadores?",
-                             _dbl)
         card.on_cast_resolve = _sh
+        card.target_spec = "own_creature"
+        card.target_count = 4
 
     # Skeletal Scrying
     if "as an additional cost to cast this spell, exile x cards from your graveyard" in t and \
             "you draw x cards and you lose x life" in t:
+        card.additional_cost = dict(getattr(card, "additional_cost", None) or {}, exile_gy_x=True)
+
         def _sk(g, c, tg):
-            x = min(max(0, getattr(g, "spell_x", 0) or 0), len(c.graveyard))
-            for _ in range(x):
-                c.exile.append(c.graveyard.pop(0))
+            x = max(0, getattr(g, "spell_x", 0) or 0)       # el exilio ya se pagó al lanzar
             c.draw(x, g)
             c.life -= x
             g.log(f"{c.name} exilia {x} del cementerio, roba {x} y pierde {x}")
@@ -17456,7 +17498,7 @@ def _wire_b34(card, data, name, types):
         def _ts(g, perm, card=None, **kw):
             if kw.get("player") is not perm.controller or card is None or not card.is_land():
                 return
-            key = (g.turn, len(g.stack))
+            key = getattr(card, "_evt_batch", None) or (g.turn, id(card))
             if getattr(perm, "_ts_key", None) == key:
                 return
             perm._ts_key = key
@@ -17589,43 +17631,86 @@ def _wire_b35(card, data, name, types):
             g.sba()
         _etb(_exo)
 
-    # Infernal Offering / Intellectual Offering (modo 1 de cada uno; el bot elige su modo preferido)
+    # Infernal Offering (las dos partes, cada una con su rival elegido)
     if "choose an opponent. you and that player each sacrifice a creature. each player who sacrificed a creature this " \
        "way draws two cards" in t:
         def _io(g, c, tg):
-            opps = [o for o in g.opponents(c) if not o.lost]
-            if not opps:
-                return
+            def _part2():
+                def _go2(o):
+                    def _theirs():
+                        crs = sorted((x for x in o.graveyard if x.is_creature()), key=_b34_val, reverse=True)
 
-            def _go(o):
-                mine = min(c.creatures(), key=lambda x: (x.power + x.toughness), default=None)
-                theirs = max(o.creatures(), key=lambda x: (x.power + x.toughness), default=None)
-                # modo 1: sacrificar y robar (si me conviene); modo 2: reanimar
-                gy_mine = max((x for x in c.graveyard if x.is_creature()), key=_b34_val, default=None)
-                if gy_mine is not None and (mine is None or _b34_val(gy_mine) > (4, 0)):
-                    gy_theirs = min((x for x in o.graveyard if x.is_creature()), key=_b34_val, default=None)
-                    c.graveyard.remove(gy_mine)
-                    g.move_to_battlefield(gy_mine, c)
-                    if gy_theirs is not None:
-                        o.graveyard.remove(gy_theirs)
-                        g.move_to_battlefield(gy_theirs, o)
-                    g.log(f"Infernal Offering: {c.name} devuelve {gy_mine.name}")
-                    return
-                for pl, x in ((c, mine), (o, theirs)):
-                    if x is not None:
-                        g.to_graveyard(x, "sacrificio")
+                        def _r(x):
+                            if x in o.graveyard:
+                                o.graveyard.remove(x)
+                                g.move_to_battlefield(x, o)
+                                g.log(f"{o.name} devuelve {x.name} al campo (Infernal Offering)")
+                        _b31_pick_card(g, o, crs, "Infernal Offering: elegí qué criatura de tu cementerio vuelve", _r,
+                                       allow_none=False)
+
+                    def _mine(x):
+                        if x in c.graveyard:
+                            c.graveyard.remove(x)
+                            g.move_to_battlefield(x, c)
+                            g.log(f"{c.name} devuelve {x.name} al campo (Infernal Offering)")
+                        _theirs()
+                    crs = sorted((x for x in c.graveyard if x.is_creature()), key=_b34_val, reverse=True)
+                    if crs:
+                        _b31_pick_card(g, c, crs, "Infernal Offering: ¿qué criatura de tu cementerio vuelve?", _mine,
+                                       allow_none=False)
+                    else:
+                        _theirs()
+                _pick_player(g, c, _go2, include_self=False,
+                             bot=lambda cs: min(cs, key=lambda o: max([_b34_val(x) for x in o.graveyard
+                                                                       if x.is_creature()] or [(0, 0)])),
+                             prompt="Infernal Offering (2.ª parte): elegí un rival (devuelve una criatura)")
+
+            def _go1(o):
+                done = []
+
+                def _sac(pl, nxt):
+                    crs = sorted(pl.creatures(), key=lambda x: (x.power + x.toughness, _b31_cmc(x.card)))
+                    if not crs:
+                        nxt()
+                        return
+
+                    def _s(x):
+                        if x in pl.battlefield:
+                            g.to_graveyard(x, "sacrificio (Infernal Offering)")
+                            done.append(pl)
+                        nxt()
+                    _choose_tgt(g, pl, crs, "Infernal Offering: elegí qué criatura sacrificás", _s)
+
+                def _draws():
+                    for pl in done:
                         pl.draw(2, g)
-            _pick_player(g, c, _go, include_self=False, bot=lambda cs: max(cs, key=lambda o: len(o.creatures())),
-                         prompt="Infernal Offering: elegí un rival")
+                    if done:
+                        g.log("Infernal Offering: " + ", ".join(pl.name for pl in done) + " roban 2")
+                    _part2()
+                _sac(c, lambda: _sac(o, _draws))
+            _pick_player(g, c, _go1, include_self=False,
+                         bot=lambda cs: max(cs, key=lambda o: max([x.power + x.toughness for x in o.creatures()] or [0])),
+                         prompt="Infernal Offering (1.ª parte): elegí un rival (ambos sacrifican una criatura)")
         card.on_cast_resolve = _io
+    # Intellectual Offering (las dos partes)
     if "choose an opponent. you and that player each draw three cards" in t:
         def _ito(g, c, tg):
-            def _go(o):
+            def _go1(o):
                 c.draw(3, g)
                 o.draw(3, g)
                 g.log(f"{c.name} y {o.name} roban 3")
-            _pick_player(g, c, _go, include_self=False, bot=lambda cs: min(cs, key=lambda o: o.life),
-                         prompt="Intellectual Offering: elegí un rival")
+
+                def _go2(o2):
+                    for x in list(c.battlefield) + list(o2.battlefield):
+                        if not x.card.is_land():
+                            x.tapped = False
+                    g.log(f"{c.name} y {o2.name} enderezan sus permanentes no tierra")
+                _pick_player(g, c, _go2, include_self=False,
+                             bot=lambda cs: min(cs, key=lambda q: sum(1 for x in q.battlefield
+                                                                      if x.tapped and not x.card.is_land())),
+                             prompt="Intellectual Offering (2.ª parte): elegí un rival (ambos enderezan)")
+            _pick_player(g, c, _go1, include_self=False, bot=lambda cs: min(cs, key=lambda o: o.life),
+                         prompt="Intellectual Offering (1.ª parte): elegí un rival (ambos roban 3)")
         card.on_cast_resolve = _ito
 
     # Hermes: atacar con Aves -> scry 2
@@ -17663,11 +17748,23 @@ def _wire_b35(card, data, name, types):
             n = 2 * sum(1 for x in c.graveyard if {"instant", "sorcery"} & x.types)
             for o in g.opponents(c):
                 crs = sorted((x for x in o.creatures() if not x.is_token), key=lambda x: _b31_cmc(x.card))
-                if crs and n >= 4 and crs[0].power <= 3:
+
+                def _lose(_o=o):
+                    if n:
+                        _o.life -= n
+                        g.log(f"{_o.name} pierde {n} ({perm.name})")
+                if not crs:
+                    _lose()
+                    continue
+                if o is getattr(g, "interactive_human", None):
+                    _route_choice(g, o, lambda _o=o, _c=crs: _human_target_choice(
+                        g, _o, "sacrifice", f"{perm.name}: sacrificá una criatura no ficha o perdé {n} vida",
+                        [(_tgt_label(g, x), x) for x in _c], lambda x: g.to_graveyard(x, "sacrificio (Fandaniel)"),
+                        allow_none=True, on_none=lambda _o=_o: _lose(_o)), lambda: None)
+                elif n >= 4 and crs[0].power <= 3:
                     g.to_graveyard(crs[0], "sacrificio (Fandaniel)")
-                elif n:
-                    o.life -= n
-                    g.log(f"{o.name} pierde {n} ({perm.name})")
+                else:
+                    _lose()
         _add_trig("end_step", _fd)
 
     # Enchanter's Bane
@@ -17682,10 +17779,17 @@ def _wire_b35(card, data, name, types):
 
             def _do(x):
                 v = _b31_cmc(x.card)
-                if v >= 4 or x.controller.life <= v:
-                    g.to_graveyard(x, "sacrificio (Enchanter's Bane)")
+                o = x.controller
+                if o is getattr(g, "interactive_human", None):
+                    _route_choice(g, o, lambda: _human_target_choice(
+                        g, o, "may", f"{perm.name}: ¿sacrificás {x.name} o recibís {v} de daño?",
+                        [(f"Sacrificar {x.name}", True), (f"Recibir {v} de daño", False)],
+                        lambda sac: g.to_graveyard(x, "sacrificio (Enchanter's Bane)") if sac
+                        else g.deal_damage(x, o, v)), lambda: None)
+                elif o.life <= v + 5:
+                    g.to_graveyard(x, "sacrificio (Enchanter's Bane)")      # el bot no arriesga la vida
                 else:
-                    g.deal_damage(x, x.controller, v)
+                    g.deal_damage(x, o, v)                                 # conserva el encantamiento
             _choose_tgt(g, c, pool, f"{perm.name}: elegí un encantamiento", _do)
         _add_trig("end_step", _eb)
 
@@ -17726,8 +17830,9 @@ def _wire_b35(card, data, name, types):
                 c.battlefield.append(x)
                 x.tapped = False
                 x.return_to = old
+                x._mb_turn = g.turn                     # "they block this turn if able"
                 g.control_returns.append(x)
-                g.log(f"{c.name} controla {x.name} hasta el fin del turno")
+                g.log(f"{c.name} controla {x.name} hasta el fin del turno (bloquea si puede)")
             _choose_tgts(g, c, pool, 3 if att else 0, "Domineering Will: ¿qué criaturas tomás?", _take)
         card.on_cast_resolve = _dw
 
@@ -17890,23 +17995,48 @@ def _wire_b35(card, data, name, types):
     if "as ~ is turned face up, put five +1/+1 counters on it" in t:
         card.on_turn_face_up = (lambda g, p, pm: g.add_counters(pm, "+1/+1", 5))
 
-    # Grave Sifter
+    # Grave Sifter: cada jugador elige un tipo y devuelve cualquier cantidad de cartas de ese tipo
     if "when ~ enters, each player chooses a creature type and returns any number of cards of that type from their " \
        "graveyard to their hand" in t:
         def _gsf(g, c, perm):
             from collections import Counter as _Ct
-            for pl in g.players:
-                if pl.lost:
-                    continue
-                cnt = _Ct(s.lower() for x in pl.graveyard if x.is_creature() for s in x.subtypes)
+
+            def _for(pl):
+                cnt = _Ct(s_.lower() for x in pl.graveyard if x.is_creature() for s_ in x.subtypes)
                 if not cnt:
-                    continue
-                typ = cnt.most_common(1)[0][0]
-                back = [x for x in pl.graveyard if x.is_creature() and typ in {s.lower() for s in x.subtypes}]
-                for x in back:
-                    pl.graveyard.remove(x)
-                    pl.hand.append(x)
-                g.log(f"{pl.name} elige {typ} y devuelve {len(back)} carta(s) a la mano")
+                    return
+
+                def _type(typ):
+                    pool = [x for x in pl.graveyard if typ in {s_.lower() for s_ in x.subtypes}]
+
+                    def _back(x):
+                        if x in pl.graveyard:
+                            pl.graveyard.remove(x)
+                            pl.hand.append(x)
+                            g.log(f"{pl.name} devuelve {x.name} a la mano ({perm.name})")
+                    if pl is getattr(g, "interactive_human", None):
+                        def _step(rest):
+                            if not rest:
+                                return
+                            _human_target_choice(
+                                g, pl, "etb_target",
+                                f"{perm.name}: ¿qué cartas de tipo {typ} devolvés? (Ninguna = terminar)",
+                                [(x.name, x) for x in rest],
+                                lambda x: (_back(x), _step([y for y in rest if y is not x])), allow_none=True)
+                        _route_choice(g, pl, lambda: _step(pool), lambda: None)
+                    else:
+                        for x in pool:
+                            _back(x)
+                if pl is getattr(g, "interactive_human", None) and len(cnt) > 1:
+                    _route_choice(g, pl, lambda: _human_target_choice(
+                        g, pl, "etb_target", f"{perm.name}: elegí un tipo de criatura",
+                        [(f"{k.capitalize()} ({v} en tu cementerio)", k) for k, v in cnt.most_common()], _type),
+                        lambda: _type(cnt.most_common(1)[0][0]))
+                else:
+                    _type(cnt.most_common(1)[0][0])
+            for pl in g.players:
+                if not pl.lost:
+                    _for(pl)
         _etb(_gsf)
 
     # Flame On!
@@ -17922,28 +18052,71 @@ def _wire_b35(card, data, name, types):
             _choose_tgt(g, c, pool, f"Flame On!: ¿qué criatura recibe {n} contadores?", _do, a=tg)
         card.on_cast_resolve = _fo
 
-    # Endless Detour
+    # Endless Detour: hechizo, permanente no tierra o carta de un cementerio; el dueño elige arriba o abajo
     if "the owner of target spell, nonland permanent, or card in a graveyard puts it on their choice of the top or " \
        "bottom of their library" in t:
         def _ed(g, c, tg):
-            pool = sorted((x for o in g.opponents(c) for x in o.battlefield if not x.card.is_land()
-                           and g.can_target(c, x)), key=lambda x: -_b31_cmc(x.card))
+            def _place(owner, card_, label):
+                def _put(top):
+                    if top:
+                        owner.library.append(card_)
+                    else:
+                        owner.library.insert(0, card_)
+                    g.log(f"{label} va {'arriba' if top else 'abajo'} de la biblioteca de {owner.name}")
+                if owner is getattr(g, "interactive_human", None):
+                    _route_choice(g, owner, lambda: _human_target_choice(
+                        g, owner, "may", f"Endless Detour: ¿{label} arriba o abajo de tu biblioteca?",
+                        [("Arriba", True), ("Abajo", False)], _put), lambda: _put(True))
+                else:
+                    _put(owner is not c)          # el dueño rival lo deja arriba para recuperarlo
 
             def _do(x):
-                if x not in x.controller.battlefield:
-                    return
-                real = getattr(x.card, "_real", None) or x.card
-                owner = next((p for p in g.players if p is x.controller), x.controller)
-                x.controller.battlefield.remove(x)
-                if x.card.on_leave:
-                    x.card.on_leave(g, x.controller, x)
-                if not x.is_token:
+                if hasattr(x, "card") and hasattr(x, "controller"):           # permanente
+                    if x not in x.controller.battlefield:
+                        return
+                    real = getattr(x.card, "_real", None) or x.card
+                    owner = getattr(real, "_owner", None) or x.controller
+                    x.controller.battlefield.remove(x)
+                    g.note_departure(x, "library")
+                    if x.card.on_leave:
+                        x.card.on_leave(g, x.controller, x)
+                    if x.is_token:
+                        g.log(f"{x.name} (ficha) deja de existir")
+                        return
                     if g.commander_owner(real):
                         g.commander_owner(real).command.append(real)
-                    else:
-                        owner.library.append(real)        # el dueño elige: arriba
-                g.log(f"{x.name} va arriba de la biblioteca de su dueño")
-            _choose_tgt(g, c, pool, "Endless Detour: elegí un permanente no tierra", _do, a=tg)
+                        g.log(f"{real.name} vuelve a la zona de mando")
+                        return
+                    _place(owner, real, real.name)
+                elif hasattr(x, "resolve"):                                     # hechizo en la pila
+                    if x in g.stack:
+                        g.stack.remove(x)
+                        src = getattr(x, "source", None)
+                        if src is not None and not getattr(x, "is_copy", False) and hasattr(src, "types"):
+                            _place(x.controller, src, src.name)
+                else:                                                          # carta en un cementerio
+                    o, cd = x
+                    if cd in o.graveyard:
+                        o.graveyard.remove(cd)
+                        _place(o, cd, cd.name)
+            perms = sorted((x for o in g.opponents(c) for x in o.battlefield if not x.card.is_land()
+                            and g.can_target(c, x)), key=lambda x: -_b31_cmc(x.card))
+            chosen = [x for x in (tg or ()) if x in perms]
+            if chosen:
+                _do(chosen[0])
+                return
+            if c is getattr(g, "interactive_human", None):
+                opts = [(_tgt_label(g, x), x) for pl in g.players for x in pl.battlefield
+                        if not x.card.is_land() and g.can_target(c, x)]
+                opts += [(f"Hechizo en la pila: {so.source.name}", so) for so in g.stack
+                         if getattr(so, "kind", None) in (None, "spell") and hasattr(getattr(so, "source", None), "types")
+                         and so.source is not card]
+                opts += [(f"{cd.name} · cementerio de {o.name}", (o, cd)) for o in g.players for cd in o.graveyard]
+                _route_choice(g, c, lambda: _human_target_choice(g, c, "etb_target", "Endless Detour: elegí el objetivo",
+                                                                 opts, _do), lambda: None)
+                return
+            if perms:
+                _do(perms[0])
         card.on_cast_resolve = _ed
 
     # Dredge the Mire
@@ -17975,6 +18148,186 @@ def _wire_b35(card, data, name, types):
                     g.destroy(x, "Exterminatus")
             g.sba()
         card.on_cast_resolve = _xt
+
+    if trg != (card.triggers or {}):
+        card.triggers = trg
+
+
+def _wire_b36(card, data, name, types):
+    """Completa reglas que antes eran aproximadas (batches 31-35)."""
+    raw = data.get("_orig_text") or data.get("oracle_text", "") or ""
+    t = re.sub(r"\s+", " ", raw.lower())
+    for nm in sorted((x for x in _self_names(name) if x), key=len, reverse=True):
+        t = t.replace(nm, "~")
+    t = re.sub(r"\bthis (?:creature|artifact|enchantment|equipment|land|aura|vehicle)\b", "~", t)
+    trg = dict(card.triggers or {})
+
+    def _add_trig(key, fn):
+        prev = trg.get(key)
+        trg[key] = fn if prev is None else (lambda g, perm, _a=prev, _b=fn, **kw: (_a(g, perm, **kw), _b(g, perm, **kw)))
+
+    def _etb(fn):
+        def _w(g, c, perm, _prev=card.on_etb, _f=fn):
+            _f(g, c, perm)
+            if _prev:
+                _prev(g, c, perm)
+        card.on_etb = _w
+
+    # Doctor Doom: villano con menace que connive al empezar tu combate
+    if "at the beginning of combat on your turn, target villain you control gains menace until end of turn. it " \
+       "connives" in t:
+        def _ddc(g, perm, **kw):
+            c = perm.controller
+            if kw.get("player") not in (None, c):
+                return
+            vil = sorted((x for x in c.creatures() if x.has_subtype("villain")), key=lambda x: -x.power)
+
+            def _do(x):
+                x.temp_keywords.add("menace")
+                _do_connive(g, x, 1)
+            _choose_tgt(g, c, vil, f"{perm.name}: ¿qué Villano gana menace y connive?", _do)
+        _add_trig("begin_combat", _ddc)
+
+    # Killer Service: pagar {2} y sacrificar una ficha -> Rhino 4/4
+    if "at the beginning of your end step, you may pay {2} and sacrifice a token. if you do, create a 4/4 green rhino " \
+       "warrior creature token" in t:
+        def _ks(g, perm, **kw):
+            c = perm.controller
+            if kw.get("player") not in (None, c):
+                return
+            toks = sorted((x for x in c.battlefield if x.is_token), key=lambda x: (x.is_creature(), x.power))
+            cost = parse_cost("2")
+            if not toks or not c.can_pay(cost):
+                return
+
+            def _go(x):
+                if x in c.battlefield and c.can_pay(cost):
+                    c.pay(cost)
+                    g.to_graveyard(x, "sacrificio (Killer Service)")
+                    cards.make_token(g, c, "Rhino Warrior", 4, 4, subtypes=("Rhino", "Warrior"))
+                    g.log(f"{c.name} paga {{2}}, sacrifica {x.name} y crea un Rinoceronte 4/4")
+            if c is getattr(g, "interactive_human", None):
+                _choose_tgt(g, c, toks, f"{perm.name}: ¿pagar {{2}} y sacrificar una ficha por un 4/4?", _go,
+                            allow_none=True)
+            elif not toks[0].is_creature() or toks[0].power <= 1:
+                _go(toks[0])
+        _add_trig("end_step", _ks)
+
+    # Breena
+    if "whenever a player attacks one of your opponents, if that opponent has more life than another of your " \
+       "opponents, that attacking player draws a card and you put two +1/+1 counters on a creature you control" in t:
+        def _br(g, perm, attacker=None, defender=None, **kw):
+            c = perm.controller
+            opps = [o for o in g.opponents(c) if not o.lost]
+            if attacker is None or defender not in opps or not any(o.life < defender.life for o in opps if o is not defender):
+                return
+            attacker.draw(1, g)
+            crs = sorted(c.creatures(), key=lambda x: -(x.power + x.toughness))
+            _choose_tgt(g, c, crs, f"{perm.name}: ¿qué criatura recibe dos contadores +1/+1?",
+                        lambda x: g.add_counters(x, "+1/+1", 2))
+            g.log(f"{perm.name}: {attacker.name} roba una carta")
+        _add_trig("player_attacks", _br)
+
+    # Marisi / Basandra: no se lanzan hechizos durante el combate
+    if "your opponents can't cast spells during combat" in t:
+        card.no_cast_combat = "opp"
+    elif "players can't cast spells during combat" in t:
+        card.no_cast_combat = "all"
+
+    # Lier: flashback para tus instantáneos y conjuros
+    if "each instant and sorcery card in your graveyard has flashback. the flashback cost is equal to that card's mana " \
+       "cost" in t:
+        card.grant_flashback = True
+
+    # Archangel of Tithes: impuesto para bloquear mientras ataca
+    if "as long as ~ is attacking, creatures can't block unless their controller pays {1} for each of those creatures" in t:
+        card.tithes_block = True
+
+    # "<Tipo> offering" (Patron of the Nezumi / Kitsune / Mori / Oyobi / Shinen)
+    m = re.search(r"(?:^|\. |\n)([a-z]+) offering(?: \(|$|\.)", t)
+    if m and "creature" in types:
+        card.offering_sub = m.group(1).capitalize()
+
+    # Assault Suit
+    if "equipped creature gets +2/+2, has haste, can't attack you or planeswalkers you control, and can't be " \
+       "sacrificed" in t:
+        card.suit_no_attack_owner = True
+        card.suit_no_sac = True
+
+    # Spectacular Showdown con sobrecarga: a cada criatura
+    if "put a double strike counter on target creature, then goad each creature that had a double strike counter put " \
+       "on it this way" in t and getattr(card, "overload_cost", None) is not None:
+        def _sdo(g, c, tg):
+            for pl in g.players:
+                for pm in pl.creatures():
+                    g.add_counters(pm, "double_strike", 1)
+                    pm.perma_keywords.add("double_strike")
+                    pm.goaded = True
+            g.log("Spectacular Showdown (sobrecarga): cada criatura recibe doble golpe y queda provocada")
+        card.overload_effect = _sdo
+
+    # Multikicker: efectos "for each time it was kicked"
+    m = re.search(r"enters with an? (\+1/\+1|charge) counter on it for each time it was kicked", t)
+    if m:
+        _ck = "+1/+1" if m.group(1) == "+1/+1" else "charge"
+        if (getattr(card, "etb_counters", None) or {}).get(_ck):
+            card.etb_counters = {k: v for k, v in card.etb_counters.items() if k != _ck}   # era un fijo de 1
+
+        def _mkc(g, c, perm, _k=_ck):
+            n = int(getattr(perm.card, "_kick_n", 0) or 0)
+            if n:
+                perm.counters[_k] = perm.counters.get(_k, 0) + n
+        _etb(_mkc)
+    if re.search(r"when ~ enters, you gain 2 life for each time it was kicked", t):
+        card.on_etb = (lambda g, c, perm: g.gain_life(c, 2 * int(getattr(perm.card, "_kick_n", 0) or 0)))
+    if re.search(r"when ~ enters, create a 2/2 green wolf creature token for each time it was kicked", t):
+        card.on_etb = (lambda g, c, perm: [cards.make_token(g, c, "Wolf", 2, 2, subtypes=("Wolf",))
+                                           for _ in range(int(getattr(perm.card, "_kick_n", 0) or 0))])
+    if re.search(r"when ~ enters, target opponent discards a card for each time it was kicked", t):
+        def _bh(g, c, perm):
+            n = int(getattr(perm.card, "_kick_n", 0) or 0)
+            if n:
+                def _d(o):
+                    for _ in range(min(n, len(o.hand))):
+                        pick = o.policy.choose_discard(g, o) if o.policy and hasattr(o.policy, "choose_discard") \
+                            else o.hand[0]
+                        if pick in o.hand:
+                            o.hand.remove(pick)
+                            g.discard_card(o, pick)
+                _pick_player(g, c, _d, include_self=False, prompt=f"{perm.name}: ¿qué rival descarta {n}?")
+        card.on_etb = _bh                 # reemplaza al "descarta una carta" genérico
+    if re.search(r"when ~ enters, it deals damage to target player or planeswalker equal to the number of times it was "
+                 r"kicked", t):
+        def _dfs(g, c, perm):
+            n = int(getattr(perm.card, "_kick_n", 0) or 0)
+            if n:
+                _pick_player(g, c, lambda o: g.deal_damage(perm, o, n), include_self=False,
+                             prompt=f"{perm.name}: ¿a qué jugador le hace {n} de daño?")
+        card.on_etb = _dfs
+
+    # Eidolon of Countless Battles: el mismo bono cuando está anexada con bestow
+    if "~ and enchanted creature each get +1/+1 for each creature you control and +1/+1 for each aura you control" in t:
+        card.bestow_static = card.static_mod
+
+    # Reaper's Scythe: la equipada es Asesina
+    if re.search(r"equipped creature [^.]*is an? (\w+) in addition to its other types", t):
+        card.eq_subtype = re.search(r"equipped creature [^.]*is an? (\w+) in addition to its other types", t).group(1)
+
+    # Coram: jugar una tierra y lanzar un hechizo de las cartas puestas en cementerios desde bibliotecas este turno
+    if "during each of your turns, you may play a land and cast a spell from among cards in graveyards that were put " \
+       "there from libraries this turn" in t:
+        def _cor(g, perm, card=None, **kw):
+            c = perm.controller
+            pl = kw.get("player")
+            if card is None or pl is None or g.ap() is not c or getattr(card, "_from_lib_turn", None) != g.turn:
+                return
+            if card in c.exile_play or card not in pl.graveyard:
+                return
+            card._coram_src = pl
+            card._ep_until = g.turn
+            card._play_cost = card.cost
+            c.exile_play.append(card)
+        _add_trig("to_graveyard", _cor)
 
     if trg != (card.triggers or {}):
         card.triggers = trg
@@ -19924,6 +20277,8 @@ def _build_card_from_data_impl(data: dict) -> Card:
     if mk or (mks and _count_word(mks.group(1))):
         card._kicker_cost = sum(int(s) if s.isdigit() else 1
                                 for s in re.findall(r"\{([wubrgc0-9/x]+)\}", mk.group(1))) if mk else 0
+        if mk and re.search(r"multikicker", _lt):
+            card._multikicker = True     # se puede pagar cualquier cantidad de veces (_kick_n)
         mkb = re.search(r"if (?:this spell was |this creature was |this was |it was |"
                         r"[\w~' ]{0,15}was |)kicked,?\s*(.{0,140})", _lt)
         if mkb:
@@ -22039,6 +22394,7 @@ def _build_card_from_data_impl(data: dict) -> Card:
     _wire_b33(card, data, name, types)
     _wire_b34(card, data, name, types)
     _wire_b35(card, data, name, types)
+    _wire_b36(card, data, name, types)
     if card_dice:
         card.dice_table = card_dice
     # efecto genérico POR TAG: en un hechizo, al resolver; en un permanente, solo si

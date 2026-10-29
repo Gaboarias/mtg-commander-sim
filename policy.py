@@ -334,6 +334,8 @@ class Policy:
             return bool(game.cast_prototype(me, card))
         if getattr(card, "emerge_cost", None) is not None and game.emerge_option(me, card):
             return bool(game.cast_emerge(me, card))
+        if getattr(card, "offering_sub", None) and game.offering_option(me, card):
+            return bool(game.cast_offering(me, card))
         # habilidad desde la mano ("discard this card:", Channel): solo si la carta
         # no se puede lanzar ahora y no es tierra (las tierras se juegan)
         if not card.is_land():
@@ -436,7 +438,7 @@ class Policy:
         for c in list(me.graveyard):
             if used >= 3:
                 break
-            gp = getattr(c, "gy_play", None)
+            gp = game.gy_play_of(me, c)
             if gp and gp.get("discard") == "land" and not (
                     me.lands_played > 0 or sum(1 for x in me.hand if x.is_land()) >= 2):
                 continue                 # retrace: no tirar la tierra del turno

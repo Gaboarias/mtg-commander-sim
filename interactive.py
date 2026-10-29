@@ -26,7 +26,9 @@ def _fast(c, g=None) -> bool:
     'as though it had flash' con coste extra / sacrificio, o destello otorgado)."""
     return ("instant" in c.types) or ("flash" in c.keywords) \
         or getattr(c, "flash_tax", None) is not None or getattr(c, "flash_sac", False) \
-        or (g is not None and g.flash_granted(c))
+        or (g is not None and g.flash_granted(c)) \
+        or (g is not None and getattr(c, "offering_sub", None) is not None
+            and g.interactive_human is not None and g.offering_option(g.interactive_human, c) is not None)
 
 
 def _never_respond(*_a, **_k):
@@ -430,8 +432,13 @@ class InteractiveGame:
             return True
         if declared is not None and self._ninjutsu_opts(declared):
             return True
-        return any(_fast(c, self.g)
-                   and c.cost is not None and hu.can_pay(self.g.effective_cost(hu, c)) for c in hu.hand)
+        return any(_fast(c, self.g) and self._fast_payable(hu, c) for c in hu.hand)
+
+    def _fast_payable(self, p, c):
+        """¿Puede lanzarla ahora? (coste normal, o '<Tipo> offering' sacrificando)."""
+        if c.cost is not None and p.can_pay(self.g.effective_cost(p, c)):
+            return True
+        return getattr(c, "offering_sub", None) is not None and self.g.offering_option(p, c) is not None
 
     def _has_counter_response(self, hu):
         """¿El humano tiene un contrahechizo (apunta a la pila) que pueda pagar?"""
@@ -466,7 +473,10 @@ class InteractiveGame:
         hu = self.human()
         if action == "cast" and i is not None and 0 <= i < len(hu.hand):
             c = hu.hand[i]
-            if _fast(c, self.g) and hu.can_pay(self.g.effective_cost(hu, c)):
+            if getattr(c, "offering_sub", None) and not ("instant" in c.types or "flash" in c.keywords) \
+                    and self.g.offering_option(hu, c) is not None:
+                self.g.cast_offering(hu, c)                 # "<Tipo> offering" a velocidad de instantáneo
+            elif _fast(c, self.g) and hu.can_pay(self.g.effective_cost(hu, c)):
                 spec = getattr(c, "target_spec", None)
                 if spec == "stack_spell":
                     tgt = [ctx["spell"]]                 # contrahechizo: apunta a la pila
@@ -544,7 +554,7 @@ class InteractiveGame:
         if 0 <= i < len(me.hand):
             c = me.hand[i]
             fast = _fast(c, self.g)
-            if fast and c.cost is not None and me.can_pay(self.g.effective_cost(me, c)):
+            if fast and self._fast_payable(me, c):
                 modes = getattr(c, "modes", ())
                 chosen = spec = None
                 if modes and mode is not None and 0 <= mode < len(modes):
@@ -552,7 +562,10 @@ class InteractiveGame:
                     spec = modes[mode].get("target_spec")
                 tgt = (self._chosen_targets(c, target_uids, spec=spec)
                        if target_uids else self._auto_targets_def(c))
-                self.g.cast(me, c, targets=tgt, chosen_modes=chosen)
+                if getattr(c, "offering_sub", None) and not ("instant" in c.types or "flash" in c.keywords):
+                    self.g.cast_offering(me, c)        # "<Tipo> offering"
+                else:
+                    self.g.cast(me, c, targets=tgt, chosen_modes=chosen)
                 self.g.sba()
                 if len(self.g.alive()) <= 1:
                     self.mode = None
@@ -932,6 +945,11 @@ class InteractiveGame:
                     self.g.transmute(p, c)
                 self.g.sba()
             return self.state()
+        if zone == "offering":
+            if i is not None and 0 <= i < len(p.hand):
+                self.g.cast_offering(p, p.hand[i])
+                self.g.sba()
+            return self.state()
         if zone in ("overload", "plot", "warp", "prototype", "emerge", "impending", "converted"):
             if i is not None and 0 <= i < len(p.hand):
                 c = p.hand[i]
@@ -1110,7 +1128,13 @@ class InteractiveGame:
                 qs.append(("sac", "sacrifice", f"{card.name}: elegí qué sacrificar (coste adicional).",
                            [(self._pm_label(pm), pm) for pm in pool]))
         kick = getattr(card, "_kicker_cost", 0) or 0
-        if kick and p.can_pay(Cost(gen0 + kick, base.pips)):
+        if kick and getattr(card, "_multikicker", False) and p.can_pay(Cost(gen0 + kick, base.pips)):
+            n_max = 0
+            while n_max < 12 and p.can_pay(Cost(gen0 + kick * (n_max + 1), base.pips)):
+                n_max += 1
+            qs.append(("kicker", "amount", f"¿Cuántas veces pagás multikicker ({{{kick}}} cada una) para {card.name}?",
+                       [(f"{k} vez/veces (+{{{kick * k}}})" if k else "Ninguna", k) for k in range(0, n_max + 1)]))
+        elif kick and p.can_pay(Cost(gen0 + kick, base.pips)):
             qs.append(("kicker", "opt_cost", f"¿Pagar kicker ({{{kick}}} más) para {card.name}?",
                        [(f"Sí, con kicker (+{{{kick}}})", True), ("No", False)]))
         ks = getattr(card, "_kicker_sac", None)
@@ -1174,6 +1198,8 @@ class InteractiveGame:
         base_cmc = max(0, (base.cmc if base else 0) + extra - red)
         xc = max(1, getattr(card, "x_count", 1))        # maná por cada punto de X
         maxx = min(20, max(0, (p.available_mana() - base_cmc) // xc))
+        if (getattr(card, "additional_cost", None) or {}).get("exile_gy_x"):
+            maxx = min(maxx, sum(1 for c in p.graveyard if c is not card))
 
         def _apply(idx):
             x = idx if idx is not None else 0
@@ -1428,7 +1454,7 @@ class InteractiveGame:
                                          "cost": _cost_str_cost(cost) if cost else "0",
                                          "playable": cost is None or p.can_pay(cost)})
             for i, c in enumerate(p.graveyard):   # jugables desde el cementerio
-                gp = getattr(c, "gy_play", None) or {}
+                gp = self.g.gy_play_of(p, c)
                 if not gp:
                     continue
                 cost = gp.get("cost")
@@ -1543,6 +1569,12 @@ class InteractiveGame:
                             "target_spec": getattr(c, "target_spec", None) if _z == "warp" else None,
                             "target_count": getattr(c, "target_count", 1), "targets": _tg,
                             "modes": [], "mode_pick": 1})
+                _of = self.g.offering_option(p, c) if getattr(c, "offering_sub", None) else None
+                if _of:
+                    casts.append({
+                        "i": i, "name": f"{c.name} ({c.offering_sub} offering: sacrificar {_of[0].name})",
+                        "zone": "offering", "cost": _cost_str_cost(_of[1]), "target_spec": None,
+                        "target_count": 1, "targets": [], "modes": [], "mode_pick": 1})
                 _em = self.g.emerge_option(p, c) if getattr(c, "emerge_cost", None) else None
                 if _em:
                     casts.append({
@@ -1877,7 +1909,7 @@ class InteractiveGame:
             "modes": self._modes_for(c), "mode_pick": self.g.mode_pick_for(me, c),
         } for i, c in enumerate(me.hand)
             if _fast(c, self.g)
-            and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
+            and self._fast_payable(me, c)]
         return {
             "stage": "declare",
             "face_up": self._face_up_opts(),
@@ -1975,7 +2007,7 @@ class InteractiveGame:
             "modes": self._modes_for(c), "mode_pick": self.g.mode_pick_for(me, c),
         } for i, c in enumerate(me.hand)
             if _fast(c, self.g)
-            and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
+            and self._fast_payable(me, c)]
         return {
             "stage": "damage",
             "ninjutsu": self._ninjutsu_opts(),
@@ -2003,7 +2035,7 @@ class InteractiveGame:
             "targets": self._targets_for(c),
         } for i, c in enumerate(me.hand)
             if _fast(c, self.g)
-            and c.cost is not None and me.can_pay(self.g.effective_cost(me, c))]
+            and self._fast_payable(me, c)]
         # item 4: habilidades a velocidad de instante (permanentes y cementerio)
         abilities = []
         for pm in me.battlefield:
