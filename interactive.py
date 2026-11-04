@@ -680,6 +680,8 @@ class InteractiveGame:
         "any_planeswalker": lambda pm: "planeswalker" in pm.card.types,
         "any_nonland": lambda pm: not pm.card.is_land(),
         "any_perm": lambda pm: True,
+        "any_creature": lambda pm: pm.is_creature(),
+        "any_acel": lambda pm: pm.is_creature() or bool({"artifact", "enchantment", "land"} & set(pm.card.types)),
     }
 
     def _perm_pool(self, pred):
@@ -769,7 +771,7 @@ class InteractiveGame:
     # specs que EXIGEN al menos un objetivo (si no hay, la carta no se puede jugar).
     _MUST_TARGET = {"own_creature", "opp_creature", "opp_player", "own_perm",
                     "stack_spell", "any_artifact", "any_enchantment", "any_art_ench",
-                    "any_planeswalker", "any_nonland", "any_perm"}
+                    "any_planeswalker", "any_nonland", "any_perm", "any_acel"}
 
     def _has_legal_target(self, card, precomputed=None):
         """False sólo si la carta EXIGE objetivo, no es modal y no hay ninguno legal.
@@ -1695,6 +1697,8 @@ class InteractiveGame:
                     _lbl = f"Mover equipo (está en {_host.name})"
                 spec = ab.get("target_spec")
                 ab_tgts = self._targets_for_spec(spec)
+                if ab.get("not_self"):          # "becomes a copy of target …": no tiene sentido copiarse
+                    ab_tgts = [x for x in ab_tgts if x.get("uid") != pm.uid]
                 if (reason is None and spec in self._MUST_TARGET
                         and ab.get("target_count", 1) >= 1 and not ab_tgts):
                     reason = "sin objetivos legales"

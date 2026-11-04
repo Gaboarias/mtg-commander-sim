@@ -359,3 +359,33 @@ def test_killer_service_rhino():
     g.emit("end_step", player=me)
     run(g)
     assert any(x.name == "Rhino Warrior" for x in me.battlefield) and ks in me.battlefield
+
+
+def test_mirage_mirror_copies_target_until_end_of_turn():
+    g, me, ops = new_game()
+    mm = put(g, build("Mirage Mirror", "{3}", "Artifact", "{2}: This artifact becomes a copy of target artifact, "
+                      "creature, enchantment, or land until end of turn."), me)
+    dragon = put(g, creature("Dragon", "4RR", 6, 6, kw=("flying",)), ops[0])
+    ab = mm.card.activated_abilities[0]
+    assert ab["target_spec"] == "any_acel" and ab.get("not_self")
+    give_lands(g, me, 2)
+    g.active_index = 0
+    assert g.activate_ability(mm, 0, targets=[dragon])
+    run(g)
+    assert mm.name == "Dragon" and mm.power == 6 and mm.has("flying")
+    g.end_turn(me)
+    assert mm.name == "Mirage Mirror" and "artifact" in mm.card.types and not mm.is_creature()
+
+
+def test_mirage_mirror_copy_dies_as_original():
+    g, me, ops = new_game()
+    mm = put(g, build("Mirage Mirror", "{3}", "Artifact", "{2}: This artifact becomes a copy of target artifact, "
+                      "creature, enchantment, or land until end of turn."), me)
+    bear = put(g, creature("Bear", "1G", 2, 2), ops[0])
+    give_lands(g, me, 2)
+    g.active_index = 0
+    g.activate_ability(mm, 0, targets=[bear])
+    run(g)
+    g.destroy(mm)
+    run(g)
+    assert any(c.name == "Mirage Mirror" for c in me.graveyard) and not any(c.name == "Bear" for c in me.graveyard)

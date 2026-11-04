@@ -2188,6 +2188,58 @@ def _parse_activated_core0(oracle: str, name: str = ""):
                             "target_spec": "any_perm", "target_count": 1,
                             "is_copy_ability": False})
                 continue
+        # "~ becomes a copy of target artifact, creature, enchantment, or land until end of turn"
+        # (Mirage Mirror) y variantes: objetivo real (elegible en la UI) y vuelve a ser lo que era
+        # al final del turno. La carta real queda guardada (si muere, va la original al cementerio).
+        _mcp = re.search(r"becomes? a copy of target ((?:artifact|creature|enchantment|land|permanent)"
+                         r"(?:,? (?:or )?(?:artifact|creature|enchantment|land))*)( until end of turn)?\.?$",
+                         body.strip(), re.I)
+        if _mcp and "except" not in body.lower():
+            _kinds = set(re.findall(r"artifact|creature|enchantment|land|permanent", _mcp.group(1).lower()))
+            _eot = bool(_mcp.group(2))
+            _spec = ("any_perm" if "permanent" in _kinds else "any_creature" if _kinds == {"creature"}
+                     else "any_artifact" if _kinds == {"artifact"} else "any_acel")
+
+            def eff_become_copy(g, ctrl, perm, tg, _k=_kinds, _e=_eot):
+                def _ok(pm):
+                    return pm is not perm and pm in pm.controller.battlefield and (
+                        "permanent" in _k or bool(_k & set(pm.card.types)) or ("creature" in _k and pm.is_creature()))
+
+                def _do(target):
+                    if perm not in perm.controller.battlefield or not _ok(target):
+                        return
+                    src = target.card
+                    orig = getattr(perm.card, "_real", None) or perm.card
+                    old = perm.card
+                    nc = _b34_copy_into(g, perm, src, perm.controller)
+                    g.log(f"{orig.name} se vuelve una copia de {target.name}"
+                          + (" hasta el fin del turno" if _e else ""))
+                    if _e:
+                        def _back(gg, _p=perm, _nc=nc, _o=old):
+                            if _p.card is _nc:
+                                _p.card = _o
+                                gg._drop_proxy(_nc)
+                                gg.log(f"{_p.name} vuelve a ser {_o.name}")
+                        g.delayed_end.append(_back)
+                    g.sba()
+                chosen = [x for x in (tg or ()) if hasattr(x, "card") and _ok(x)]
+                if chosen:
+                    _do(chosen[0])
+                    return
+                cands = [pm for pl in g.players for pm in pl.battlefield if _ok(pm) and g.can_target(ctrl, pm)]
+                cands.sort(key=lambda pm: -((pm.power + pm.toughness) if pm.is_creature() else _b31_cmc(pm.card)))
+                _choose_tgt(g, ctrl, cands, f"{perm.name}: ¿de qué se vuelve copia?", _do)
+            out.append({"cost": cost, "tap": tap, "sacrifice_self": sac_self, "exile_self": exile_self,
+                        "rm_counter": rm_counter, "sacrifice_other": sac_other, "pay_life": pay_life,
+                        "discard": discard,
+                        "label": ("Volverse copia de " + " / ".join(
+                            {"artifact": "artefacto", "creature": "criatura", "enchantment": "encantamiento",
+                             "land": "tierra", "permanent": "permanente"}[k]
+                            for k in ("artifact", "creature", "enchantment", "land", "permanent") if k in _kinds)
+                                  + (" hasta fin de turno" if _eot else "")),
+                        "effect": eff_become_copy, "not_self": True,
+                        "target_spec": _spec, "target_count": 1, "is_copy_ability": False})
+            continue
         # "~ becomes a copy of target land, except it has this ability" (Thespian's
         # Stage). Copia la carta OBJETIVO sobre el permanente fuente SIN copiar los
         # contadores ni re-disparar el ETB -> si copia Dark Depths, queda con 0

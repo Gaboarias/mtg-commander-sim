@@ -4613,6 +4613,8 @@ class Game:
         and "planeswalker" in o.card.types,
         "any_nonland": lambda o: isinstance(o, Permanent) and not o.card.is_land(),
         "any_perm": lambda o: isinstance(o, Permanent),
+        "any_acel": lambda o: isinstance(o, Permanent) and (
+            o.is_creature() or bool({"artifact", "enchantment", "land"} & set(o.card.types))),
         "own_perm": lambda o: isinstance(o, Permanent),
         "stack_spell": lambda o: isinstance(o, StackObject),
         "stack_ability": lambda o: isinstance(o, StackObject),

@@ -668,6 +668,7 @@ class Policy:
         "any_planeswalker": lambda pm: "planeswalker" in pm.card.types,
         "any_nonland": lambda pm: not pm.card.is_land(),
         "any_perm": lambda pm: True,
+        "any_acel": lambda pm: pm.is_creature() or bool({"artifact", "enchantment", "land"} & set(pm.card.types)),
     }
 
     def _perm_target_rank(self, pm):
