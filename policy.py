@@ -553,7 +553,8 @@ class Policy:
         - descartar: solo con mano de sobra (descarta lo peor).
         - sacrificar OTRA: solo si hay 'carne' prescindible (ficha o cuerpo chico) y
           no es nuestra única criatura."""
-        pay_life = ab.get("pay_life") or 0
+        _g = getattr(perm, "game", None)
+        pay_life = _g.life_cost(me, ab) if _g is not None else (ab.get("pay_life") if isinstance(ab.get("pay_life"), int) else 0)
         disc = ab.get("discard") or 0
         sac_o = ab.get("sacrifice_other")
         if pay_life and me.life - pay_life < 12:

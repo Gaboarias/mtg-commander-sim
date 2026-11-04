@@ -4482,9 +4482,7 @@ class Game:
             tap_victims = pool[:to["n"]]
         # costes adicionales: verificar que se pueden pagar ANTES de tocar nada.
         sac_o = ab.get("sacrifice_other")
-        pay_life = ab.get("pay_life") or 0
-        if pay_life == "cmd_colors":                 # War Room: colores de tu identidad de comandante
-            pay_life = len(ctrl.identity())
+        pay_life = self.life_cost(ctrl, ab)
         disc = ab.get("discard") or 0
         sac_victims = []
         if sac_o:
@@ -5170,6 +5168,17 @@ class Game:
         self.sba()
         return True
 
+    def life_cost(self, p, ab) -> int:
+        """Vida a pagar por una habilidad: número fijo o 'cmd_colors' (War Room: tantos como
+        colores de tu identidad de comandante)."""
+        v = (ab or {}).get("pay_life") or 0
+        if v == "cmd_colors":
+            return len(p.identity())
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+
     def _unsacrificable(self, perm) -> bool:
         """Assault Suit: 'equipped creature … can't be sacrificed'."""
         return any(getattr(x.card, "suit_no_sac", False) and getattr(x, "enchanting", None) is perm
@@ -5367,11 +5376,12 @@ class Game:
         if card not in p.hand or not (0 <= index < len(abils)):
             return False
         ab = abils[index]
-        if not p.can_pay(ab["cost"]) or (ab.get("pay_life") and p.life <= ab["pay_life"]):
+        _pl = self.life_cost(p, ab)
+        if not p.can_pay(ab["cost"]) or (_pl and p.life <= _pl):
             return False
         p.pay(ab["cost"])
-        if ab.get("pay_life"):
-            p.life -= ab["pay_life"]
+        if _pl:
+            p.life -= _pl
         p.hand.remove(card)
         if ab.get("exile_from_hand"):
             p.exile.append(card)

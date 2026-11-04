@@ -389,7 +389,8 @@ class InteractiveGame:
                                                  exclude=pm)
             if len(cands) < sac_o["count"]:
                 return f"sin {sac_o['type']} que sacrificar"
-        if (ab.get("pay_life") or 0) and p.life <= ab["pay_life"]:
+        _pl = self.g.life_cost(p, ab)
+        if _pl and p.life <= _pl:
             return "sin vida"
         disc = ab.get("discard") or 0
         if disc > 0 and len(p.hand) < disc:

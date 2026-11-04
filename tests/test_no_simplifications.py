@@ -389,3 +389,18 @@ def test_mirage_mirror_copy_dies_as_original():
     g.destroy(mm)
     run(g)
     assert any(c.name == "Mirage Mirror" for c in me.graveyard) and not any(c.name == "Bear" for c in me.graveyard)
+
+
+def test_war_room_life_cost_in_ui_and_bot():
+    """pay_life 'cmd_colors' rompía legal() de la UI ('<=' entre int y str)."""
+    import interactive
+    ig = interactive.from_registered(["lorehold", "kang"], human_index=0, seed=3)
+    g, me = ig.g, ig.human()
+    wr = g.move_to_battlefield(build("War Room", "", "Land", "{T}: Add {C}.\n{3}, {T}, Pay life equal to the number of "
+                                     "colors in your commanders' color identity: Draw a card."), me)
+    ab = wr.card.activated_abilities[-1]
+    assert ab.get("pay_life") == "cmd_colors" and g.life_cost(me, ab) == len(me.identity())
+    st = ig.state()                                 # no debe lanzar TypeError
+    assert any(a["uid"] == wr.uid for a in st["legal"]["abilities"])
+    bot = [p for p in g.players if p is not me][0]
+    assert bot.policy._agg_cost_ok(bot, wr, ab) in (True, False)
