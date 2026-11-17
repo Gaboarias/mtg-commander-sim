@@ -54,6 +54,11 @@ KEYWORDS = {
     "phasing", "ingest",
 }
 
+# contadores de habilidad (flying/indestructible/… counter): mientras esté el contador,
+# el permanente tiene esa habilidad (y la pierde al quitarlo; proliferar los suma).
+KW_COUNTERS = {"flying", "first_strike", "double_strike", "deathtouch", "hexproof", "indestructible",
+               "lifelink", "menace", "reach", "trample", "vigilance", "shadow"}
+
 _LANDWALK = {"islandwalk": "island", "swampwalk": "swamp", "forestwalk": "forest",
              "mountainwalk": "mountain", "plainswalk": "plains", "desertwalk": "desert"}
 
@@ -387,6 +392,7 @@ class Permanent:
         if self.abilities_off():
             return set()
         ks = set(self.card.keywords) | self.temp_keywords | self.perma_keywords
+        ks |= {k for k, v in self.counters.items() if v > 0 and k in KW_COUNTERS}
         if getattr(self.card, "cond_keywords", None) or getattr(self, "_paired", None):
             ks |= self._cond_kws()
         return ks
@@ -472,6 +478,8 @@ class Permanent:
             return False                 # "loses flying until end of turn"
         if kw in self.card.keywords or kw in self.temp_keywords or kw in self.perma_keywords:
             return True
+        if kw in KW_COUNTERS and self.counters.get(kw, 0) > 0:
+            return True                  # contador de habilidad
         if (getattr(self.card, "cond_keywords", None) or getattr(self, "_paired", None)) \
                 and kw in self._cond_kws():
             return True
@@ -988,6 +996,10 @@ class Player:
                 if id(perm) in _seen:
                     continue
                 _seen.add(id(perm))
+                if getattr(perm.card, "solar_array", False):
+                    self._solar_turn = g.turn      # Solar Array: el próximo artefacto gana sunburst
+                if getattr(perm.card, "mana_tap_charge", False) and perm in perm.controller.battlefield:
+                    g.add_counters(perm, "charge", 1)   # Empowered Autogenerator (el X ya lo contó)
                 if _ench or "becomes_tapped" in (perm.card.triggers or {}):
                     g._push_self_trigger(perm, "becomes_tapped", "se gira")
         self.mana_pool -= use
@@ -1346,6 +1358,13 @@ class Game:
                             and pm.enchanting in pm.enchanting.controller.battlefield else None),
             "attached_name": (pm.enchanting.name if isinstance(getattr(pm, "enchanting", None), Permanent)
                               and pm.enchanting in pm.enchanting.controller.battlefield else None),
+            # station: carga actual, próximo umbral y en cuál pasa a ser criatura (la UI lo muestra)
+            "station": ({"charge": pm.counters.get("charge", 0),
+                         "tiers": list(getattr(pm.card, "station_tiers", ()) or ()),
+                         "creature_at": getattr(pm.card, "station_creature_at", 0) or None,
+                         "next": next((t for t in (getattr(pm.card, "station_tiers", ()) or ())
+                                       if t > pm.counters.get("charge", 0)), None)}
+                        if getattr(pm.card, "station_max", 0) else None),
         }
 
     def _player_state(self, p: "Player") -> dict:
@@ -1479,6 +1498,9 @@ class Game:
         ctrl = perm.controller
         # "<tipo> (you control) have <kw>" (Greater Auramancy, Akroma's Devoted, Aysen Highway…)
         for src in self.all_permanents():
+            _gg = getattr(src.card, "grant_gate_charge", 0)
+            if _gg and src.counters.get("charge", 0) < _gg:
+                continue                 # station: lo que otorga solo vale desde N contadores de carga
             for _gp, _gk, _gs, _go in (getattr(src.card, "kind_grants", None) or ()):
                 if kw in _gk and not src.abilities_off() and (_gs == "all" or src.controller is ctrl) \
                         and not (_go and src is perm):
@@ -1493,10 +1515,15 @@ class Game:
         for src in self.all_permanents():
             if src.enchanting is perm and kw in (getattr(src.card, "aura_keywords", None) or set()):
                 return True
+            if src.enchanting is perm and not src.abilities_off():
+                for _aks, _acf in (getattr(src.card, "aura_kw_cond", None) or ()):
+                    if kw in _aks and _acf(src):
+                        return True      # "as long as this Equipment has N+ counters, equipped … has X"
         # anthems estáticos que dan keyword a las criaturas de su controlador
         for src in self.all_permanents():
             ak = getattr(src.card, "anthem_keywords", None)
-            if ak and kw in ak and src.controller is ctrl:
+            _gg = getattr(src.card, "grant_gate_charge", 0)
+            if ak and kw in ak and src.controller is ctrl and not (_gg and src.counters.get("charge", 0) < _gg):
                 asub = getattr(src.card, "anthem_subtype", None)
                 if asub and not perm.has_subtype(asub):
                     continue                    # lord por subtipo: solo ese tipo
@@ -2213,6 +2240,17 @@ class Game:
                 n = max(0, getattr(self, "spell_x", 0) or 0)
             if n:
                 perm.counters[kind] = perm.counters.get(kind, 0) + n
+        # Sunburst / Converge: un contador por cada COLOR de maná gastado al lanzarla
+        # (+1/+1 si es criatura, de carga si no). Lux Artillery / Solar Array lo otorgan.
+        if getattr(card, "_resolving_cast", False) and (getattr(card, "sunburst", False)
+                                                       or getattr(card, "_sunburst_grant", False)
+                                                       or getattr(card, "converge_ctr", None)):
+            _ncol = len({c for c in (getattr(card, "_colors_spent", None) or ()) if c in ("W", "U", "B", "R", "G")})
+            _kind = getattr(card, "converge_ctr", None) or ("+1/+1" if card.is_creature() else "charge")
+            if _ncol:
+                perm.counters[_kind] = perm.counters.get(_kind, 0) + _ncol
+                self.log(f"{card.name} entra con {_ncol} contador(es) {_kind} (sunburst/converge)")
+            card._sunburst_grant = False
         if card.is_creature() or "creature" in card.types:
             # "nontoken creatures you control have riot" (Rhythm of the Wild)
             if any((gr := getattr(src.card, "grant_riot", None)) and src is not perm and not src.abilities_off()
@@ -3143,6 +3181,16 @@ class Game:
         return True
 
     def sba(self):
+        # "when this artifact has twenty or more charge counters on it, you win the game" (Darksteel Reactor)
+        for _pl in self.players:
+            if _pl.lost:
+                continue
+            for _pm in _pl.battlefield:
+                _wc = getattr(_pm.card, "win_charge", 0)
+                if _wc and _pm.counters.get("charge", 0) >= _wc and not _pm.abilities_off():
+                    for _o in self.opponents(_pl):
+                        _o.lost = True
+                    self.log(f"{_pl.name} gana la partida ({_pm.name}: {_pm.counters['charge']} contadores de carga)")
         changed = True
         while changed:
             changed = False
@@ -3764,6 +3812,10 @@ class Game:
             return False
         card._mana_spent = pay_cost.cmc if pay_cost is not None else 0
         card._colors_spent = list(getattr(player, "_last_plan_colors", []) or [])
+        # Solar Array: "when you next cast an artifact spell this turn, that spell gains sunburst"
+        if getattr(player, "_solar_turn", None) == self.turn and "artifact" in card.types:
+            card._sunburst_grant = True
+            player._solar_turn = None
         _bx = getattr(card, "_behold_exile", None)
         if _bx is not None:                       # "behold a <tipo> and exile it"
             card._behold_exile = None
@@ -4197,6 +4249,7 @@ class Game:
                (isinstance(t, Permanent) and t.controller is not caster) for t in (targets or [])):
             caster._crime_turn = self.turn
             self.emit("crime", player=caster)        # "whenever you commit a crime"
+            self.emit("opp_crime", criminal=caster)  # "whenever an opponent commits a crime"
         for t in (targets or []):
             if isinstance(t, Permanent) and t in t.controller.battlefield:
                 self._push_self_trigger(t, "becomes_target_spell" if spell else "becomes_target_ability",
@@ -4447,7 +4500,20 @@ class Game:
         # habilidad con {X}: el coste efectivo suma X maná genérico.
         base_cost = ab.get("cost")
         xv = max(0, int(x)) if ab.get("x_cost") else 0
-        pay_cost = Cost(base_cost.generic + xv, base_cost.pips) if (xv and base_cost) else base_cost
+        _xc = ab.get("x_counters")
+        _xsrc = None
+        if _xc:
+            # "Remove X counters from an artifact or creature you control" (Moxite Refinery): X lo
+            # elige quien activa; no es maná. Fuente: la elegida (UI) o la de más contadores.
+            xv = max(0, int(x or 0))
+            _pool = [pm for pm in ctrl.battlefield if (pm.is_creature() or "artifact" in pm.card.types)
+                     and sum(v for v in pm.counters.values() if v > 0) >= max(1, xv)]
+            _xsrc = getattr(self, "_xctr_src", None)
+            if _xsrc not in _pool:
+                _xsrc = max(_pool, key=lambda pm: sum(v for v in pm.counters.values() if v > 0), default=None)
+            if _xsrc is None or xv < 1:
+                return False
+        pay_cost = Cost(base_cost.generic + xv, base_cost.pips) if (xv and base_cost and ab.get("x_cost")) else base_cost
         _red, _floor1 = 0, False
         for _pm in ctrl.battlefield:
             _r = getattr(_pm.card, "ab_cost_red", None)
@@ -4465,6 +4531,16 @@ class Game:
             if _floor1 and _g == 0 and not pay_cost.pips:
                 _g = 1                   # "can't reduce … to less than one mana"
             pay_cost = Cost(_g, pay_cost.pips)
+        _phy_life = 0
+        for _pc in (ab.get("phy_pips") or ()):
+            # maná phyrexiano ({U/P}): con maná del color si alcanza, si no 2 de vida
+            _trial = Cost(pay_cost.generic, tuple(pay_cost.pips) + (_pc,))
+            if ctrl.can_pay(_trial, exclude=excl):
+                pay_cost = _trial
+            else:
+                _phy_life += 2
+        if _phy_life and ctrl.life <= _phy_life:
+            return False
         if not ctrl.can_pay(pay_cost, exclude=excl):
             return False
         # "girá N <tipo> enderezados que controles" (cohort, etc.)
@@ -4509,6 +4585,13 @@ class Game:
         ctrl.pay(pay_cost, exclude=excl)
         for tv in tap_victims:
             tv.tapped = True
+        if _xsrc is not None:
+            _left = xv
+            for _ck in sorted(_xsrc.counters, key=lambda k: (k in ("+1/+1", "loyalty"), -_xsrc.counters[k])):
+                _t = min(_left, max(0, _xsrc.counters.get(_ck, 0)))
+                _xsrc.counters[_ck] -= _t
+                _left -= _t
+            self.log(f"{ctrl.name} quita {xv} contador(es) de {_xsrc.name} (coste)")
         self._mark_ability_used(perm, index, ab)
         if ab.get("tap") and not perm.tapped:
             self._push_self_trigger(perm, "becomes_tapped", "se gira")
@@ -4532,6 +4615,9 @@ class Game:
         if pay_life:
             ctrl.life -= pay_life
             self.log(f"{ctrl.name} paga {pay_life} de vida (coste)")
+        if _phy_life:
+            ctrl.life -= _phy_life
+            self.log(f"{ctrl.name} paga {_phy_life} de vida (maná phyrexiano)")
         for _act in _xpay:
             _act()
         if _eng:
@@ -4614,6 +4700,9 @@ class Game:
         "any_acel": lambda o: isinstance(o, Permanent) and (
             o.is_creature() or bool({"artifact", "enchantment", "land"} & set(o.card.types))),
         "own_perm": lambda o: isinstance(o, Permanent),
+        "ben_artifact": lambda o: isinstance(o, Permanent) and "artifact" in o.card.types,
+        "ben_creature": lambda o: isinstance(o, Permanent) and o.is_creature(),
+        "own_nt_artifact": lambda o: isinstance(o, Permanent) and "artifact" in o.card.types and not o.is_token,
         "stack_spell": lambda o: isinstance(o, StackObject),
         "stack_ability": lambda o: isinstance(o, StackObject),
     }
@@ -4753,6 +4842,33 @@ class Game:
                     if kk:
                         _v.counters[kk] = _v.counters.get(kk, 0) - _n
                 acts.append(_rm)
+            elif kind == "rm_ctr_among":
+                # "Remove N counters from among other artifacts, creatures, and planeswalkers you control"
+                # (Tekuthal): se reparten entre varios; primero los contadores malos y la carga sobrante.
+                def _okp(pm, _c=cls):
+                    return pm is not perm and (pm.is_creature() or bool({"artifact", "planeswalker"} & pm.card.types))
+                units = []
+                for pm in ctrl.battlefield:
+                    if not _okp(pm):
+                        continue
+                    for k, c in pm.counters.items():
+                        for i in range(max(0, c)):
+                            _smax = getattr(pm.card, "station_max", 0) or 0
+                            pri = (0 if k in ("-1/-1", "stun") else
+                                   1 if k == "charge" and _smax and c - i > _smax else
+                                   2 if k == "charge" and not _smax and not getattr(pm.card, "uses_charge", False) else
+                                   4 if k in ("loyalty", "+1/+1") else 3)
+                            units.append((pri, -c, pm.uid, pm, k))
+                if len(units) < n:
+                    return None
+                units.sort(key=lambda u: u[:3])
+
+                def _rma(_us=[(u[3], u[4]) for u in units[:n]]):
+                    for _v, _k in _us:
+                        if _v.counters.get(_k, 0) > 0:
+                            _v.counters[_k] -= 1
+                    self.log(f"{ctrl.name} quita {len(_us)} contadores de entre sus permanentes (coste)")
+                acts.append(_rma)
             elif kind == "put_counter_self":
                 acts.append(lambda _k=cls, _n=n: self.add_counters(perm, _k, _n))
             elif kind == "hand_top":
@@ -4825,6 +4941,8 @@ class Game:
             amt, filt = disc
             if getattr(filt, "_wp", False):          # filtro que mira al jugador (orden del hechizo)
                 ok = filt(card, player, self)
+            elif getattr(filt, "_pm", False):        # filtro que depende del permanente (Cloud Key: tipo elegido)
+                ok = filt(card, pm)
             else:
                 ok = filt(card) if callable(filt) else (filt == "any"
                   or (filt == "creature" and "creature" in types)
@@ -5189,6 +5307,8 @@ class Game:
         otorgado (Lier: 'each instant and sorcery card in your graveyard has flashback; the
         flashback cost is equal to that card's mana cost')."""
         gp = getattr(card, "gy_play", None) or {}
+        if getattr(card, "_gy_cast_turn", None) == self.turn and getattr(card, "_gy_cast_by", None) is p:
+            return {"mode": "gy_cast", "cost": card.cost, "after": "graveyard"}   # Emry: "you may cast that card this turn"
         if gp:
             return gp
         if {"instant", "sorcery"} & card.types and card.cost is not None and any(
@@ -6423,17 +6543,36 @@ class Game:
         self.log(f"{p.name} ensilla a {perm.name}")
         return True
 
-    def station(self, p: "Player", perm: Permanent) -> bool:
+    def station_pool(self, p: "Player", perm: Permanent) -> list:
+        """Criaturas que pueden girarse para cargar `perm` (otra criatura tuya, enderezada;
+        el mareo de invocación no importa: girarla es un coste, no su habilidad de {T})."""
+        return [pm for pm in p.creatures() if pm is not perm and not pm.tapped
+                and pm.attacking is None and pm.power > 0]
+
+    def station(self, p: "Player", perm: Permanent, creature=None) -> bool:
         """Station: girá otra criatura tuya: pone contadores de carga iguales a su
-        fuerza en la nave (Spacecraft)."""
-        avail = [pm for pm in p.creatures() if pm is not perm and not pm.tapped
-                 and pm.attacking is None and pm.power > 0]
+        fuerza en la nave (Spacecraft). El humano elige cuál gira; el bot, una con mareo
+        de invocación (no iba a atacar) y la de más fuerza."""
+        avail = self.station_pool(p, perm)
         if not avail:
             return False
-        c = max(avail, key=lambda x: (x.summoning_sick, x.power))
-        c.tapped = True
-        self.add_counters(perm, "charge", c.power)
-        self.log(f"{p.name} carga {perm.name} con {c.name} (+{c.power})")
+
+        def _do(c):
+            if c not in p.battlefield or c.tapped or perm not in p.battlefield:
+                return
+            c.tapped = True
+            self.add_counters(perm, "charge", max(0, c.power))
+            self.log(f"{p.name} carga {perm.name} con {c.name} (+{c.power}: {perm.counters.get('charge', 0)} de carga)")
+        if creature is not None and creature in avail:
+            _do(creature)
+            return True
+        if p is getattr(self, "interactive_human", None):
+            import cardsdb as _cdb
+            avail.sort(key=lambda x: (-x.power, x.name))
+            _cdb._choose_tgt(self, p, avail, f"Station: ¿qué criatura girás para cargar {perm.name}?", _do,
+                             allow_none=True)
+            return True
+        _do(max(avail, key=lambda x: (x.summoning_sick, x.power)))
         return True
 
     def champion_etb(self, ctrl: "Player", perm: Permanent, kind: str):
@@ -6780,6 +6919,7 @@ class Game:
         finally:
             self._cur_declared = None
         if declared:
+            self._last_declared = list(declared)
             self.emit("you_attack", player=p)    # "whenever you attack"
             self._curse_attack_triggers(p, declared)
         return declared
@@ -6853,7 +6993,7 @@ class Game:
                         else a.attacking.controller) for a in declared}
         nplayers = len(opp_players)
         for a in declared:
-            if getattr(a.card, "melee", False) and nplayers:
+            if (getattr(a.card, "melee", False) or self.grants_keyword(a, "melee")) and nplayers:
                 a.temp_pt[0] += nplayers
                 a.temp_pt[1] += nplayers
                 self.log(f"Melé: {a.name} recibe +{nplayers}/+{nplayers}")

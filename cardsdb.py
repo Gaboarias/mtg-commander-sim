@@ -1507,10 +1507,7 @@ def _fragment_effect(seg: str):
         ninc = _count_word(minc.group(1))
 
         def incubate(game, ctrl, targets, _n=ninc):
-            tok = cards.make_token(game, ctrl, "Phyrexian", 0, 0, subtypes=("Phyrexian",))
-            if tok is not None:
-                game.add_counters(tok, "+1/+1", _n)
-                game.log(f"Incubar {_n}")
+            _incubate(game, ctrl, _n)
         return incubate, None, 1
     # girar una criatura objetivo (acepta el rider "does not untap…"; solo evita
     # confundirse con "untap target creature", que es lo contrario)
@@ -5685,13 +5682,8 @@ def _exile_all_creatures_effect(oracle: str):
                 _poly(game)
         if _inc and n > 0:
             # Incubate X: ficha Incubator (artefacto) con X contadores +1/+1 y
-            # "{2}: transformar" en una 0/0 Phyrexian. La aproximamos como un
-            # artefacto-criatura durmiente X/X que entra sin poder atacar aún.
-            tok = cards.make_token(game, ctrl, "Incubator", 0, 0,
-                                   subtypes=("Phyrexian",), counters=n)
-            if tok is not None:
-                tok.card.types = set(tok.card.types) | {"artifact"}
-            game.log(f"{ctrl.name}: incuba X={n} (ficha {n}/{n})")
+            # "{2}: Transform" en una Phyrexian 0/0 artefacto-criatura.
+            _incubate(game, ctrl, n)
     return eff
 
 
@@ -14576,16 +14568,7 @@ def _generic_amount_single_core(oracle: str):
     # proliferate: +1 a cada tipo de contador ya presente (en cualquier permanente).
     if re.search(r"\bproliferate\b", t):
         def eff(game, ctrl, *_a):
-            for pl in game.players:
-                for pm in pl.battlefield:
-                    for k in list(pm.counters.keys()):
-                        if pm.counters.get(k, 0) > 0:
-                            if k == "+1/+1":
-                                game.add_counters(pm, k, 1)
-                            else:
-                                pm.counters[k] += 1
-            game.sba()
-            game.log(f"{ctrl.name} prolifera")
+            _proliferate(game, ctrl)
         return eff
 
     # otorgar keyword(s) EN MASA a tus criaturas hasta el fin del turno
@@ -15770,6 +15753,210 @@ def _b31_steal(game, ctrl, tgt, why=""):
     tgt.summoning_sick = True
     tgt.attacking = None
     game.log(f"{ctrl.name} toma el control de {tgt.name}{why}")
+
+
+_BAD_COUNTERS = {"-1/-1", "stun", "poison", "rad", "doom", "bounty", "hit", "decayed", "shield_off", "finality",
+                 "slumber", "time_bad"}
+
+
+def _proliferate(game, ctrl, times=None, on_done=None):
+    """Proliferate: elegí cualquier cantidad de permanentes y/o jugadores con contadores y
+    cada uno recibe uno más de CADA tipo que ya tiene. El humano elige; el bot suma en lo suyo
+    los contadores buenos y en lo rival los malos. Tekuthal: 'if you would proliferate,
+    proliferate twice instead'."""
+    if times is None:
+        times = 2 if any(getattr(pm.card, "proliferate_twice", False) and not pm.abilities_off()
+                         for pm in ctrl.battlefield) else 1
+
+    def _player_ctr(pl):
+        out = {}
+        for k in ("poison", "rad", "energy", "experience"):
+            v = getattr(pl, k, 0) or 0
+            if v > 0:
+                out[k] = v
+        return out
+
+    _all = []
+
+    def _apply(objs):
+        _all.extend(o for o in objs if o not in _all)
+        for o in objs:
+            if hasattr(o, "battlefield"):            # jugador
+                for k in _player_ctr(o):
+                    setattr(o, k, getattr(o, k, 0) + 1)
+            elif o in o.controller.battlefield:
+                for k in [k for k, v in o.counters.items() if v > 0]:
+                    game.add_counters(o, k, 1) if k in ("+1/+1", "-1/-1", "charge", "loyalty") \
+                        else o.counters.__setitem__(k, o.counters[k] + 1)
+        game.sba()
+        game.log(f"{ctrl.name} prolifera" + (f" ({len(objs)} elegidos)" if objs else " (nada elegido)"))
+
+    def _cands():
+        perms = [pm for pl in game.players for pm in pl.battlefield if any(v > 0 for v in pm.counters.values())]
+        pls = [pl for pl in game.players if not pl.lost and _player_ctr(pl)]
+        return perms, pls
+
+    def _bot_pick():
+        perms, pls = _cands()
+        mine = lambda o: (o is ctrl) if hasattr(o, "battlefield") else (o.controller is ctrl)  # noqa: E731
+        out = []
+        for pm in perms:
+            ks = [k for k, v in pm.counters.items() if v > 0]
+            good = sum(1 for k in ks if k not in _BAD_COUNTERS)
+            bad = len(ks) - good
+            if (mine(pm) and good > bad) or (not mine(pm) and bad > good):
+                out.append(pm)
+        for pl in pls:
+            ks = _player_ctr(pl)
+            if (pl is ctrl and any(k in ("energy", "experience") for k in ks)) or \
+                    (pl is not ctrl and any(k in ("poison", "rad") for k in ks)):
+                out.append(pl)
+        return out
+
+    def _one(k_left):
+        if k_left <= 0:
+            if on_done is not None:
+                on_done([o for o in _all if not hasattr(o, "battlefield")])
+            return
+        if ctrl is getattr(game, "interactive_human", None):
+            perms, pls = _cands()
+            opts = [(_tgt_label(game, pm) + " — " + ", ".join(f"{v} {k}" for k, v in pm.counters.items() if v > 0), pm)
+                    for pm in perms]
+            opts += [((f"Vos" if pl is ctrl else pl.name) + " — " + ", ".join(f"{v} {k}" for k, v in
+                                                                             _player_ctr(pl).items()), pl) for pl in pls]
+            if not opts:
+                game.log(f"{ctrl.name} prolifera (no hay contadores)")
+                _one(k_left - 1)
+                return
+            chosen = []
+            pre = set(id(o) for o in _bot_pick())
+
+            def _step():
+                left = [(lb, o) for lb, o in opts if o not in chosen]
+                if not left:
+                    _apply(chosen)
+                    _one(k_left - 1)
+                    return
+                _human_target_choice(
+                    game, ctrl, "etb_target",
+                    "Proliferar" + (f" ({times - k_left + 1}/{times})" if times > 1 else "")
+                    + f": elegí qué recibe un contador más ({len(chosen)} elegidos; Ninguna = terminar)",
+                    [(("★ " if id(o) in pre else "") + lb, o) for lb, o in left],
+                    lambda o: (chosen.append(o), _step()), allow_none=True,
+                    on_none=lambda: (_apply(chosen), _one(k_left - 1)))
+            _route_choice(game, ctrl, _step, lambda: (_apply(_bot_pick()), _one(k_left - 1)))
+            return
+        _apply(_bot_pick())
+        _one(k_left - 1)
+    _one(times)
+
+
+def _station_tier_card(data, name, text):
+    """Arma el texto de un nivel de station como una carta suelta (mismos tipos y nombre)
+    para reutilizar todo el parser de habilidades."""
+    return build_card_from_data({
+        "name": name, "mana_cost": data.get("mana_cost", ""), "type_line": data.get("type_line", ""),
+        "oracle_text": text, "keywords": [], "color_identity": data.get("color_identity", []),
+        "power": data.get("power"), "toughness": data.get("toughness")})
+
+
+def _station_merge(card, sub, thr, gate, ckw):
+    """Suma a `card` las habilidades del nivel `thr` (carta `sub`), activas solo con N+
+    contadores de carga: disparadas, estáticas de P/T, otorgadas, keywords y activadas."""
+    for k, cb in (sub.triggers or {}).items():
+        def _g(g, perm, _cb=cb, **kw):
+            if gate(perm):
+                return _cb(g, perm, **kw)
+        prev = (card.triggers or {}).get(k)
+        card.triggers = dict(card.triggers or {})
+        card.triggers[k] = _g if prev is None else (lambda g, perm, _a=prev, _b=_g, **kw: (_a(g, perm, **kw),
+                                                                                          _b(g, perm, **kw)))
+    if sub.static_mod is not None:
+        _sm, _prev = sub.static_mod, card.static_mod
+
+        def _gsm(src, target, _sm=_sm, _p=_prev):
+            a = _p(src, target) if _p is not None else (0, 0)
+            b = _sm(src, target) if gate(src) else (0, 0)
+            a, b = (a or (0, 0)), (b or (0, 0))
+            return (a[0] + b[0], a[1] + b[1])
+        card.static_mod = _gsm
+    for attr in ("anthem_keywords", "anthem_others", "anthem_subtype"):
+        if getattr(sub, attr, None):
+            setattr(card, attr, getattr(sub, attr))
+    if getattr(sub, "anthem_keywords", None):
+        card.grant_gate_charge = thr
+    if getattr(sub, "kind_grants", None):
+        card.kind_grants = tuple(getattr(card, "kind_grants", ()) or ()) + tuple(sub.kind_grants)
+        card.grant_gate_charge = thr
+    if getattr(sub, "cond_anthem_kw", None):
+        card.cond_anthem_kw = tuple(getattr(card, "cond_anthem_kw", ()) or ()) + tuple(
+            (o, s_, sc, kws, (lambda g, p, _c=cnd: _c(g, p) and gate(getattr(g, "_static_src", None))))
+            for (o, s_, sc, kws, cnd) in sub.cond_anthem_kw)
+    for w in (sub.keywords or ()):
+        ckw.append((w, gate))
+    for ab in (sub.activated_abilities or ()):
+        if str(ab.get("label", "")).startswith("Cargar"):
+            continue
+        card.activated_abilities = tuple(card.activated_abilities or ()) + (dict(ab, station_req=thr),)
+
+
+def _station_custom(card, text, thr, gate):
+    """Niveles de station con textos que el parser general no cubre."""
+    t = re.sub(r"\s+", " ", text.lower())
+    # Inspirit: "at the beginning of combat on your turn, put your choice of a +1/+1 counter or
+    # two charge counters on up to one other target artifact"
+    if "at the beginning of combat on your turn, put your choice of a +1/+1 counter or two charge counters on up to " \
+       "one other target artifact" in t:
+        def _insp(g, perm, **kw):
+            c = perm.controller
+            if kw.get("player") not in (None, c) or not gate(perm):
+                return
+            arts = [x for x in c.battlefield if x is not perm and "artifact" in x.card.types]
+
+            def _wants_charge(x):
+                return (getattr(x.card, "station_max", 0) and x.counters.get("charge", 0) < x.card.station_max) \
+                    or getattr(x.card, "uses_charge", False)
+            # bot: naves por debajo de su umbral / artefactos que usan carga, luego criaturas artefacto
+            arts.sort(key=lambda x: (-(1 if _wants_charge(x) else 0), -(1 if x.is_creature() else 0),
+                                     -(x.power if x.is_creature() else 0)))
+            if c is not getattr(g, "interactive_human", None):
+                arts = [x for x in arts if _wants_charge(x) or x.is_creature()]
+
+            def _put(x):
+                def _apply(kind):
+                    if x not in x.controller.battlefield:
+                        return
+                    if kind == "+1/+1":
+                        g.add_counters(x, "+1/+1", 1)
+                        g.log(f"{perm.name}: un contador +1/+1 sobre {x.name}")
+                    else:
+                        g.add_counters(x, "charge", 2)
+                        g.log(f"{perm.name}: dos contadores de carga sobre {x.name}")
+                opts = [("Un contador +1/+1", "+1/+1"), ("Dos contadores de carga", "charge")]
+                if c is getattr(g, "interactive_human", None):
+                    _route_choice(g, c, lambda: _human_target_choice(
+                        g, c, "etb_target", f"{perm.name}: ¿qué contador ponés sobre {x.name}?", opts, _apply),
+                        lambda: None)
+                else:
+                    _bot_k = "charge" if _wants_charge(x) and not (
+                        x.is_creature() and not getattr(x.card, "uses_charge", False)
+                        and not getattr(x.card, "station_max", 0)) else "+1/+1"
+                    _apply(_bot_k)
+            _choose_tgt(g, c, arts, f"{perm.name}: ¿sobre qué otro artefacto ponés el contador?", _put,
+                        allow_none=True)
+        card.triggers = dict(card.triggers or {})
+        card.triggers["begin_combat"] = _insp
+    # Uthros Research Craft: "whenever you cast an artifact spell, draw a card. put a charge counter on ~"
+    if re.search(r"whenever you cast an artifact spell, draw a card\. put a charge counter on this artifact", t):
+        def _uth(g, perm, card=None, **kw):
+            if kw.get("player") not in (None, perm.controller) or card is None or "artifact" not in card.types \
+                    or not gate(perm):
+                return
+            perm.controller.draw(1, g)
+            g.add_counters(perm, "charge", 1)
+            g.log(f"{perm.name}: roba una carta y recibe un contador de carga")
+        card.triggers = dict(card.triggers or {})
+        card.triggers["cast"] = _uth
 
 
 def _wire_b31(card, data, name, types):
@@ -18280,6 +18467,10 @@ def _wire_b36(card, data, name, types):
             g.log(f"{perm.name}: {attacker.name} roba una carta")
         _add_trig("player_attacks", _br)
 
+    # artefactos que usan contadores de carga (Inspirit / proliferar los priorizan)
+    if "charge counter" in t:
+        card.uses_charge = True
+
     # Marisi / Basandra: no se lanzan hechizos durante el combate
     if "your opponents can't cast spells during combat" in t:
         card.no_cast_combat = "opp"
@@ -18384,6 +18575,473 @@ def _wire_b36(card, data, name, types):
     if trg != (card.triggers or {}):
         card.triggers = trg
 
+
+def _ci_ab(label, cost, effect, **kw):
+    """Habilidad activada armada a mano (mismas claves que las del parser)."""
+    ab = {"label": label, "cost": cost, "tap": False, "sacrifice_self": False, "exile_self": False,
+          "rm_counter": None, "sacrifice_other": None, "pay_life": 0, "discard": 0, "target_spec": None,
+          "target_count": 1, "is_copy_ability": False, "x_cost": False, "once": False, "effect": effect}
+    ab.update(kw)
+    return ab
+
+
+def _ci_tokens(game, ctrl, name, p, t, n=1, types=("artifact", "creature"), kw=(), subtypes=(), counters=0,
+               abilities=None):
+    """Crea `n` fichas (con dobladores) y devuelve TODAS las creadas (make_token solo devuelve la última)."""
+    import copy as _cp
+    from engine import Card as _Card
+    made = []
+    for _ in range(max(0, n)):
+        tok = _Card(name=name, types=set(types), cost=None, power=p, toughness=t, keywords=set(kw),
+                    subtypes=set(subtypes), tags=set(types))
+        if abilities:
+            tok.activated_abilities = list(abilities)
+        if "creature" in types and any(getattr(pm.card, "token_angels", False) for pm in ctrl.battlefield):
+            tok.name, tok.power, tok.toughness = "Angel", 4, 4
+            tok.keywords, tok.subtypes = set(kw) | {"flying", "vigilance"}, {"Angel"}
+        for _k in range(game.token_multiplier(ctrl)):
+            if cards._token_cap(game, ctrl):
+                break
+            pm = game.move_to_battlefield(_cp.deepcopy(tok), ctrl, is_token=True)
+            if pm is not None:
+                made.append(pm)
+                if counters:
+                    game.add_counters(pm, "+1/+1", counters)
+    if made and "creature" in types:
+        game.emit("token_created", player=ctrl, n=len(made))
+    return made
+
+
+def _incubate(game, ctrl, n):
+    """Incubate N: ficha Incubator (artefacto, no criatura) con N contadores +1/+1 y
+    "{2}: Transform this token" -> Phyrexian Token, artefacto-criatura 0/0 Phyrexian."""
+    from engine import Card as _Card
+
+    def _transform(g, c, perm, _tg):
+        if perm not in perm.controller.battlefield or perm.card.is_creature():
+            return
+        nc = _Card(name="Phyrexian Token", types={"artifact", "creature"}, cost=None, power=0, toughness=0,
+                   subtypes={"Phyrexian"}, tags={"artifact", "creature"})
+        perm.card = nc
+        g.log(f"{c.name}: la Incubadora se transforma en un Phyrexian {perm.power}/{perm.toughness}")
+        g.emit("transforms_phyrexian", subject=perm)     # Norn's Inquisitor
+        g.sba()
+    ab = _ci_ab("Transformar (Incubadora)", parse_cost("2"), _transform)
+    toks = _ci_tokens(game, ctrl, "Incubator", 0, 0, types=("artifact",), subtypes=("Incubator",), abilities=[ab])
+    for tk in toks:
+        game.add_counters(tk, "+1/+1", n)
+    game.log(f"{ctrl.name}: incuba {n} (Incubadora con {n} contadores +1/+1)")
+    return toks
+
+
+_CI_CTR_RE = re.compile(r"^put (a|an|one|two|three|four|five|x) (charge|\+1/\+1|oil|time|lore|shield|stun) counters? "
+                        r"on target (artifact|creature)\.?$", re.I)
+
+
+def _wire_ci(card, data, name, types):
+    """Counter Intelligence (y genéricos de contadores): cartas que antes quedaban sin efecto o aproximadas."""
+    raw = data.get("_orig_text") or data.get("oracle_text", "") or ""
+    t = re.sub(r"\s+", " ", raw.lower())
+    trg = dict(card.triggers or {})
+
+    def _add_trig(key, fn):
+        prev = trg.get(key)
+        trg[key] = fn if prev is None else (lambda g, perm, _a=prev, _b=fn, **kw: (_a(g, perm, **kw), _b(g, perm, **kw)))
+
+    def _mine(perm, kw):
+        return kw.get("player") in (None, perm.controller)
+
+    # --- genérico: "Put N <tipo> counter(s) on target artifact/creature" sin objetivo real
+    for ab in list(card.activated_abilities or ()):
+        m = _CI_CTR_RE.match((ab.get("label") or "").strip())
+        if not m or ab.get("target_spec"):
+            continue
+        nw, kind, what = m.group(1).lower(), m.group(2), m.group(3).lower()
+        nn = None if nw == "x" else _count_word(nw) or (1 if nw in ("a", "an") else None)
+        if nw != "x" and not nn:
+            continue
+        ab["target_spec"] = "ben_artifact" if what == "artifact" else "ben_creature"
+
+        def _ctr(g, c, perm, tg, _n=nn, _k=kind, _w=what):
+            k = _n if _n is not None else (getattr(g, "_ability_x", 0) or 0)
+            for x in (tg or [])[:1]:
+                if x in x.controller.battlefield and (_w != "artifact" or "artifact" in x.card.types) \
+                        and (_w != "creature" or x.is_creature()) and k > 0:
+                    g.add_counters(x, _k, k)
+                    g.log(f"{perm.name}: {k} contador(es) {_k} sobre {x.name}")
+        ab["effect"] = _ctr
+
+    # Insight Engine
+    if name == "Insight Engine":
+        for ab in card.activated_abilities:
+            if ab["label"].lower().startswith("put a charge counter on this artifact, then draw"):
+                def _ie(g, c, perm, tg):
+                    if perm in perm.controller.battlefield:
+                        g.add_counters(perm, "charge", 1)
+                    n = perm.counters.get("charge", 0)
+                    c.draw(n, g)
+                    g.log(f"{perm.name}: roba {n} carta(s)")
+                ab["effect"] = _ie
+                card.uses_charge = True
+
+    # Tekuthal: proliferar dos veces + quitar 3 contadores de otros -> contador indestructible
+    if name == "Tekuthal, Inquiry Dominus":
+        card.proliferate_twice = True
+
+        def _tk(g, c, perm, tg):
+            if perm in perm.controller.battlefield:
+                g.add_counters(perm, "indestructible", 1)
+                g.log(f"{perm.name} recibe un contador de indestructible")
+        card.activated_abilities = [a for a in card.activated_abilities if "indestructible" not in a["label"].lower()]
+        card.activated_abilities.append(_ci_ab(
+            "Contador de indestructible en Tekuthal", parse_cost("1"), _tk, phy_pips=("U", "U"),
+            extra_cost=[("rm_ctr_among", None, 3)],
+            only_if=lambda g, c: not any(x.counters.get("indestructible", 0) > 0 and getattr(x.card, "proliferate_twice", False)
+                                         for x in c.battlefield) or c is getattr(g, "interactive_human", None)))
+
+    # Alibou: otras criaturas artefacto tienen prisa; al atacar con artefactos-criatura, X daño y scry X
+    if name == "Alibou, Ancient Witness":
+        card.kind_grants = list(getattr(card, "kind_grants", None) or []) + [
+            (lambda pm: pm.is_creature() and "artifact" in pm.card.types, {"haste"}, "you", True)]
+
+        def _ali(g, perm, **kw):
+            c = perm.controller
+            if not _mine(perm, kw):
+                return
+            dec = getattr(g, "_last_declared", None) or []
+            if not any(a.controller is c and a.is_creature() and "artifact" in a.card.types for a in dec):
+                return
+            x = sum(1 for pm in c.battlefield if pm.tapped and "artifact" in pm.card.types)
+            if x <= 0:
+                return
+
+            def _hit(o, _x=x):
+                if hasattr(o, "battlefield"):
+                    g.deal_damage(perm, o, _x)
+                elif o in o.controller.battlefield:
+                    g.deal_damage(perm, o, _x)
+                g.log(f"{perm.name} hace {_x} de daño a {o.name}")
+                _scry_surveil_effect(_x, False)(g, c)
+            if not _human_any_target(g, c, f"{perm.name}: ¿a qué le hace {x} de daño?", _hit):
+                opps = [o for o in g.opponents(c) if not o.lost and not o.has_hexproof()]
+                kill = sorted((pm for o in opps for pm in o.creatures()
+                               if g.can_target(c, pm) and pm.toughness - pm.damage <= x and not pm.has("indestructible")),
+                              key=lambda pm: -(pm.power + pm.toughness))
+                tgt = kill[0] if kill and kill[0].power >= 3 else (min(opps, key=lambda o: o.life) if opps else None)
+                if tgt is not None:
+                    _hit(tgt)
+        _add_trig("you_attack", _ali)
+
+    # Cloud Key: elegir tipo al entrar; esos hechizos cuestan {1} menos
+    if name == "Cloud Key":
+        _ck_opts = ("artifact", "creature", "enchantment", "instant", "sorcery")
+        _ck_es = {"artifact": "artefacto", "creature": "criatura", "enchantment": "encantamiento",
+                  "instant": "instantáneo", "sorcery": "conjuro"}
+
+        def _ckf(sp, pm):
+            return getattr(pm, "_ck_type", None) in getattr(sp, "types", set())
+        _ckf._pm = True
+        card.spell_discount = (1, _ckf)
+
+        def _ck_etb(g, c, perm):
+            def _set(k):
+                perm._ck_type = k
+                g.log(f"{perm.name}: tipo elegido — {_ck_es[k]}")
+            if c is getattr(g, "interactive_human", None):
+                _route_choice(g, c, lambda: _human_target_choice(
+                    g, c, "etb_target", f"{perm.name}: elegí un tipo de hechizo",
+                    [(_ck_es[k], k) for k in _ck_opts], _set), lambda: _set("artifact"))
+            else:
+                pool = list(c.hand) + list(c.library)
+                _set(max(_ck_opts, key=lambda k: (sum(1 for x in pool if k in x.types and not x.is_land()), k == "artifact")))
+        card.on_etb = _ck_etb
+
+    # Darksteel Reactor
+    if name == "Darksteel Reactor":
+        card.win_charge = 20
+        card.uses_charge = True
+
+    # Depthshaker Titan
+    if name == "Depthshaker Titan":
+        card.kind_grants = list(getattr(card, "kind_grants", None) or []) + [
+            (lambda pm: pm.is_creature() and "artifact" in pm.card.types, {"melee", "trample", "haste"}, "you", False)]
+
+        def _dt(g, c, perm):
+            pool = [pm for pm in c.battlefield if "artifact" in pm.card.types and not pm.is_creature()]
+
+            def _anim(chosen):
+                for x in chosen:
+                    if x not in x.controller.battlefield:
+                        continue
+                    x.animated = True
+                    x.set_base_pt = (3, 3)
+                    g.log(f"{x.name} pasa a ser una criatura artefacto 3/3")
+                    g.delayed_end.append(lambda gg, _x=x: gg.to_graveyard(_x, "sacrificio (Depthshaker Titan)")
+                                         if _x in _x.controller.battlefield else None)
+            if not pool:
+                return
+            if c is getattr(g, "interactive_human", None):
+                chosen = []
+
+                def _step():
+                    left = [pm for pm in pool if pm not in chosen]
+                    if not left:
+                        _anim(chosen)
+                        return
+                    _human_target_choice(g, c, "etb_target",
+                                         f"{perm.name}: elegí artefactos no criatura que se vuelven 3/3 (se sacrifican "
+                                         f"al final del turno; Ninguno = terminar)", [(_tgt_label(g, x), x) for x in left],
+                                         lambda x: (chosen.append(x), _step()), allow_none=True,
+                                         on_none=lambda: _anim(chosen))
+                _route_choice(g, c, _step, lambda: None)
+            else:
+                # bot: anima los que no producen maná ni esperan contadores (los "prescindibles")
+                _anim([pm for pm in pool if pm.is_token and pm.card.produces is None] if g.ap() is c else [])
+        _prev = card.on_etb
+        card.on_etb = _dt if _prev is None else (lambda g, c, perm, _a=_dt, _b=_prev: (_a(g, c, perm), _b(g, c, perm)))
+
+    # Gavel of the Righteous
+    if name == "Gavel of the Righteous":
+        def _gv_bc(g, perm, **kw):
+            if _mine(perm, kw):
+                g.add_counters(perm, "charge", 1)
+        _add_trig("begin_combat", _gv_bc)
+        def _gv_sm(src, tgt):
+            # reemplaza al genérico: +1/+1 por CADA contador (de cualquier tipo) del Equipo
+            if getattr(src, "enchanting", None) is tgt:
+                n = sum(v for v in src.counters.values() if v > 0)
+                return (n, n)
+            return None
+        card.static_mod = _gv_sm
+        card.aura_keywords = set(getattr(card, "aura_keywords", None) or set()) - {"double_strike"}
+        card.aura_kw_cond = [({"double_strike"}, lambda src: sum(v for v in src.counters.values() if v > 0) >= 4)]
+        card.uses_charge = True
+        eqs = [a for a in card.activated_abilities if a["label"] == "Equipar"]
+        if eqs:
+            eqs[0]["cost"] = parse_cost("3")
+            alt = dict(eqs[0])
+            alt["cost"] = parse_cost("0")
+            alt["rm_counter"] = {"name": "*any*", "n": 1}
+            alt["label"] = "Equipar (quitar un contador)"
+            card.activated_abilities = list(card.activated_abilities) + [alt]
+
+    # Lux Artillery
+    if name == "Lux Artillery":
+        def _lx_cast(g, perm, card=None, **kw):
+            if _mine(perm, kw) and card is not None and "artifact" in card.types and card.is_creature():
+                card._sunburst_grant = True
+                g.log(f"{perm.name}: {card.name} gana sunburst")
+
+        def _lx_end(g, perm, **kw):
+            c = perm.controller
+            if not _mine(perm, kw):
+                return
+            n = sum(v for pm in c.battlefield if pm.is_creature() or "artifact" in pm.card.types
+                    for v in pm.counters.values() if v > 0)
+            if n >= 30:
+                for o in g.opponents(c):
+                    if not o.lost:
+                        g.deal_damage(perm, o, 10)
+                g.log(f"{perm.name}: {n} contadores — 10 de daño a cada oponente")
+        trg.pop("cast", None)
+        trg.pop("end_step", None)
+        _add_trig("cast", _lx_cast)
+        _add_trig("end_step", _lx_end)
+
+    # "Whenever you cast a <filtro> spell, incubate X, where X is that spell's mana value"
+    # (Chrome Host Seedshark: noncreature; Brimaz, Blight of Oreskos: Phyrexian creature o artifact creature)
+    m = re.search(r"whenever you cast an? ([a-z ]+?) spell, incubate x, where x is that spell's mana value", t)
+    if m:
+        _f = m.group(1).strip()
+
+        def _okf(cd, _f=_f):
+            if _f == "noncreature":
+                return not cd.is_creature()
+            if _f == "phyrexian creature or artifact creature":
+                return cd.is_creature() and ("artifact" in cd.types or any(
+                    x.lower() == "phyrexian" for x in cd.subtypes))
+            if _f in ("artifact", "creature", "instant or sorcery"):
+                return bool(set(_f.split(" or ")) & cd.types)
+            return False
+
+        def _ss(g, perm, card=None, _ok=_okf, **kw):
+            if _mine(perm, kw) and card is not None and _ok(card):
+                _incubate(g, perm.controller, _b31_cmc(card))
+        trg.pop("cast", None)
+        _add_trig("cast", _ss)
+
+    # Norn's Inquisitor: "whenever a permanent you control transforms into a Phyrexian, put a +1/+1 counter on it"
+    if "whenever a permanent you control transforms into a phyrexian, put a +1/+1 counter on it" in t:
+        def _ni(g, perm, subject=None, **kw):
+            if subject is not None and subject.controller is perm.controller and subject in subject.controller.battlefield:
+                g.add_counters(subject, "+1/+1", 1)
+                g.log(f"{perm.name}: {subject.name} recibe un contador +1/+1")
+        _add_trig("transforms_phyrexian", _ni)
+
+    # Threefold Thunderhulk: al entrar o atacar, Gnomos = su fuerza
+    if name == "Threefold Thunderhulk":
+        def _gn(g, perm):
+            n = max(0, perm.power)
+            _ci_tokens(g, perm.controller, "Gnome", 1, 1, n=n, subtypes=("Gnome",))
+            g.log(f"{perm.name}: crea {n} Gnomo(s) 1/1")
+        card.on_etb = lambda g, c, perm: _gn(g, perm)
+        _add_trig("attacks", lambda g, perm, **kw: _gn(g, perm))
+
+    # Wake the Past
+    if name == "Wake the Past":
+        def _wp(g, c, tg):
+            back = [x for x in list(c.graveyard) if "artifact" in x.types]
+            for x in back:
+                if x in c.graveyard:
+                    c.graveyard.remove(x)
+                    pm = g.move_to_battlefield(x, c)
+                    if pm is not None:
+                        pm.temp_keywords.add("haste")
+            g.log(f"Wake the Past: vuelven {len(back)} artefacto(s) con prisa")
+        card.on_cast_resolve = _wp
+
+    # Hangarback Walker: un Thopter por cada contador +1/+1
+    if name == "Hangarback Walker":
+        def _hw(g, c, perm):
+            n = perm.counters.get("+1/+1", 0)
+            _ci_tokens(g, c, "Thopter", 1, 1, n=n, kw=("flying",), subtypes=("Thopter",))
+            g.log(f"{perm.name}: crea {n} Thopter(s) 1/1 voladores")
+        card.on_death = _hw
+
+    # Experimental Augury
+    if name == "Experimental Augury":
+        def _ea(g, c, tg):
+            top = [c.library.pop() for _ in range(min(3, len(c.library)))]
+
+            def _take(x):
+                if x in top:
+                    top.remove(x)
+                    c.hand.append(x)
+                    g.log(f"{c.name} pone una carta en su mano (Experimental Augury)")
+                for y in top:
+                    c.library.insert(0, y)
+                _proliferate(g, c)
+            if not top:
+                _proliferate(g, c)
+                return
+            pref = sorted(top, key=lambda x: (not x.is_land() and "artifact" in x.types, _b31_cmc(x)), reverse=True)
+            _b31_pick_card(g, c, pref, "Experimental Augury: elegí la carta que va a tu mano", _take,
+                           allow_none=False)
+        card.on_cast_resolve = _ea
+
+    # Moxite Refinery
+    if name == "Moxite Refinery":
+        def _mx(kind):
+            def _e(g, c, perm, tg, _k=kind):
+                x = getattr(g, "_ability_x", 0) or 0
+                for o in (tg or [])[:1]:
+                    if o in o.controller.battlefield and x > 0:
+                        g.add_counters(o, _k, x)
+                        g.log(f"{perm.name}: {x} contador(es) {_k} sobre {o.name}")
+            return _e
+        card.activated_abilities = [
+            _ci_ab("X contadores de carga en artefacto objetivo", parse_cost("2"), _mx("charge"), tap=True,
+                   sorcery_speed=True, x_counters=True, target_spec="ben_artifact"),
+            _ci_ab("X contadores +1/+1 en criatura objetivo", parse_cost("2"), _mx("+1/+1"), tap=True,
+                   sorcery_speed=True, x_counters=True, target_spec="ben_creature")]
+
+    # Empowered Autogenerator: X = contadores de carga (incluido el que pone al girarse)
+    if name == "Empowered Autogenerator":
+        card.produces = (lambda perm, pl: {k: (perm.counters.get("charge", 0) + 1 if perm is not None else 1)
+                                           for k in ("W", "U", "B", "R", "G")})
+        card.mana_tap_charge = True
+        card.uses_charge = True
+        card.enters_tapped = True
+
+    # Patrolling Peacemaker
+    if name == "Patrolling Peacemaker":
+        def _pp(g, perm, criminal=None, **kw):
+            if criminal is not None and criminal is not perm.controller and criminal in g.opponents(perm.controller):
+                _proliferate(g, perm.controller)
+        _add_trig("opp_crime", _pp)
+
+    # Solar Array / sunburst / converge
+    if name == "Solar Array":
+        card.solar_array = True
+    if re.search(r"(?:^|\n)sunburst\b", raw.lower()):
+        card.sunburst = True
+        if getattr(card, "etb_counters", None):
+            card.etb_counters = {k: v for k, v in card.etb_counters.items() if k not in ("+1/+1", "charge")}
+    m = re.search(r"(?:^|\. |converge — )(?:~|this creature|this artifact) enters with an? (\+1/\+1|charge) counter on "
+                  r"it for each color of mana spent to cast it", t)
+    if m:
+        card.converge_ctr = m.group(1)
+        if getattr(card, "etb_counters", None):
+            card.etb_counters = {k: v for k, v in card.etb_counters.items() if k != m.group(1)}
+
+    # The Mycosynth Gardens
+    if name == "The Mycosynth Gardens":
+        for ab in card.activated_abilities:
+            if ab["label"].lower().startswith("this land becomes a copy of target nontoken"):
+                ab["x_cost"] = True
+                ab["x_from_target_mv"] = True
+                ab["target_spec"] = "own_nt_artifact"
+
+                def _myc(g, c, perm, tg):
+                    x = getattr(g, "_ability_x", 0) or 0
+                    for o in (tg or [])[:1]:
+                        if o not in c.battlefield or o.is_token or _b31_cmc(o.card) != x:
+                            g.log(f"{perm.name}: el objetivo no tiene valor de maná {x}; no hace nada")
+                            continue
+                        if perm in c.battlefield:
+                            _b34_copy_into(g, perm, getattr(o.card, "_real", None) or o.card, c)
+                            g.log(f"{perm.name} se vuelve una copia de {o.name}")
+                ab["effect"] = _myc
+
+    # Ripples of Potential
+    if name == "Ripples of Potential":
+        def _rp(g, c, tg):
+            def _done(objs):
+                mine = [o for o in objs if o in c.battlefield]
+                if not mine:
+                    return
+                if c is getattr(g, "interactive_human", None):
+                    chosen = []
+
+                    def _step():
+                        left = [o for o in mine if o not in chosen]
+                        if not left:
+                            [g.phase_out(o) for o in chosen]
+                            return
+                        _human_target_choice(g, c, "etb_target",
+                                             "Ripples of Potential: elegí permanentes tuyos que quedan fuera de fase "
+                                             "(Ninguno = terminar)", [(_tgt_label(g, o), o) for o in left],
+                                             lambda o: (chosen.append(o), _step()), allow_none=True,
+                                             on_none=lambda: [g.phase_out(o) for o in chosen])
+                    _route_choice(g, c, _step, lambda: None)
+                else:
+                    # bot: protege lo amenazado solo en turno rival (en el propio no conviene)
+                    if g.ap() is not c:
+                        for o in mine:
+                            if o.is_creature() and o.damage > 0:
+                                g.phase_out(o)
+            _proliferate(g, c, on_done=_done)
+        card.on_cast_resolve = _rp
+
+    # Emry: lanzar un artefacto del cementerio este turno
+    if name == "Emry, Lurker of the Loch":
+        for ab in card.activated_abilities:
+            if ab["label"].lower().startswith("choose target artifact card in your graveyard"):
+                def _em(g, c, perm, tg):
+                    pool = sorted((x for x in c.graveyard if "artifact" in x.types and not x.is_land()),
+                                  key=lambda x: -_b31_cmc(x))
+
+                    def _ok(x):
+                        x._gy_cast_turn = g.turn
+                        x._gy_cast_by = c
+                        g.log(f"{perm.name}: {c.name} puede lanzar {x.name} desde el cementerio este turno")
+                    _b31_pick_card(g, c, pool, f"{perm.name}: elegí un artefacto de tu cementerio", _ok,
+                                   allow_none=False)
+                ab["effect"] = _em
+                ab["only_if"] = lambda g, c: any("artifact" in x.types and not x.is_land() for x in c.graveyard)
+
+    if trg != (card.triggers or {}):
+        card.triggers = trg
 
 def _wire_b30(card, data, name, types):
     raw = data.get("_orig_text") or data.get("oracle_text", "") or ""
@@ -19000,10 +19658,15 @@ def _build_card_from_data_impl(data: dict) -> Card:
             k.lower() for k in (data.get("keywords") or [])}:
         _cleave_txt = re.sub(r"\s*\[[^\]]*\]", "", data["oracle_text"])
         data["oracle_text"] = data["oracle_text"].replace("[", "").replace("]", "")
-    # station: líneas "N+ | <habilidad>" se cablean aparte (no como texto suelto)
-    _station_lines = re.findall(r"(?m)^(\d+)\+\s*\|\s*(.+)$", data.get("oracle_text") or "")
-    if _station_lines:
-        data["oracle_text"] = re.sub(r"(?m)^\d+\+\s*\|.*$\n?", "", data["oracle_text"])
+    # station: los niveles "N+ | <habilidad>" (con sus líneas de continuación, que también
+    # pertenecen a ese nivel) se cablean aparte, condicionados a N contadores de carga
+    _station_lines = []
+    _mtier = re.search(r"(?m)^\d+\+\s*\|", data.get("oracle_text") or "")
+    if _mtier:
+        _tail = data["oracle_text"][_mtier.start():]
+        data["oracle_text"] = data["oracle_text"][:_mtier.start()].rstrip("\n")
+        for _mt in re.finditer(r"(?ms)^(\d+)\+\s*\|\s*(.+?)(?=^\d+\+\s*\||\Z)", _tail):
+            _station_lines.append((_mt.group(1), _mt.group(2).strip()))
     if data.get("card_faces"):
         data["card_faces"] = [dict(f, oracle_text=_strip_ability_words(
             _strip_reminder(f.get("oracle_text", "")))) for f in data["card_faces"]]
@@ -20833,17 +21496,28 @@ def _build_card_from_data_impl(data: dict) -> Card:
             "effect": (lambda g, ctrl, perm, targets=None: g.station(ctrl, perm)),
         },)
         _ckw = list(getattr(card, "cond_keywords", ()) or ())
+        _tmax = _station_at
         for _thr, _txt in _station_lines:
             _thr = int(_thr)
-            _words = [w.strip().lower().replace(" ", "_")
-                      for w in re.split(r",\s*(?:and\s+)?|\s+and\s+", _txt.strip().rstrip("."))]
-            if _words and all(w in KEYWORDS for w in _words):
-                for w in _words:
-                    _ckw.append((w, lambda pm, _n=_thr: pm.counters.get("charge", 0) >= _n))
+            _tmax = max(_tmax, _thr)
+            _gate = (lambda pm, _n=_thr: pm is not None and pm.counters.get("charge", 0) >= _n)
+            _rest = []
+            for _ln in _txt.split("\n"):
+                _words = [w.strip().lower().replace(" ", "_")
+                          for w in re.split(r",\s*(?:and\s+)?|\s+and\s+", _ln.strip().rstrip("."))]
+                if _words and all(w in KEYWORDS for w in _words):
+                    for w in _words:                       # "8+ | Flying"
+                        _ckw.append((w, lambda pm, _n=_thr: pm.counters.get("charge", 0) >= _n))
+                else:
+                    _rest.append(_ln)
+            if not _rest:
                 continue
-            for _ab in _parse_activated(_txt, name):
-                card.activated_abilities = tuple(card.activated_abilities) + (
-                    dict(_ab, station_req=_thr),)
+            _btxt = re.sub(r"(?i)\bthis spacecraft\b", "this artifact", "\n".join(_rest))
+            _sub = _station_tier_card(data, name, _btxt)
+            _station_merge(card, _sub, _thr, _gate, _ckw)
+            _station_custom(card, _btxt, _thr, _gate)
+        card.station_max = _tmax
+        card.station_tiers = tuple(sorted({int(x) for x, _y in _station_lines} | ({_station_at} if _station_at else set())))
         if _ckw:
             card.cond_keywords = tuple(_ckw)
     mch = re.search(r"(?:^|\n)champion an? ([a-z ]+?)(?:\.|\n|$)", "\n" + (data.get("oracle_text", "") or "").lower())
@@ -22447,6 +23121,7 @@ def _build_card_from_data_impl(data: dict) -> Card:
     _wire_b34(card, data, name, types)
     _wire_b35(card, data, name, types)
     _wire_b36(card, data, name, types)
+    _wire_ci(card, data, name, types)
     if card_dice:
         card.dice_table = card_dice
     # efecto genérico POR TAG: en un hechizo, al resolver; en un permanente, solo si

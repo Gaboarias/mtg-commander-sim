@@ -683,6 +683,8 @@ class InteractiveGame:
         "any_perm": lambda pm: True,
         "any_creature": lambda pm: pm.is_creature(),
         "any_acel": lambda pm: pm.is_creature() or bool({"artifact", "enchantment", "land"} & set(pm.card.types)),
+        "ben_artifact": lambda pm: "artifact" in pm.card.types,
+        "ben_creature": lambda pm: pm.is_creature(),
     }
 
     def _perm_pool(self, pred):
@@ -716,6 +718,12 @@ class InteractiveGame:
             if not mine:
                 return []
             return [max(mine, key=lambda x: (x.card.cost.cmc if x.card.cost else 0))]
+        if ts in ("ben_artifact", "ben_creature", "own_nt_artifact"):
+            # efectos beneficiosos (poner contadores / copiar): lo propio primero
+            pool = [pm for pm in self._perm_pool(self._PERM_SPECS.get(ts, lambda x: "artifact" in x.card.types))
+                    if ts != "own_nt_artifact" or (pm.controller is p and not pm.is_token)]
+            pool.sort(key=lambda pm: (pm.controller is p, pm.card.cost.cmc if pm.card.cost else 0), reverse=True)
+            return pool[:n]
         if ts in self._PERM_SPECS:
             # preferir permanentes del rival; el más caro primero
             pool = self._perm_pool(self._PERM_SPECS[ts])
@@ -748,6 +756,10 @@ class InteractiveGame:
             return [{"idx": self.players.index(o), "name": o.name,
                      "from": f"{o.life} de vida"}
                     for o in self.g.targetable_opponents(self.human())]
+        if ts == "own_nt_artifact":
+            return [{"uid": pm.uid, "name": pm.name, "power": None, "toughness": None,
+                     "from": f"tuyo · VM {pm.card.cost.cmc if pm.card.cost else 0}"}
+                    for pm in self.human().battlefield if "artifact" in pm.card.types and not pm.is_token]
         if ts == "own_perm":
             return [{"uid": pm.uid, "name": pm.name,
                      "power": pm.power if pm.is_creature() else None,
@@ -772,7 +784,8 @@ class InteractiveGame:
     # specs que EXIGEN al menos un objetivo (si no hay, la carta no se puede jugar).
     _MUST_TARGET = {"own_creature", "opp_creature", "opp_player", "own_perm",
                     "stack_spell", "any_artifact", "any_enchantment", "any_art_ench",
-                    "any_planeswalker", "any_nonland", "any_perm", "any_acel"}
+                    "any_planeswalker", "any_nonland", "any_perm", "any_acel",
+                    "ben_artifact", "ben_creature", "own_nt_artifact"}
 
     def _has_legal_target(self, card, precomputed=None):
         """False sólo si la carta EXIGE objetivo, no es modal y no hay ninguno legal.
@@ -819,11 +832,12 @@ class InteractiveGame:
                 if pm is not None and self.g.can_target(self.human(), pm):
                     out.append(pm)
             return out
-        if ts == "own_perm":
+        if ts in ("own_perm", "own_nt_artifact"):
             out = []
             for uid in uids:
                 pm = self._find_any_perm(uid)
-                if pm is not None and pm.controller is self.human():
+                if pm is not None and pm.controller is self.human() and (
+                        ts == "own_perm" or ("artifact" in pm.card.types and not pm.is_token)):
                     out.append(pm)
             return out
         if ts in self._PERM_SPECS:
@@ -1783,6 +1797,52 @@ class InteractiveGame:
                         self._sac_chosen = False
                 self._ask_chain(qs, _go)
                 return self.state()
+        # Mycosynth Gardens: X = valor de maná del artefacto objetivo (no se pregunta)
+        if ab.get("x_from_target_mv") and x is None:
+            if not tgt:
+                return self.state()
+            x = tgt[0].card.cost.cmc if tgt[0].card.cost else 0
+            self.g.activate_ability(pm, index, targets=tgt, x=x)
+            self.g.sba()
+            return self.state()
+        # Moxite Refinery: "Remove X counters from an artifact or creature you control": el humano
+        # elige de cuál permanente y cuántos (X).
+        if ab.get("x_counters") and x is None:
+            p = self.human()
+            srcs = [s_ for s_ in p.battlefield if (s_.is_creature() or "artifact" in s_.card.types)
+                    and sum(v for v in s_.counters.values() if v > 0) > 0]
+            if not srcs:
+                return self.state()
+            _hp = getattr(self.g, "_human_pref", None)
+
+            def _pick_src(si, _pm=pm, _i=index, _tg=tgt, _h=_hp, _srcs=srcs):
+                if si is None or not (0 <= si < len(_srcs)):
+                    return
+                src = _srcs[si]
+                mx = sum(v for v in src.counters.values() if v > 0)
+
+                def _apply(idx, _src=src):
+                    self.g._xctr_src = _src
+                    try:
+                        self._with_prefs(_h, lambda: self.g.activate_ability(_pm, _i, targets=_tg, x=(idx or 0)))
+                    finally:
+                        self.g._xctr_src = None
+                    self.g.sba()
+                self.g.pending_choice = {
+                    "kind": "x",
+                    "prompt": f"¿Cuántos contadores quitás de {src.name}? (X, 1 a {mx})",
+                    "options": [{"i": v, "name": f"X = {v}"} for v in range(1, mx + 1)],
+                    "allow_none": False, "_apply": _apply,
+                }
+
+            self.g.pending_choice = {
+                "kind": "x",
+                "prompt": f"«{ab.get('label', '')}»: ¿de qué permanente quitás los contadores?",
+                "options": [{"i": k, "name": f"{s_.name} — " + ", ".join(
+                    f"{v} {kk}" for kk, v in s_.counters.items() if v > 0)} for k, s_ in enumerate(srcs)],
+                "allow_none": True, "_apply": _pick_src,
+            }
+            return self.state()
         # habilidad con {X}: el humano elige X (0..máximo pagable) antes de activar.
         if ab.get("x_cost") and x is None:
             p = self.human()

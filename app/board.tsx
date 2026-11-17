@@ -12,6 +12,8 @@ export type Perm = {
   loyalty_abilities?: { i: number; cost: number }[]; activated?: boolean;
   keywords?: string[]; types?: string[]; subtypes?: string[]; abilities?: string[];
   attached_to?: number | null; attached_name?: string | null;   // equipo/aura anexado a…
+  // station (naves): carga actual, umbrales y en cuál pasa a ser criatura
+  station?: { charge: number; tiers: number[]; creature_at: number | null; next: number | null } | null;
 };
 // salida del campo registrada por el motor (destruida, exiliada, devuelta…)
 export type Departure = {
@@ -46,8 +48,13 @@ export function CardMini({
 }) {
   const plus = perm.counters["+1/+1"] || 0;
   const minus = perm.counters["-1/-1"] || 0;
+  const st = perm.station || null;
   const otherCounters = Object.entries(perm.counters || {})
-    .filter(([k, v]) => k !== "+1/+1" && k !== "-1/-1" && k !== "loyalty" && v);
+    .filter(([k, v]) => k !== "+1/+1" && k !== "-1/-1" && k !== "loyalty" && v && !(st && k === "charge"));
+  const stTitle = st ? `Station: ${st.charge} contadores de carga` +
+    (st.next != null ? ` — próximo nivel en ${st.next}` : " — todos los niveles activos") +
+    (st.creature_at ? ` · es criatura con ${st.creature_at}+` : "") +
+    ". Activá «Cargar (station)» girando otra criatura: suma tantos contadores como su fuerza." : "";
   const KW_SHORT: Record<string, string> = {
     flying: "vuela", reach: "alcance", first_strike: "1er golpe", double_strike: "doble",
     deathtouch: "mortal", trample: "arrolla", lifelink: "vínculo", vigilance: "vigila",
@@ -129,6 +136,12 @@ export function CardMini({
       {perm.is_planeswalker && perm.loyalty != null && <span className="cm-loy">◆{perm.loyalty}</span>}
       {plus > 0 && <span className="cm-counter plus">+{plus}</span>}
       {minus > 0 && <span className="cm-counter minus">−{minus}</span>}
+      {st && (
+        <span className={`cm-counter station ${st.next == null ? "full" : ""}`} title={stTitle}
+          aria-label={stTitle}>
+          ⚡{st.charge}{st.next != null ? `/${st.next}` : ""}
+        </span>
+      )}
       {otherCounters.map(([k, v]) => (
         <span key={k} className="cm-counter other" title={k}>{v}·{k.slice(0, 3)}</span>
       ))}

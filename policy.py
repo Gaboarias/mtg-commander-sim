@@ -516,6 +516,18 @@ class Policy:
                 if str(ab.get("label", "")).startswith("Equipar") and _eh is not None \
                         and _eh in _eh.controller.battlefield:
                     continue            # ya equipado: no gastar maná re-equipándolo
+                if str(ab.get("label", "")).startswith("Cargar (station)"):
+                    # station: hasta el umbral útil; en la 1ra main solo con criaturas que no
+                    # iban a atacar (mareo de invocación), en la 2da con cualquiera enderezada
+                    smax = getattr(perm.card, "station_max", 0) or 0
+                    while not smax or perm.counters.get("charge", 0) < smax:
+                        pool = game.station_pool(me, perm)
+                        if not second:
+                            pool = [x for x in pool if x.summoning_sick and not x.has("haste")]
+                        if not pool or not game.station(me, perm, creature=max(pool, key=lambda x: x.power)):
+                            break
+                        used += 1
+                    continue
                 if not game.ability_allowed(perm, j, ab):
                     continue
                 if not me.can_pay(ab.get("cost")):
@@ -532,6 +544,33 @@ class Policy:
                 # 10). Las que se auto-dañan (pegan a cada criatura/jugador) el bot las
                 # evita para no barrerse su propio tablero.
                 xv = 0
+                if ab.get("x_from_target_mv"):
+                    # Mycosynth Gardens: X = VM del artefacto propio a copiar (el más caro pagable, VM>=2)
+                    base = ab.get("cost").cmc if ab.get("cost") else 0
+                    _av = me.available_mana() - base - 1     # la propia tierra se gira como coste
+                    _ok = [x for x in me.battlefield if "artifact" in x.card.types and not x.is_token
+                           and x is not perm and 2 <= (x.card.cost.cmc if x.card.cost else 0) <= _av
+                           and not x.card.is_land()]
+                    if not _ok:
+                        continue
+                    tgt = [max(_ok, key=lambda x: x.card.cost.cmc)]
+                    xv = tgt[0].card.cost.cmc
+                elif ab.get("x_counters"):
+                    # Moxite Refinery: mover contadores sobrantes (carga de más / de artefactos que no
+                    # la usan) a +1/+1 o a una nave sin completar
+                    _best = None
+                    for _s in me.battlefield:
+                        if not (_s.is_creature() or "artifact" in _s.card.types):
+                            continue
+                        _smax = getattr(_s.card, "station_max", 0) or 0
+                        _ch = _s.counters.get("charge", 0)
+                        _spare = (_ch - _smax) if _smax else (0 if getattr(_s.card, "uses_charge", False) else _ch)
+                        if _spare >= 1 and (_best is None or _spare > _best[1]):
+                            _best = (_s, _spare)
+                    if _best is None or not tgt or tgt[0] is _best[0]:
+                        continue
+                    game._xctr_src = _best[0]
+                    xv = _best[1]
                 if ab.get("x_cost"):
                     if ab.get("x_self_harm"):
                         continue
@@ -543,7 +582,11 @@ class Policy:
                 # al reanudar este permanente ya queda descartado.
                 if done is not None:
                     done.add(perm.uid)
-                if game.activate_ability(perm, j, targets=tgt, x=xv):
+                try:
+                    _act_ok = game.activate_ability(perm, j, targets=tgt, x=xv)
+                finally:
+                    game._xctr_src = None
+                if _act_ok:
                     used += 1
                     break              # una habilidad por permanente por turno
 
@@ -700,6 +743,24 @@ class Policy:
         return opp[:max(1, count)]
 
     def _spec_targets(self, game, me, spec, count):
+        if spec == "ben_artifact":
+            # poner contadores en un artefacto: el propio que más los aprovecha (station sin
+            # completar, cartas que cuentan carga), si no ninguno
+            def _want(pm):
+                smax = getattr(pm.card, "station_max", 0) or 0
+                ch = pm.counters.get("charge", 0)
+                return (2 if smax and ch < smax else 1 if getattr(pm.card, "uses_charge", False) else 0,
+                        pm.card.cost.cmc if pm.card.cost else 0)
+            pool = [pm for pm in me.battlefield if "artifact" in pm.card.types and _want(pm)[0] > 0]
+            pool.sort(key=_want, reverse=True)
+            return pool[:max(1, count)]
+        if spec == "ben_creature":
+            mine = sorted(me.creatures(), key=lambda p: (p.power, p.toughness), reverse=True)
+            return mine[:max(1, count)]
+        if spec == "own_nt_artifact":
+            pool = [pm for pm in me.battlefield if "artifact" in pm.card.types and not pm.is_token]
+            pool.sort(key=lambda pm: pm.card.cost.cmc if pm.card.cost else 0, reverse=True)
+            return pool[:max(1, count)]
         if spec in self._PERM_SPEC_PRED:
             return self._perm_spec_targets(game, me, spec, count)
         if spec == "own_creature":

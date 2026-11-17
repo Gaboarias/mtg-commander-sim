@@ -487,6 +487,8 @@ textarea:focus { border-color: var(--accent-2) !important; }
 .cardmini .cm-counter.plus { background: var(--accent); color: #1a1508; }
 .cardmini .cm-counter.minus { background: #b6412f; color: #fff; top: 3px; left: auto; right: 3px; }
 .cardmini .cm-counter.other { position: static; display: inline-block; background: #2a3346; color: #cdd5e2; margin: 1px; }
+.cardmini .cm-counter.station { position: static; display: inline-block; background: #1f4a6b; color: #e3f2ff; margin: 1px; }
+.cardmini .cm-counter.station.full { background: #2f6b3a; color: #eafbe9; }
 .cardmini .cm-badge { position: absolute; top: 3px; font-size: .56rem; font-weight: 700; padding: 0 4px; border-radius: 3px; letter-spacing: .3px; text-transform: uppercase; }
 .cardmini .cm-badge.tok { left: 3px; background: #3a5aa8; color: #fff; }
 .cardmini .cm-badge.sick { right: 3px; background: rgba(0,0,0,.7); color: #ffd27a; }
