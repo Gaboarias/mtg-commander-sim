@@ -69,8 +69,9 @@ export default function Nav() {
           <Link href="/login" className={`nav-link ${path.startsWith("/login") ? "on" : ""}`}>
             {user ? "Cuenta" : "Ingresar"}
           </Link>
-          <ThemeToggle />
         </div>
+        {/* fuera de la barra desplazable: en celular quedaba fuera de la pantalla */}
+        <ThemeToggle />
       </div>
     </nav>
   );
