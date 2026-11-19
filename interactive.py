@@ -779,7 +779,12 @@ class InteractiveGame:
         return []
 
     def _targets_for(self, card):
-        return self._targets_for_spec(getattr(card, "target_spec", None))
+        prev = getattr(self.g, "_targeting_src", None)
+        self.g._targeting_src = card          # protección: objetivos legales para ESTE hechizo
+        try:
+            return self._targets_for_spec(getattr(card, "target_spec", None))
+        finally:
+            self.g._targeting_src = prev
 
     # specs que EXIGEN al menos un objetivo (si no hay, la carta no se puede jugar).
     _MUST_TARGET = {"own_creature", "opp_creature", "opp_player", "own_perm",
@@ -1711,7 +1716,12 @@ class InteractiveGame:
                         reason = reason or f"ya equipada a {_host.name}"
                     _lbl = f"Mover equipo (está en {_host.name})"
                 spec = ab.get("target_spec")
-                ab_tgts = self._targets_for_spec(spec)
+                _prev_ts = getattr(self.g, "_targeting_src", None)
+                self.g._targeting_src = pm
+                try:
+                    ab_tgts = self._targets_for_spec(spec)
+                finally:
+                    self.g._targeting_src = _prev_ts
                 if ab.get("not_self"):          # "becomes a copy of target …": no tiene sentido copiarse
                     ab_tgts = [x for x in ab_tgts if x.get("uid") != pm.uid]
                 if (reason is None and spec in self._MUST_TARGET

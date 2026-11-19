@@ -6133,6 +6133,19 @@ def _effect_any_core(body: str):
     reconoce, el dirigido con objetivo elegido al resolver (humano: modal; bot:
     el mejor). Antes los disparos solo aceptaban efectos sin objetivo: 'when this
     creature enters, return target nonland permanent…' quedaba sin efecto."""
+    # "Draw N cards, then put M cards from your hand on top of / on the bottom of your library"
+    # (Brainstorm, Brainsurge, Jace +1): antes solo robaba
+    _mdp = re.fullmatch(r"draw (\w+) cards?, then put (\w+) cards? from your hand on (top|the bottom) of your library"
+                        r"(?: in any order)?", re.sub(r"\s+", " ", _strip_reminder(body or "")).strip().rstrip(".").lower())
+    if _mdp and _count_word(_mdp.group(1)) and (_count_word(_mdp.group(2)) or _mdp.group(2) in ("a", "one")):
+        _dn = _count_word(_mdp.group(1))
+        _pn = _count_word(_mdp.group(2)) or 1
+        _top = _mdp.group(3) == "top"
+
+        def _dp(game, ctrl, *_a, _d=_dn, _p=_pn, _t=_top):
+            ctrl.draw(_d, game)
+            _hand_to_library(game, ctrl, _p, _t)
+        return _dp
     # patrones compuestos que el separador de oraciones parte mal: se resuelven enteros
     if body and _PRE_ATOMIC.fullmatch(re.sub(r"\s+", " ", _strip_reminder(body)).strip().rstrip(".").lower()):
         _pa = _atomic_effect(body)
@@ -6709,6 +6722,22 @@ def _loyalty_effect(text: str):
             def eff(game, ctrl, perm, _e=_ae):
                 _e(game, ctrl, perm)
             return eff
+
+    # el parser general (fichas con su tipo, barridas con filtro, emblemas, robar y devolver…) antes
+    # que los atajos de abajo, que tomaban solo un pedazo del texto (Elspeth +1 creaba una "Token" 1/1)
+    try:
+        _ga = _effect_any(text)
+    except RecursionError:
+        _ga = None
+    if _ga is not None:
+        def eff(game, ctrl, perm, _e=_ga):
+            prev = getattr(game, "_trigger_source", None)
+            game._trigger_source = perm
+            try:
+                _e(game, ctrl, perm)
+            finally:
+                game._trigger_source = prev
+        return eff
 
     # Scry N (p. ej. Nissa +2): mira el tope y decide dejar/mandar al fondo.
     ms = re.search(r"\bscry (\w+)", t)
@@ -14212,11 +14241,15 @@ def _generic_amount_single_core(oracle: str):
         _tail = re.split(r"[.;]", t[mxx.end():])[0]
         _kw = tuple(v for pat, v in _TOKEN_KEYWORDS if re.search(pat, _tail))
 
-        def eff(game, ctrl, *_a, _s=_sub, _kw=_kw):
+        _d = (mxx.group(1) or "").split()
+        _xt = tuple(x for x in ("artifact", "enchantment") if x in _d)
+        _cols = tuple(_TOKEN_COLOR[w] for w in _d if w in _TOKEN_COLOR)
+
+        def eff(game, ctrl, *_a, _s=_sub, _kw=_kw, _xt=_xt, _cols=_cols):
             x = min(40, int(getattr(game, "spell_x", 0) or 0))
             if x <= 0:
                 return
-            cards.make_token(game, ctrl, _s, x, x, kw=_kw, subtypes=(_s,))
+            cards.make_token(game, ctrl, _s, x, x, kw=_kw, subtypes=(_s,), extra_types=_xt, colors=_cols)
             game.log(f"{ctrl.name} crea una ficha {_s} {x}/{x}")
         return eff
 
@@ -14250,12 +14283,16 @@ def _generic_amount_single_core(oracle: str):
         if cnt_fn is None and m.group(1).lower() == "x":
             cnt_fn = lambda game, ctrl: int(getattr(game, "spell_x", 0) or 0)  # noqa: E731
 
+        _desc = (m.group(4) or "").split()
+        _xt = tuple(x for x in ("artifact", "enchantment") if x in _desc)
+        _cols = tuple(_TOKEN_COLOR[w] for w in _desc if w in _TOKEN_COLOR)
+
         def eff(game, ctrl, *_a, _n=min(n, 8), _p=pw, _t=tf, _s=sub, _c=cn or 0,
-                _kw=kw, _cf=cnt_fn):
+                _kw=kw, _cf=cnt_fn, _xt=_xt, _cols=_cols):
             reps = min(_cf(game, ctrl), 40) if _cf else _n
             for _ in range(max(0, reps)):
                 cards.make_token(game, ctrl, _s, _p, _t, kw=_kw,
-                                 subtypes=(_s,), counters=_c)
+                                 subtypes=(_s,), counters=_c, extra_types=_xt, colors=_cols)
         return eff
 
     m = re.search(r"deals? (\w+) damage to each opponent", t)
@@ -15849,6 +15886,112 @@ def _proliferate(game, ctrl, times=None, on_done=None):
         _apply(_bot_pick())
         _one(k_left - 1)
     _one(times)
+
+
+
+
+def _hand_to_library(game, ctrl, n, top=True):
+    """Poner N cartas de la mano arriba (en el orden elegido: la última elegida queda arriba) o al
+    fondo de la biblioteca. Humano: elige de a una; bot: las peores según su política de descarte."""
+    where = "arriba" if top else "al fondo"
+
+    def _put(c):
+        if c in ctrl.hand:
+            ctrl.hand.remove(c)
+            if top:
+                ctrl.library.append(c)
+            else:
+                ctrl.library.insert(0, c)
+
+    def _bot_pick():
+        pol = getattr(ctrl, "policy", None)
+        pick = None
+        if pol is not None and hasattr(pol, "choose_discard"):
+            try:
+                pick = pol.choose_discard(game, ctrl)
+            except Exception:  # noqa: BLE001
+                pick = None
+        return pick if pick in ctrl.hand else (ctrl.hand[0] if ctrl.hand else None)
+
+    if ctrl is getattr(game, "interactive_human", None):
+        def _step(k):
+            if k <= 0 or not ctrl.hand:
+                game.log(f"{ctrl.name} pone {n} carta(s) de su mano {where} de su biblioteca")
+                return
+            _human_target_choice(
+                game, ctrl, "etb_target",
+                f"Elegí una carta de tu mano para poner {where} de tu biblioteca ({n - k + 1} de {n})"
+                + (" — la última que elijas queda arriba" if top and n > 1 else ""),
+                [(c.name, c) for c in ctrl.hand], lambda c, _k=k: (_put(c), _step(_k - 1)))
+        _route_choice(game, ctrl, lambda: _step(n), lambda: [_put(_bot_pick()) for _ in range(min(n, len(ctrl.hand)))])
+        return
+    for _ in range(min(n, len(ctrl.hand))):
+        _put(_bot_pick())
+    game.log(f"{ctrl.name} pone {n} carta(s) de su mano {where} de su biblioteca")
+
+
+_TOKEN_COLOR = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
+
+_RIDER_VERBS = {"gains": "gain", "loses": "lose", "draws": "draw", "creates": "create", "discards": "discard",
+                "mills": "mill", "puts": "put", "searches": "search", "sacrifices": "sacrifice", "scries": "scry",
+                "returns": "return", "shuffles": "shuffle", "may": "may"}
+
+
+def _removal_riders(oracle):
+    """Frases que siguen a una remoción dirigida ("Exile target creature. Its controller gains life equal
+    to its power.") -> lista de (por_objetivo, fn). fn(game, ctrl, quien, lki_power)."""
+    text = _strip_reminder(oracle or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    sents = [x.strip() for x in re.split(r"(?<=\.)\s+", text) if x.strip()]
+    idx = next((i for i, x in enumerate(sents)
+                if re.search(r"\b(destroy|exile|return|put)\b.*\btarget\b", x, re.I)), None)
+    if idx is None:
+        return []
+    out = []
+    for snt in sents[idx + 1:]:
+        low = snt.lower().rstrip(".")
+        if low.startswith(("flashback", "cycling", "buyback", "overload", "kicker", "entwine", "splice")):
+            break
+        if re.fullmatch(r"(its|their) controllers? gains? life equal to its power", low):
+            out.append((True, lambda g, c, who, pw: g.gain_life(who, max(0, pw), "remoción")))
+            continue
+        m = re.fullmatch(r"(?:its|their) (?:controller|owner)s? (\w+) (.+)", low)
+        if m and m.group(1) in _RIDER_VERBS:
+            rest = m.group(2)
+            if m.group(1) == "may":
+                rest = rest.replace("their library", "your library").replace("their hand", "your hand")
+                body = "you may " + rest
+            else:
+                body = _RIDER_VERBS[m.group(1)] + " " + rest.replace("their library", "your library")
+            e = _effect_any(body + ".")
+            if e is not None:
+                out.append((True, lambda g, c, who, pw, _e=e: _e(g, who)))
+            continue
+        if re.search(r"\b(it|its|that|those|this way)\b", low):
+            continue                      # depende del objetivo de otra forma: no se adivina
+        e = _effect_any(low + ".")
+        if e is not None:
+            out.append((False, lambda g, c, who, pw, _e=e: _e(g, c)))
+    return out
+
+
+def _with_removal_riders(base, oracle):
+    riders = _removal_riders(oracle)
+    if not riders:
+        return base
+
+    def eff(game, ctrl, targets, _b=base, _r=riders):
+        lki = [(t, t.controller, t.power if t.is_creature() else 0) for t in (targets or [])
+               if hasattr(t, "card") and hasattr(t, "controller") and t in t.controller.battlefield]
+        _b(game, ctrl, targets)
+        gone = [(t, who, pw) for t, who, pw in lki if t not in who.battlefield]
+        for per, fn in _r:
+            if per:
+                for _t, who, pw in gone:
+                    fn(game, ctrl, who, pw)
+            else:
+                fn(game, ctrl, ctrl, 0)
+    return eff
 
 
 def _station_tier_card(data, name, text):
@@ -19043,6 +19186,649 @@ def _wire_ci(card, data, name, types):
     if trg != (card.triggers or {}):
         card.triggers = trg
 
+def _mite_tokens(game, ctrl, n):
+    """N fichas Phyrexian Mite: artefacto-criatura 1/1 incolora con toxic 1 y "This token can't block"."""
+    out = _ci_tokens(game, ctrl, "Phyrexian Mite", 1, 1, n=n, kw=("toxic",), subtypes=("Phyrexian", "Mite"))
+    for t in out:
+        t.card.toxic_n = 1
+        t.card.cant_block_static = True
+    return out
+
+
+def _gingerbrute(game, ctrl):
+    """Ficha Gingerbrute: {1} 1/1 Food Golem artefacto-criatura con prisa, "{1}: no puede ser bloqueada este
+    turno salvo por criaturas con prisa" y "{2}, {T}, sacrificala: ganás 3 de vida"."""
+    def _ev(g, c, perm, tg):
+        perm._evade_haste_turn = g.turn
+        g.log(f"{perm.name}: este turno solo la bloquean criaturas con prisa")
+
+    def _food(g, c, perm, tg):
+        g.gain_life(c, 3, "Gingerbrute")
+    abs_ = [_ci_ab("No bloqueable salvo por criaturas con prisa", parse_cost("1"), _ev),
+            _ci_ab("Ganar 3 de vida (sacrificar)", parse_cost("2"), _food, tap=True, sacrifice_self=True)]
+    toks = _ci_tokens(game, ctrl, "Gingerbrute", 1, 1, kw=("haste",), subtypes=("Food", "Golem"), abilities=abs_)
+    for t in toks:
+        t.card.cost = parse_cost("1")
+    return toks
+
+
+def _reveal_until(game, owner, pred):
+    """Revela del tope de la biblioteca de `owner` hasta una carta que cumpla `pred`. Devuelve (carta|None, resto)."""
+    rev = []
+    while owner.library:
+        c = owner.library.pop()
+        if pred(c):
+            return c, rev
+        rev.append(c)
+    return None, rev
+
+
+def _bottom_random(game, owner, cards_):
+    cards_ = list(cards_)
+    game.rng.shuffle(cards_)
+    for c in cards_:
+        owner.library.insert(0, c)
+
+
+def _wire_jace(card, data, name, types):
+    """Mazo de Jace (Multiverse Reforged) y genéricos: cartas que no funcionaban o estaban aproximadas."""
+    raw = data.get("_orig_text") or data.get("oracle_text", "") or ""
+    t = re.sub(r"\s+", " ", _strip_reminder(raw).lower()).strip()
+    for nm in sorted((x for x in _self_names(name) if x), key=len, reverse=True):
+        t = t.replace(nm, "~")
+    t = re.sub(r"\bthis (?:creature|artifact|enchantment|land|permanent)\b", "~", t)
+    trg = dict(card.triggers or {})
+    spell = bool({"instant", "sorcery"} & types)
+
+    def _add_trig(key, fn, replace=False):
+        prev = None if replace else trg.get(key)
+        trg[key] = fn if prev is None else (lambda g, perm, _a=prev, _b=fn, **kw: (_a(g, perm, **kw), _b(g, perm, **kw)))
+
+    def _mine(perm, kw):
+        return kw.get("player") in (None, perm.controller)
+
+    # --- protección impresa: "protection from white and from blue" / "from everything" / "from creatures"
+    for _pm in re.finditer(r"protection from ([a-z ,]+?)(?:\.|\n|$|\()", _strip_reminder(raw).lower()):
+        quals = [q.strip() for q in re.split(r",? (?:and )?from |, ", _pm.group(1)) if q.strip()]
+        quals = [q for q in quals if q in _PROT_OK]
+        if quals and not re.search(r"(?:gain|gains|have|has) protection from " + re.escape(_pm.group(1)),
+                                    _strip_reminder(raw).lower()):
+            card.prot_from = tuple(sorted(set(getattr(card, "prot_from", ()) or ()) | set(quals)))
+
+    # --- "Create X …. If X is N or more, destroy all other creatures." (Martial Coup, White Sun's Twilight)
+    m = re.search(r"if x is (\w+) or more, destroy all other creatures\.?", t)
+    if spell and m and _count_word(m.group(1)):
+        thr = _count_word(m.group(1))
+        pre_txt = re.sub(r"(?i)\s*If X is \w+ or more, destroy all other creatures\.?", "", _strip_reminder(raw)).strip()
+        mites = re.search(r"create x 1/1 colorless phyrexian mite", t)
+        if mites:
+            pre_txt = re.sub(r"(?i)\s*Create X 1/1 colorless Phyrexian Mite[^.]*\.(?:\"\))?\"?\.?", "", pre_txt).strip()
+        pre = _effect_any(pre_txt) if pre_txt else None
+
+        def _xw(g, c, tg, _pre=pre, _thr=thr, _mites=bool(mites)):
+            x = max(0, getattr(g, "spell_x", 0) or 0)
+            before = {id(pm) for pl in g.players for pm in pl.battlefield}
+            if _pre is not None:
+                _pre(g, c)
+            if _mites and x:
+                _mite_tokens(g, c, x)
+            new = {id(pm) for pl in g.players for pm in pl.battlefield} - before
+            if x >= _thr:
+                victims = [pm for pl in g.players for pm in pl.creatures() if id(pm) not in new]
+                for pm in victims:
+                    g.destroy(pm, card.name)
+                g.log(f"{card.name} (X={x}): destruye las demás criaturas ({len(victims)})")
+        card.on_cast_resolve = _xw
+        card.tags = card.tags | {"wipe"}
+
+    # --- Brainstorm / Brainsurge: "Draw N cards, then put M cards from your hand on top …"
+    if spell and re.fullmatch(r"draw \w+ cards?, then put \w+ cards? from your hand on (?:top|the bottom) of your "
+                              r"library(?: in any order)?\.?", t):
+        _e = _effect_any(_strip_reminder(raw))
+        if _e is not None:
+            card.on_cast_resolve = (lambda g, c, tg, _e=_e: _e(g, c))
+
+    # --- Occult Epiphany
+    if name == "Occult Epiphany":
+        def _oe(g, c, tg):
+            x = max(0, getattr(g, "spell_x", 0) or 0)
+            c.draw(x, g)
+            gy0 = list(c.graveyard)
+
+            def _after():
+                disc = [x_ for x_ in c.graveyard if x_ not in gy0]
+                kinds = set()
+                for d in disc:
+                    kinds |= set(d.types) & {"artifact", "battle", "creature", "enchantment", "instant", "kindred",
+                                             "land", "planeswalker", "sorcery"}
+                if kinds:
+                    _ci_tokens(g, c, "Spirit", 1, 1, n=len(kinds), types=("creature",), kw=("flying",),
+                               subtypes=("Spirit",))
+                g.log(f"Occult Epiphany: {len(kinds)} tipo(s) entre las descartadas -> {len(kinds)} Espíritu(s)")
+            if x:
+                _human_or_auto_discard(g, c, x, then=_after)
+            else:
+                _after()
+        card.on_cast_resolve = _oe
+
+    # --- Teferi's Reproach
+    if name == "Teferi's Reproach":
+        card.target_spec = "opp_player"
+
+        def _tr(g, c, tg, _card=card):
+            o = next((x for x in (tg or []) if hasattr(x, "battlefield")), None)
+            if o is None:
+                opps = [x for x in g.opponents(c) if not x.lost and not x.has_hexproof()]
+                o = max(opps, key=lambda x: sum(1 for pm in x.battlefield if not pm.card.is_land()), default=None)
+            if o is None or o.lost:
+                return
+            o.__dict__["_life_lock"] = True
+            for pm in [x for x in o.battlefield if not x.card.is_land()]:
+                g.phase_out(pm)
+            g.log(f"{o.name}: protección de todo y su vida no puede cambiar hasta su próximo turno; "
+                  f"sus permanentes no tierra quedan fuera de fase")
+            _card._exile_after_cast = True
+        card.on_cast_resolve = _tr
+
+    # --- Jace, Multiverse Architect: impuesto en el combate de cada rival
+    if re.search(r"at the beginning of combat on each opponent's turn, they may pay \{2\}\. if they don't, creatures "
+                 r"they control can't attack (?:jace|~)s you control this turn", t):
+        def _jt(g, perm, active=None, **kw):
+            c = perm.controller
+            if active is None or active is c or active not in g.opponents(c):
+                return
+            cost = parse_cost("2")
+
+            def _block():
+                c._jace_block = {k for k in (getattr(c, "_jace_block", None) or set()) if k[0] == g.turn}
+                c._jace_block.add((g.turn, id(active)))
+                g.log(f"{active.name} no paga {{2}}: sus criaturas no pueden atacar a Jaces de {c.name} este turno")
+
+            def _pay():
+                if active.can_pay(cost):
+                    active.pay(cost)
+                    g.log(f"{active.name} paga {{2}} ({perm.name})")
+                else:
+                    _block()
+            if not active.can_pay(cost):
+                _block()
+                return
+            if active is getattr(g, "interactive_human", None):
+                _route_choice(g, active, lambda: _human_target_choice(
+                    g, active, "may", f"{perm.name}: ¿pagás {{2}} para poder atacar a Jace este turno?",
+                    [("Pagar {2}", True), ("No pagar", False)], lambda v: _pay() if v else _block()), _block)
+            else:
+                # bot: paga solo si tiene con qué atacar y le sobra maná para su turno
+                atk = [x for x in active.creatures() if not x.tapped and x.can_attack()]
+                (_pay if atk and active.available_mana() >= 4 else _block)()
+        _add_trig("each_combat", _jt)
+
+    # --- Nissa, Leyline Tamer
+    if name == "Nissa, Leyline Tamer":
+        def _ni(g, perm, **kw):
+            c = perm.controller
+            if not _mine(perm, kw):
+                return
+            c.draw(1, g)
+            if getattr(perm, "_nissa_turn", None) == g.turn:
+                return
+            perm._nissa_turn = g.turn
+            hit, rest = _reveal_until(g, c, lambda x: x.is_creature())
+            if hit is not None:
+                g.move_to_battlefield(hit, c)
+            _bottom_random(g, c, rest)
+            g.log(f"{perm.name}: revela {len(rest) + (1 if hit else 0)}; " + (f"{hit.name} entra al campo" if hit else
+                                                                              "sin criaturas"))
+        _add_trig("landfall", _ni, replace=True)
+
+    # --- Omnath, Locus of the Void
+    if name == "Omnath, Locus of the Void":
+        card.keep_mana = True
+        _psm = card.static_mod
+
+        def _om(src, tgt, _p=_psm):
+            d = _p(src, tgt) if _p else None
+            if src is tgt:
+                n = max(0, getattr(src.controller, "mana_pool", 0) or 0)
+                d = ((d[0] if d else 0) + n, (d[1] if d else 0) + n)
+            return d
+        card.static_mod = _om
+
+    # --- Ob Nixilis, the Ascended: ángel si ganaste vida este turno
+    if "at the beginning of each end step, if you gained life this turn, create a 4/4 white angel creature token " \
+       "with flying" in t:
+        def _ob(g, perm, **kw):
+            c = perm.controller
+            if getattr(c, "gained_turn", None) == g.turn:
+                _ci_tokens(g, c, "Angel", 4, 4, types=("creature",), kw=("flying",), subtypes=("Angel",))
+                g.log(f"{perm.name}: ganaste vida este turno -> Ángel 4/4 volador")
+        _add_trig("each_end_step", _ob, replace=True)
+
+    # --- Avacyn, Angel of Horror
+    if "whenever ~ or another nontoken creature you control dies, return that card to the battlefield under your " \
+       "control at the beginning of the next end step" in t:
+        def _av(g, perm, player=None, **kw):
+            d = kw.get("subject") or (perm if kw.get("self_death") else None)
+            c = perm.controller
+            if d is None or d.is_token or d.controller is not c:
+                return
+            cd = getattr(d.card, "_real", None) or d.card
+
+            def _back(gg, _cd=cd, _c=c):
+                for pl in gg.players:
+                    if _cd in pl.graveyard:
+                        pl.graveyard.remove(_cd)
+                        gg.move_to_battlefield(_cd, _c)
+                        gg.log(f"{_cd.name} vuelve al campo bajo el control de {_c.name} (Avacyn)")
+                        return
+            g.delayed_end.append(_back)
+        card.death_self_too = True
+        _add_trig("death", _av)
+
+    # --- Jhoira, Weatherlight Corsair
+    if "whenever ~ enters or attacks, target opponent reveals cards from the top of their library until they reveal " \
+       "a historic permanent card" in t:
+        def _jh(g, perm):
+            c = perm.controller
+
+            def _go(o):
+                hit, rest = _reveal_until(g, o, lambda x: not ({"instant", "sorcery"} & x.types) and (
+                    "artifact" in x.types or "legendary" in x.supertypes or "saga" in {s.lower() for s in x.subtypes}))
+                _bottom_random(g, o, rest)
+                if hit is None:
+                    g.log(f"{o.name} no revela ningún permanente histórico")
+                    return
+                g.move_to_battlefield(hit, c)
+                mv = _b31_cmc(hit)
+                c.life -= mv
+                g.log(f"{perm.name}: {c.name} pone {hit.name} de {o.name} y pierde {mv} de vida")
+            _pick_player(g, c, _go, include_self=False, prompt=f"{perm.name}: elegí un oponente objetivo")
+        card.on_etb = lambda g, c, perm: _jh(g, perm)
+        _add_trig("attacks", lambda g, perm, **kw: _jh(g, perm), replace=True)
+
+    # --- Tamiyo, Upriser Crowned
+    if "whenever one or more creatures deal combat damage to you while you're the monarch, tap those creatures and " \
+       "put a stun counter on each of them" in t:
+        card.monarch_stun = True
+
+    # --- Ginger, Queen of Sweets
+    if name == "Ginger, Queen of Sweets":
+        def _gs(g, c, perm, tg):
+            g.gain_life(c, 6, perm.name)
+        card.activated_abilities = list(card.activated_abilities or ()) + [
+            _ci_ab("Ganar 6 de vida (sacrificar a Ginger)", parse_cost("2"), _gs, tap=True, sacrifice_self=True)]
+
+        def _gup(g, perm, **kw):
+            if getattr(g, "monarch", None) is perm.controller:
+                _gingerbrute(g, perm.controller)
+                g.log(f"{perm.name}: sos el monarca -> ficha Gingerbrute")
+        _add_trig("each_upkeep", _gup, replace=True)
+
+    # --- Memnarch, the Warden
+    if "whenever ~ attacks, draw a card for each artifact you control" in t:
+        def _mm(g, perm, **kw):
+            n = sum(1 for x in perm.controller.battlefield if "artifact" in x.card.types)
+            perm.controller.draw(n, g)
+            g.log(f"{perm.name}: roba {n} (artefactos)")
+        _add_trig("attacks", _mm, replace=True)
+
+    # --- Skrelv's Hive
+    if name == "Skrelv's Hive":
+        def _sh(g, perm, **kw):
+            if not _mine(perm, kw):
+                return
+            perm.controller.life -= 1
+            _mite_tokens(g, perm.controller, 1)
+            g.log(f"{perm.name}: pierde 1 de vida y crea un Phyrexian Mite")
+        _add_trig("upkeep", _sh, replace=True)
+        card.kind_grants = list(getattr(card, "kind_grants", None) or []) + [
+            (lambda pm: pm.is_creature() and "toxic" in (pm.card.keywords | pm.temp_keywords | pm.perma_keywords)
+             and pm.game is not None and any(o.poison >= 3 for o in pm.game.opponents(pm.controller)),
+             {"lifelink"}, "you", False)]
+
+    # --- Shark Typhoon
+    if name == "Shark Typhoon":
+        def _st(g, perm, card=None, **kw):
+            if _mine(perm, kw) and card is not None and not card.is_creature():
+                x = _b31_cmc(card)
+                _ci_tokens(g, perm.controller, "Shark", x, x, types=("creature",), kw=("flying",), subtypes=("Shark",))
+                g.log(f"{perm.name}: Tiburón {x}/{x} volador")
+        _add_trig("cast", _st, replace=True)
+
+    # --- Archfiend of Despair
+    if "at the beginning of each end step, each opponent loses life equal to the life that player lost this turn" in t:
+        def _ad(g, perm, **kw):
+            for o in g.opponents(perm.controller):
+                if o.lost:
+                    continue
+                n = o.life_lost_amt if getattr(o, "life_lost_turn", None) == g.turn else 0
+                if n > 0:
+                    o.life -= n
+                    g.log(f"{perm.name}: {o.name} pierde {n} de vida")
+        _add_trig("each_end_step", _ad, replace=True)
+
+    # --- Archon of Cruelty
+    if "whenever ~ enters or attacks, target opponent sacrifices a creature or planeswalker of their choice, discards " \
+       "a card, and loses 3 life. you draw a card and gain 3 life" in t:
+        def _ac(g, perm):
+            c = perm.controller
+
+            def _go(o):
+                pool = [x for x in o.battlefield if x.is_creature() or "planeswalker" in x.card.types]
+                if pool:
+                    _human_or_auto_sacrifice(g, o, f"{perm.name}: elegí una criatura o planeswalker para sacrificar",
+                                             pool=pool)
+                if o.hand:
+                    _human_or_auto_discard(g, o, 1)
+                o.life -= 3
+                c.draw(1, g)
+                g.gain_life(c, 3, perm.name)
+                g.log(f"{perm.name}: {o.name} sacrifica, descarta y pierde 3; {c.name} roba y gana 3")
+            _pick_player(g, c, _go, include_self=False, prompt=f"{perm.name}: elegí un oponente objetivo")
+        card.on_etb = lambda g, c, perm: _ac(g, perm)
+        _add_trig("attacks", lambda g, perm, **kw: _ac(g, perm), replace=True)
+
+    # --- Dreadhorde Invasion
+    if name == "Dreadhorde Invasion":
+        def _di(g, perm, **kw):
+            c = perm.controller
+            if not _mine(perm, kw):
+                return
+            c.life -= 1
+            army = next((x for x in c.battlefield if x.has_subtype("Army")), None)
+            if army is None:
+                made = _ci_tokens(g, c, "Zombie Army", 0, 0, types=("creature",), subtypes=("Zombie", "Army"))
+                army = made[0] if made else None
+            if army is not None:
+                army.added_subtypes.add("Zombie")
+                g.add_counters(army, "+1/+1", 1)
+            g.log(f"{perm.name}: pierde 1 de vida y amasa Zombies 1")
+        _add_trig("upkeep", _di, replace=True)
+
+        def _dil(g, perm, attacker=None, **kw):
+            if attacker is not None and attacker.is_token and attacker.has_subtype("Zombie") and attacker.power >= 6:
+                attacker.temp_keywords.add("lifelink")
+                g.log(f"{attacker.name} gana vínculo vital")
+        trg.pop("attacks", None)
+        _add_trig("creature_attacks", _dil, replace=True)
+
+    # --- Venser, Fervent Forger: ETB modal
+    if "when ~ enters, choose one — • copy target instant or sorcery spell an opponent controls twice" in t:
+        def _vf(g, c, perm):
+            spells = [o for o in g.stack if getattr(o, "kind", "") == "spell" and o.controller in g.opponents(c)
+                      and {"instant", "sorcery"} & set(getattr(getattr(o, "source", None), "types", set()) or ())]
+            perms = [x for o in g.opponents(c) for x in o.battlefield if g.can_target(c, x)]
+
+            def _copy2(o):
+                if o not in g.stack:
+                    return
+                src = o.source
+                spec = getattr(src, "target_spec", None)
+                for _k in range(2):
+                    g.copy_spell_on_stack(o, controller=c)
+                    cp = g.stack[-1]
+                    if spec and spec in g._SPEC_OK:
+                        pool = [x for pl in g.players for x in pl.battlefield
+                                if g._SPEC_OK[spec](x) and g.can_target(c, x)]
+                        if c is getattr(g, "interactive_human", None) and pool:
+                            def _nt(x, _cp=cp):
+                                _cp.targets = [x]
+                            _choose_tgt(g, c, pool, f"{perm.name}: nuevo objetivo para la copia {_k + 1} "
+                                                    f"(Ninguno = el mismo)", _nt, allow_none=True)
+                        elif c.policy is not None and hasattr(c.policy, "choose_targets"):
+                            nt = c.policy.choose_targets(g, c, src)
+                            if nt:
+                                cp.targets = list(nt)
+                g.log(f"{perm.name}: copia dos veces {src.name}")
+
+            def _tok(x):
+                _make_token_copies(g, c, x, {"n": 2, "haste": True, "eot": "sacrifice"})
+                g.log(f"{perm.name}: dos copias de {x.name} con prisa (se sacrifican al final del turno)")
+
+            def _mode(mi):
+                if mi == 0:
+                    best = sorted(spells, key=lambda o: -_b31_cmc(o.source))
+                    _b31_pick_card(g, c, [o.source for o in best], f"{perm.name}: elegí el hechizo a copiar",
+                                   lambda sc: _copy2(next(o for o in spells if o.source is sc)), allow_none=False)
+                else:
+                    best = sorted(perms, key=lambda x: -(_b31_cmc(x.card) + (x.power if x.is_creature() else 0)))
+                    _choose_tgt(g, c, best, f"{perm.name}: elegí un permanente rival para copiar", _tok)
+            opts = ([("Copiar dos veces un instantáneo/conjuro rival", 0)] if spells else []) + \
+                   ([("Dos fichas copia de un permanente rival (con prisa)", 1)] if perms else [])
+            if not opts:
+                return
+            if c is getattr(g, "interactive_human", None) and len(opts) > 1:
+                _route_choice(g, c, lambda: _human_target_choice(g, c, "etb_target", f"{perm.name}: elegí un modo",
+                                                                 opts, _mode), lambda: _mode(opts[0][1]))
+            else:
+                _mode(0 if spells and not any("counter" in (getattr(o.source, "tags", set()) or set())
+                                              for o in spells) else opts[-1][1])
+        card.on_etb = _vf
+
+    # --- Chromatic Lantern
+    if name == "Chromatic Lantern":
+        card.lands_any_color = True
+
+    # --- Proteus Staff
+    if name == "Proteus Staff":
+        for ab in card.activated_abilities:
+            if ab["label"].lower().startswith("put target creature on the bottom"):
+                ab["target_spec"] = "any_creature"
+                ab["sorcery_speed"] = True
+
+                def _ps(g, c, perm, tg):
+                    for x in (tg or [])[:1]:
+                        if x not in x.controller.battlefield:
+                            continue
+                        ctl = x.controller
+                        owner = getattr(x.card, "_owner", None) or ctl
+                        ctl.battlefield.remove(x)
+                        g.note_departure(x, "library") if hasattr(g, "note_departure") else None
+                        if not x.is_token:
+                            (owner if hasattr(owner, "library") else ctl).library.insert(
+                                0, getattr(x.card, "_real", None) or x.card)
+                        hit, rest = _reveal_until(g, ctl, lambda y: y.is_creature())
+                        if hit is not None:
+                            g.move_to_battlefield(hit, ctl)
+                        _bottom_random(g, ctl, rest)
+                        g.log(f"{perm.name}: {x.name} al fondo; {ctl.name} pone "
+                              f"{hit.name if hit else 'nada'} en el campo")
+                ab["effect"] = _ps
+
+    # --- Plan for All Outcomes (ETB)
+    if "when ~ enters, the owner of up to one other target nonland permanent puts it on their choice of the top or " \
+       "bottom of their library" in t:
+        def _pf(g, c, perm):
+            pool = [x for pl in g.players for x in pl.battlefield if x is not perm and not x.card.is_land()
+                    and g.can_target(c, x)]
+            pool.sort(key=lambda x: (x.controller is c, -(_b31_cmc(x.card))))
+
+            def _go(x):
+                if x not in x.controller.battlefield:
+                    return
+                ctl = x.controller
+                owner = getattr(x.card, "_owner", None) or ctl
+
+                def _put(top):
+                    if x not in x.controller.battlefield:
+                        return
+                    x.controller.battlefield.remove(x)
+                    if not x.is_token:
+                        cd = getattr(x.card, "_real", None) or x.card
+                        if top:
+                            owner.library.append(cd)
+                        else:
+                            owner.library.insert(0, cd)
+                    g.log(f"{x.name} va {'arriba' if top else 'al fondo'} de la biblioteca de {owner.name}")
+                if owner is getattr(g, "interactive_human", None):
+                    _route_choice(g, owner, lambda: _human_target_choice(
+                        g, owner, "may", f"{x.name}: ¿arriba o al fondo de tu biblioteca?",
+                        [("Arriba", True), ("Al fondo", False)], _put), lambda: _put(True))
+                else:
+                    _put(True)
+            _choose_tgt(g, c, [x for x in pool if x.controller is not c] or pool,
+                        f"{perm.name}: elegí hasta un permanente no tierra", _go, allow_none=True)
+        card.on_etb = _pf
+
+    # --- Kher Keep
+    if name == "Kher Keep":
+        for ab in card.activated_abilities:
+            if "kobolds of kher keep" in (ab.get("label", "") + data.get("oracle_text", "")).lower() and "Create" in ab["label"]:
+                ab["effect"] = (lambda g, c, perm, tg: _ci_tokens(g, c, "Kobolds of Kher Keep", 0, 1, types=("creature",),
+                                                                   subtypes=("Kobold",)))
+
+    # --- tierras que se animan hasta fin de turno (Restless Anchorage / Spire)
+    m = re.search(r"until end of turn, ~ becomes a (\d+)/(\d+) ([a-z ]+?) creature with (.+?)\.\"? it's still a land", t)
+    if m and "land" in types:
+        _p, _t = int(m.group(1)), int(m.group(2))
+        _desc = m.group(3).split()
+        _sub = _desc[-1].capitalize()
+        _kwt = m.group(4)
+        _kws = [k for nm_, k in _KEYWORD_WORDS if re.search(r"\b" + nm_ + r"\b", _kwt) and "during your turn" not in _kwt]
+        _fs_my_turn = bool(re.search(r"during your turn, (?:this creature|~) has first strike", _kwt))
+        for ab in card.activated_abilities:
+            if ab["label"].lower().startswith("until end of turn, this land becomes"):
+                def _an(g, c, perm, tg, _p=_p, _t=_t, _sub=_sub, _kws=tuple(_kws), _fs=_fs_my_turn):
+                    if perm not in c.battlefield:
+                        return
+                    perm.temp_creature = True
+                    perm._temp_base = (g.turn, (_p, _t))
+                    perm.temp_subtypes = set(getattr(perm, "temp_subtypes", set()) or set()) | {_sub}
+                    for k in _kws:
+                        perm.temp_keywords.add(k)
+                    if _fs and g.ap() is c:
+                        perm.temp_keywords.add("first_strike")
+                    g.log(f"{perm.name} se vuelve una criatura {_p}/{_t} hasta el fin del turno")
+                ab["effect"] = _an
+
+    # --- Serra's Emissary
+    if "as ~ enters, choose a card type" in t and "you and creatures you control have protection from the chosen card " \
+                                                  "type" in t:
+        _ct = ("artifact", "battle", "creature", "enchantment", "instant", "land", "planeswalker", "sorcery")
+        _es = {"artifact": "artefacto", "battle": "batalla", "creature": "criatura", "enchantment": "encantamiento",
+               "instant": "instantáneo", "land": "tierra", "planeswalker": "planeswalker", "sorcery": "conjuro"}
+
+        def _se(g, c, perm):
+            def _set(k):
+                perm._prot_grant = k
+                g.log(f"{perm.name}: protección de {_es[k]} para {c.name} y sus criaturas")
+            if c is getattr(g, "interactive_human", None):
+                _route_choice(g, c, lambda: _human_target_choice(
+                    g, c, "etb_target", f"{perm.name}: elegí un tipo de carta", [(_es[k], k) for k in _ct], _set),
+                              lambda: _set("creature"))
+            else:
+                _set("creature")
+        card.on_etb = _se
+
+    # --- The Ur-Sphinx
+    if name == "The Ur-Sphinx":
+        card.spell_discount = (1, lambda sp: "sphinx" in {s.lower() for s in getattr(sp, "subtypes", set())}
+                               and getattr(sp, "name", "") != "The Ur-Sphinx")
+
+        def _us(g, perm, **kw):
+            c = perm.controller
+            dec = getattr(g, "_last_declared", None) or []
+            n = sum(1 for a in dec if a.controller is c and a.has_subtype("Sphinx"))
+            if not _mine(perm, kw) or n <= 0:
+                return
+            milled = {}
+            for pl in g.players:
+                if pl.lost:
+                    continue
+                got = []
+                for _ in range(min(n, len(pl.library))):
+                    cd = pl.library.pop()
+                    pl.graveyard.append(cd)
+                    got.append(cd)
+                milled[pl] = got
+                g.log(f"{perm.name}: {pl.name} muele {len(got)}")
+            for pl, got in milled.items():
+                ok = [x for x in got if not x.is_land() and x in pl.graveyard]
+                if not ok:
+                    continue
+                ok.sort(key=lambda x: -_b31_cmc(x))
+
+                def _cast(x, _pl=pl):
+                    if x in _pl.graveyard:
+                        _pl.graveyard.remove(x)
+                        _b31_free_cast(g, c, x, owner=_pl)
+                _b31_pick_card(g, c, ok, f"{perm.name}: ¿lanzás gratis una carta molida de {pl.name}?", _cast,
+                               allow_none=True)
+        _add_trig("you_attack", _us)
+
+    # --- fuentes de maná: dolor, identidad del comandante, "que una tierra pueda producir"
+    lo = _strip_reminder(raw).lower()
+    mp = re.findall(r"\{t\}: add \{([wubrg])\} or \{([wubrg])\}\. (?:~|this land|this artifact|this creature) deals 1 "
+                    r"damage to you", lo.replace(name.lower(), "~"))
+    if mp:
+        card.pain_colors = tuple(sorted({x.upper() for pair in mp for x in pair}))
+    if card.produces is not None and re.search(r"\{t\}: add one mana of any color in your commander's color identity", lo):
+        _pp = card.produces
+
+        def _cid(perm, pl, _p=_pp):
+            base = _p(perm, pl) or {}
+            if pl is None:
+                return base
+            ident = set(pl.identity()) & {"W", "U", "B", "R", "G"}
+            return {c: max(base.values() or [1]) for c in ident}
+        card.produces = _cid
+    if card.produces is not None and re.search(r"\{t\}: add one mana of any color that a land an opponent controls "
+                                               r"could produce", lo):
+        def _oc(perm, pl):
+            g = getattr(perm, "game", None) if perm is not None else None
+            if g is None or pl is None:
+                return {c: 1 for c in ("W", "U", "B", "R", "G")}
+            cols = set()
+            for o in g.opponents(pl):
+                for x in o.battlefield:
+                    if x.card.is_land() and x.card.produces is not None and not getattr(x.card, "_could_prod", False):
+                        try:
+                            cols |= set((x.card.produces(x, o) or {}).keys())
+                        except Exception:  # noqa: BLE001
+                            pass
+            return {c: 1 for c in cols & {"W", "U", "B", "R", "G"}}
+        card.produces = _oc
+        card._could_prod = True
+    if card.produces is not None and re.search(r"\{t\}: add one mana of any type that a land you control could produce",
+                                               lo) and "if ~ has" not in lo:
+        def _rp(perm, pl):
+            if pl is None:
+                return {c: 1 for c in ("W", "U", "B", "R", "G", "C")}
+            types_ = set()
+            for x in pl.battlefield:
+                if x is perm or not x.card.is_land() or x.card.produces is None or getattr(x.card, "_could_prod", False):
+                    continue
+                try:
+                    types_ |= set((x.card.produces(x, pl) or {}).keys())
+                except Exception:  # noqa: BLE001
+                    pass
+            return {c: 1 for c in types_}
+        card.produces = _rp
+        card._could_prod = True
+
+    # --- Fabled Passage: "Then if you control four or more lands, untap that land."
+    if name == "Fabled Passage":
+        for ab in card.activated_abilities:
+            if ab["label"].lower().startswith("search your library for a basic land"):
+                _pe = ab["effect"]
+
+                def _fp(g, c, perm, tg, _pe=_pe):
+                    before = {id(x) for x in c.battlefield}
+                    _pe(g, c, perm, tg)
+                    new = [x for x in c.battlefield if id(x) not in before and x.card.is_land()]
+                    if new and sum(1 for x in c.battlefield if x.card.is_land()) >= 4:
+                        new[0].tapped = False
+                        g.log(f"{new[0].name} se endereza (4+ tierras)")
+                ab["effect"] = _fp
+
+    if trg != (card.triggers or {}):
+        card.triggers = trg
+
+
+_PROT_OK = {"white", "blue", "black", "red", "green", "everything", "multicolored", "monocolored", "colorless",
+            "all colors", "each color", "creatures", "artifacts", "enchantments", "instants", "sorceries",
+            "planeswalkers", "lands"}
+
 def _wire_b30(card, data, name, types):
     raw = data.get("_orig_text") or data.get("oracle_text", "") or ""
     t = re.sub(r"\s+", " ", raw.lower())
@@ -20368,7 +21154,7 @@ def _build_card_from_data_impl(data: dict) -> Card:
         spec = _targeted_spell(data.get("oracle_text", ""))
         if spec is not None:
             mode, count, tspec = spec
-            card.on_cast_resolve = cards.remove_targets(mode)
+            card.on_cast_resolve = _with_removal_riders(cards.remove_targets(mode), data.get("oracle_text", ""))
             card.target_spec = tspec
             card.target_count = max(1, count)
             card.tags = card.tags | {"removal"}
@@ -23122,6 +23908,7 @@ def _build_card_from_data_impl(data: dict) -> Card:
     _wire_b35(card, data, name, types)
     _wire_b36(card, data, name, types)
     _wire_ci(card, data, name, types)
+    _wire_jace(card, data, name, types)
     if card_dice:
         card.dice_table = card_dice
     # efecto genérico POR TAG: en un hechizo, al resolver; en un permanente, solo si

@@ -59,6 +59,62 @@ KEYWORDS = {
 KW_COUNTERS = {"flying", "first_strike", "double_strike", "deathtouch", "hexproof", "indestructible",
                "lifelink", "menace", "reach", "trample", "vigilance", "shadow"}
 
+_PROT_COLORS = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
+_PROT_TYPES = {"creatures": "creature", "artifacts": "artifact", "enchantments": "enchantment",
+               "instants": "instant", "sorceries": "sorcery", "planeswalkers": "planeswalker", "lands": "land",
+               "creature": "creature", "artifact": "artifact", "enchantment": "enchantment", "instant": "instant",
+               "sorcery": "sorcery", "planeswalker": "planeswalker", "land": "land", "battle": "battle", "battles": "battle"}
+
+
+def _obj_card(src):
+    """Carta de un objeto fuente (permanente, carta, hechizo en la pila)."""
+    if src is None:
+        return None
+    if hasattr(src, "card") and not hasattr(src, "types"):
+        return src.card
+    if hasattr(src, "source") and hasattr(src, "resolve"):
+        return getattr(src.source, "card", src.source)
+    return src
+
+
+def _obj_colors(card) -> set:
+    if card is None:
+        return set()
+    cols = getattr(card, "colors", None)
+    if cols:
+        return set(cols)
+    if getattr(card, "cost", None) is not None and card.cost.pips:
+        return {p for p in card.cost.pips if p in COLORS}
+    return {c for c in (getattr(card, "color_id", None) or ()) if c in COLORS} if getattr(card, "cost", None) is None else set()
+
+
+def prot_matches(quals, src) -> bool:
+    """¿La fuente `src` tiene alguna de las cualidades de protección `quals`?"""
+    if not quals:
+        return False
+    if "everything" in quals:
+        return True
+    card = _obj_card(src)
+    if card is None:
+        return False
+    cols = _obj_colors(card)
+    types = set(getattr(card, "types", set()) or ())
+    for q in quals:
+        if q in _PROT_COLORS and _PROT_COLORS[q] in cols:
+            return True
+        if q == "multicolored" and len(cols) >= 2:
+            return True
+        if q == "monocolored" and len(cols) == 1:
+            return True
+        if q in ("all colors", "each color") and cols:
+            return True
+        if q == "colorless" and not cols:
+            return True
+        if q in _PROT_TYPES and _PROT_TYPES[q] in types:
+            return True
+    return False
+
+
 _LANDWALK = {"islandwalk": "island", "swampwalk": "swamp", "forestwalk": "forest",
              "mountainwalk": "mountain", "plainswalk": "plains", "desertwalk": "desert"}
 
@@ -357,6 +413,9 @@ class Permanent:
         pt, _off = self._mutation()
         if pt:
             return pt
+        _tb = getattr(self, "_temp_base", None)
+        if _tb is not None and self.game is not None and _tb[0] == self.game.turn:
+            return _tb[1]                        # "until end of turn, this land becomes a 2/3 …"
         if self.set_base_pt is not None:         # "es un 1/1 …" fija la P/T base
             return self.set_base_pt
         cda = getattr(self.card, "cda_pt", None)  # P/T variable ("… equal to the number of")
@@ -485,6 +544,21 @@ class Permanent:
             return True
         # keywords otorgadas por efectos estáticos (p. ej. Anger desde el cementerio)
         return self.game is not None and self.game.grants_keyword(self, kw)
+
+    def protections(self) -> set:
+        """Cualidades de protección: impresas ("protection from white and from blue") y otorgadas
+        (Serra's Emissary: el tipo elegido para vos y tus criaturas)."""
+        if self.abilities_off():
+            return set()
+        q = set(getattr(self.card, "prot_from", ()) or ())
+        q |= set(getattr(self, "_temp_prot", None) or ()) if getattr(self, "_temp_prot_turn", None) == getattr(
+            self.game, "turn", None) else set()
+        if self.controller is not None and self.is_creature():
+            for pm in self.controller.battlefield:
+                t = getattr(pm, "_prot_grant", None)
+                if t and not pm.abilities_off():
+                    q.add(t)
+        return q
 
     def aura_flag(self, flag: str) -> bool:
         """¿Algún aura anexada a este permanente tiene `flag`? (Pacifism, Claustrophobia…)"""
@@ -615,6 +689,8 @@ class Player:
         # toda pérdida de vida (daño, drenaje, pagar vida) pasa por acá: dispara
         # "whenever an opponent / a player / you lose(s) life" (Exquisite Blood…)
         old = self.__dict__.get("_life")
+        if old is not None and v != old and self.__dict__.get("_life_lock"):
+            return                       # Teferi's Reproach: "their life total can't change"
         self.__dict__["_life"] = v
         g = self.__dict__.get("_game")
         if g is not None and old is not None and v < old:
@@ -682,8 +758,18 @@ class Player:
 
     def has_hexproof(self) -> bool:
         """'You have hexproof' (Leyline of Sanctity, Aegis of the Gods…)."""
+        if self.__dict__.get("_life_lock"):
+            return True                  # protección de todo (Teferi's Reproach): nadie lo apunta
         return any(getattr(pm.card, "player_hexproof", False) and not pm.abilities_off()
                    for pm in self.battlefield)
+
+    def protections(self) -> set:
+        q = {"everything"} if self.__dict__.get("_life_lock") else set()
+        for pm in self.battlefield:
+            t = getattr(pm, "_prot_grant", None)
+            if t and not pm.abilities_off():
+                q.add(t)                 # Serra's Emissary: "you … have protection from the chosen type"
+        return q
 
     def draw(self, n: int, game: "Game"):
         for _ in range(n):
@@ -796,6 +882,11 @@ class Player:
         if p.card.name == "Treasure" and p.is_token and any(getattr(src.card, "treasure_double", False)
                                                             for src in self.battlefield):
             opts = {k: v * 2 for k, v in opts.items()}                        # Goldspan Dragon
+        if p.card.is_land() and any(getattr(src.card, "lands_any_color", False) and not src.abilities_off()
+                                    for src in self.battlefield):
+            opts = dict(opts)
+            for c in ("W", "U", "B", "R", "G"):
+                opts[c] = max(opts.get(c, 0), max(opts.values()))      # Chromatic Lantern
         if p.card.is_land() and any(getattr(src.card, "all_basic_types", False) for src in self.battlefield):
             opts = {c: max(opts.values()) for c in ("W", "U", "B", "R", "G")}   # Dryad of the Ilysian Grove
         if p.card.is_land():
@@ -873,7 +964,8 @@ class Player:
             if need <= 0:
                 break
             p, opts = sources[i]
-            color = max(opts, key=lambda k: opts[k])
+            _pc = getattr(p.card, "pain_colors", None) or ()
+            color = max(opts, key=lambda k: (opts[k], k not in _pc))     # genérico: sin dolor si se puede
             plan.append((p, color, opts[color]))
             need -= opts[color]
         return plan if need <= 0 else None
@@ -1000,6 +1092,9 @@ class Player:
                     self._solar_turn = g.turn      # Solar Array: el próximo artefacto gana sunburst
                 if getattr(perm.card, "mana_tap_charge", False) and perm in perm.controller.battlefield:
                     g.add_counters(perm, "charge", 1)   # Empowered Autogenerator (el X ya lo contó)
+            for perm, _color, _amt in plan:
+                if _color in (getattr(perm.card, "pain_colors", None) or ()):
+                    g.deal_damage(perm, self, 1)        # painland / Talismán: "deals 1 damage to you"
                 if _ench or "becomes_tapped" in (perm.card.triggers or {}):
                     g._push_self_trigger(perm, "becomes_tapped", "se gira")
         self.mana_pool -= use
@@ -1583,10 +1678,23 @@ class Game:
         cobra al resolver, ver `ward_ok`)."""
         if perm.has("shroud"):            # ni su propio controlador lo apunta
             return False
+        _pq = perm.protections()
+        if _pq:
+            src = getattr(self, "_targeting_src", None) or getattr(self, "_trigger_source", None) \
+                or getattr(self, "_resolving_card", None)
+            if src is not None and prot_matches(_pq, src):
+                return False             # protección: no puede ser objetivo de esa fuente (ni propia)
+            if src is None and "everything" in _pq:
+                return False
         if perm.controller is caster:
             return True
-        if perm.has("hexproof") or perm.has("protection"):
+        if perm.has("hexproof"):
             return False
+        if perm.has("protection") and not getattr(perm.card, "prot_from", None) and not _pq:
+            return False                 # protección sin cualidad conocida: como antes
+        if _pq and getattr(self, "_targeting_src", None) is None and getattr(self, "_trigger_source", None) is None \
+                and getattr(self, "_resolving_card", None) is None:
+            return False                 # fuente desconocida: como antes (un rival no la apunta)
         return True
 
     def ward_ok(self, caster: "Player", perm: "Permanent") -> bool:
@@ -2912,6 +3020,24 @@ class Game:
     def deal_damage(self, source, target, amount: int, combat: bool = False):
         if amount <= 0:
             return
+        # protección (DEBT: daño): de un color/tipo/todo — se previene todo el daño de esa fuente
+        _pq = target.protections() if hasattr(target, "protections") else None
+        if _pq and (prot_matches(_pq, source) or ("everything" in _pq)) and not getattr(self, "no_prevention_turn", False):
+            self.log(f"protección: se previene el daño a {target.name}")
+            return
+        # Tamiyo, Upriser Crowned: daño de combate al monarca -> girar y aturdir a esas criaturas
+        if combat and isinstance(target, Player) and isinstance(source, Permanent) and source.is_creature() \
+                and getattr(self, "monarch", None) is target and any(
+                    getattr(pm.card, "monarch_stun", False) and not pm.abilities_off() for pm in target.battlefield):
+            _src_t = next(pm for pm in target.battlefield if getattr(pm.card, "monarch_stun", False))
+
+            def _stun(g, _s=source, _n=_src_t):
+                if _s in _s.controller.battlefield:
+                    _s.tapped = True
+                    _s.counters["stun"] = _s.counters.get("stun", 0) + 1
+                    g.log(f"{_n.name}: {_s.name} queda girada con un contador de aturdimiento")
+            self.stack.append(StackObject(target, _stun, source=_src_t.card, label=f"trigger:{_src_t.name}:stun",
+                                          kind="trigger", perm=_src_t))
         # dobladores de daño (Furnace of Rath / Gratuitous Violence) — reemplazo
         # que se aplica antes de la prevención.
         mult = self.damage_multiplier(source)
@@ -3441,6 +3567,15 @@ class Game:
 
     def cast(self, player: "Player", card: Card, from_command: bool = False,
              targets=None, chosen_modes=None, x_value=None):
+        prev = getattr(self, "_targeting_src", None)
+        self._targeting_src = card         # protección: los objetivos se validan contra este hechizo
+        try:
+            return self._cast_impl(player, card, from_command, targets, chosen_modes, x_value)
+        finally:
+            self._targeting_src = prev
+
+    def _cast_impl(self, player: "Player", card: Card, from_command: bool = False,
+                   targets=None, chosen_modes=None, x_value=None):
         if getattr(player, "epic_locked", False):
             return False                 # epic: no podés lanzar hechizos por el resto
         if getattr(self, "_combat_on", False) and any(
@@ -4459,6 +4594,14 @@ class Game:
         return self._after_stack_push(ctrl, self.stack[-1])
 
     def activate_ability(self, perm: Permanent, index: int, targets=None, x=0) -> bool:
+        prev = getattr(self, "_targeting_src", None)
+        self._targeting_src = perm
+        try:
+            return self._activate_ability_impl(perm, index, targets, x)
+        finally:
+            self._targeting_src = prev
+
+    def _activate_ability_impl(self, perm: Permanent, index: int, targets=None, x=0) -> bool:
         """Activa una habilidad con coste de maná (y opcionalmente girar) de un
         permanente. El coste se paga al activar; el EFECTO va a la pila y se
         resuelve con prioridad (refactor A). Se puede repetir mientras haya con
@@ -4488,6 +4631,11 @@ class Game:
         # si la habilidad gira el permanente, éste no puede además girarse como
         # fuente de maná para pagarla (Mind Stone sola activaba {1},{T})
         excl = {perm} if ab.get("tap") else None
+        if excl is None and perm.card.is_land() and perm.card.produces is not None and not perm.tapped:
+            excl = {perm}                # una tierra que se anima no se gira a sí misma para pagarse (si alcanza)
+            _bc = ab.get("cost")
+            if _bc is not None and not ctrl.can_pay(_bc, exclude=excl):
+                excl = None
         # Clase: una habilidad de "subir a nivel N" solo se puede activar estando en
         # el nivel N-1 (si no, antes pagaba el maná y no hacía nada).
         lr = ab.get("level_req")
@@ -4934,6 +5082,10 @@ class Game:
         instant_sorcery/artifact."""
         types = getattr(card, "types", set())
         total = 0
+        for cz in getattr(player, "command", ()) or ():
+            _ed = getattr(cz, "spell_discount", None) if getattr(cz, "eminence", False) else None
+            if _ed and callable(_ed[1]) and cz is not card and _ed[1](card):
+                total += _ed[0]          # eminence: también desde la zona de mando (The Ur-Sphinx)
         for pm in player.battlefield:
             disc = getattr(pm.card, "spell_discount", None)
             if not disc:
@@ -6508,6 +6660,8 @@ class Game:
         self.log(f"{perm.name} queda fuera de fase")
 
     def _phase_step(self, p: "Player"):
+        if p.__dict__.pop("_life_lock", None):
+            self.log(f"{p.name} ya no tiene protección de todo (Teferi's Reproach)")
         back = [(pm, c) for pm, c in self.phased if c is p]
         self.phased = [(pm, c) for pm, c in self.phased if c is not p]
         for pm, c in back:
@@ -6748,7 +6902,9 @@ class Game:
                 (getattr(x.card, "no_attack_pred", None) is not None and not x.abilities_off()
                  and x.card.no_attack_pred(pm))
                 or (getattr(x.card, "suit_no_attack_owner", False) and getattr(x, "enchanting", None) is pm)
-                for x in dpl.battlefield)
+                for x in dpl.battlefield) or (
+                isinstance(d, Permanent) and d.has_subtype("Jace")
+                and (self.turn, id(pm.controller)) in (getattr(dpl, "_jace_block", None) or ()))
         attackers = [(pm, d) for pm, d in attackers if not _forbid(pm, d)]
         # Ghostly Prison / Propaganda: pagar {N} por cada criatura que ataca a ese jugador
         _paid = []
@@ -7080,6 +7236,10 @@ class Game:
 
     def _can_block_evasion(self, attacker, blocker) -> bool:
         """Reglas de evasión no-vuelo: fear, intimidate, shadow, horsemanship, skulk."""
+        if prot_matches(attacker.protections(), blocker):
+            return False             # protección (DEBT: bloqueo)
+        if getattr(attacker, "_evade_haste_turn", None) == self.turn and not blocker.has("haste"):
+            return False             # Gingerbrute: solo la bloquean criaturas con prisa
         b_art = "artifact" in blocker.card.types
         if getattr(attacker.card, "unblock_most_cr", False) and not attacker.abilities_off():
             _dc = sum(1 for x in blocker.controller.battlefield if x.is_creature())
@@ -7477,7 +7637,8 @@ class Game:
         self._life_start = {id(pl): pl.life for pl in self.players}
         self.damaged_players = set() # para bloodthirst (rivales dañados este turno)
         self.extra_combats = 0       # fases de combate adicionales se agotan por turno
-        p.mana_pool = 0              # el maná flotante se vacía al empezar el turno
+        if not any(getattr(pm.card, "keep_mana", False) and not pm.abilities_off() for pm in p.battlefield):
+            p.mana_pool = 0          # el maná flotante se vacía al empezar el turno (Omnath: se queda, incoloro)
         for pl in self.players:      # los escudos de prevención se agotan por turno
             pl.prevent = 0
             pl.prevent_all = False

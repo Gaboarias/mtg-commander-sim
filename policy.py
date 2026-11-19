@@ -875,6 +875,14 @@ class Policy:
                 if not c.is_land() and c.cost is not None]
 
     def choose_targets(self, game, me, card):
+        prev = getattr(game, "_targeting_src", None)
+        game._targeting_src = card
+        try:
+            return self._choose_targets_impl(game, me, card)
+        finally:
+            game._targeting_src = prev
+
+    def _choose_targets_impl(self, game, me, card):
         spec = getattr(card, "target_spec", None)
         if spec in self._PERM_SPEC_PRED:
             return self._perm_spec_targets(game, me, spec,

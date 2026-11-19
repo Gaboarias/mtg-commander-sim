@@ -92,14 +92,14 @@ def _token_cap(game, player) -> bool:
     return True
 
 
-def make_token(game, player, name, power, toughness, kw=(), subtypes=(), counters=0):
+def make_token(game, player, name, power, toughness, kw=(), subtypes=(), counters=0, extra_types=(), colors=()):
     if any(getattr(pm.card, "token_angels", False) for pm in player.battlefield):
         # Divine Visitation: las fichas de criatura son Ángeles 4/4 con vuelo y vigilancia
         name, power, toughness = "Angel", 4, 4
         kw, subtypes = tuple(set(kw) | {"flying", "vigilance"}), ("Angel",)
     tok = Card(
         name=name,
-        types={"creature"},
+        types={"creature"} | set(extra_types or ()),
         cost=None,
         power=power,
         toughness=toughness,
@@ -107,6 +107,8 @@ def make_token(game, player, name, power, toughness, kw=(), subtypes=(), counter
         subtypes=set(subtypes),
         tags={"creature"},
     )
+    if colors:
+        tok.colors = set(colors)       # color de la ficha (protección de color, "white creatures"…)
     last = None
     made = 0
     for _ in range(game.token_multiplier(player)):     # dobladores de fichas
@@ -143,6 +145,7 @@ _RESOURCE_ABILITIES = {
     "clue": "{2}, Sacrifice this artifact: Draw a card.",
     "food": "{2}, {T}, Sacrifice this artifact: You gain 3 life.",
     "blood": "{1}, {T}, Discard a card, Sacrifice this artifact: Draw a card.",
+    "map": "{1}, {T}, Sacrifice this artifact: Target creature you control explores. Activate only as a sorcery.",
 }
 _RES_CACHE = {}
 

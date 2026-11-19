@@ -1619,7 +1619,7 @@ def test_imported_planeswalker_loyalty_and_abilities():
     assert op.life == 37 and pw.counters.get("loyalty") == 2
     pw.activated_this_turn = False
     assert g.activate_loyalty(pw, 0)                                 # +1: ficha
-    assert any(p.name == "Token" for p in me.creatures())
+    assert any(p.name == "Spirit" and p.power == 3 and p.toughness == 2 for p in me.creatures())
 
 
 def test_generic_amount_effects_from_oracle():
@@ -6366,7 +6366,7 @@ def test_planeswalker_loyalty_target_prompts_human():
     assert g.activate_loyalty(perm, 1); g.resolve_stack()
     pc = g.pending_choice
     assert pc and pc["kind"] == "etb_target" and len(pc["options"]) == 2
-    pc["_apply"](1)                                    # elegir el Wolf
+    pc["_apply"](next(o["i"] for o in pc["options"] if o["name"].startswith("Wolf")))   # elegir el Wolf
     assert b not in op.battlefield and a in op.battlefield
 
 
