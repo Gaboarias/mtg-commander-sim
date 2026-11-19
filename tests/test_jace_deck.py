@@ -361,3 +361,17 @@ def test_restless_spire_and_ur_sphinx():
     sph = cardsdb.build_card_from_data({"name": "Sph", "mana_cost": "{4}{U}", "type_line": "Creature — Sphinx",
                                         "oracle_text": "", "power": "3", "toughness": "3"})
     assert g.effective_cost(me, sph).cmc == 4
+
+
+def test_quintorius_plus_one_discard_draw_two_mill_one():
+    q = cardsdb.build_card_from_data({
+        "name": "Quintorius, History Chaser", "mana_cost": "{3}{R}{W}", "type_line": "Legendary Planeswalker — Quintorius",
+        "loyalty": "5", "oracle_text": "Whenever one or more cards leave your graveyard, create a 3/2 red and white Spirit "
+                                       "creature token.\n+1: You may discard a card. If you do, draw two cards, then mill a "
+                                       "card.\n−4: Spirits you control gain double strike and vigilance until end of turn."})
+    g, me, _ = _g()
+    pm = put(g, q, me)
+    me.hand += [creature("H1", "5G", 1, 1), creature("H2", "1G", 1, 1)]
+    g.activate_loyalty(pm, 0)
+    run(g)
+    assert len(me.hand) == 3 and len(me.graveyard) == 2

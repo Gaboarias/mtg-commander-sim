@@ -5115,12 +5115,31 @@ def _parse_gy_play(oracle: str, types: set):
         seq = _seq(kw)
         if seq:
             return {"mode": mode, "cost": _cost(seq), "after": after}
-    # recursión activada: "{coste}: return ~ from your graveyard to the battlefield/your hand"
-    mr = re.search(r"((?:\{[^}]+\})+)\s*:\s*return [^.]*?from your graveyard to "
-                   r"(the battlefield|your hand)", t, re.I)
-    if mr:
-        dest = "battlefield" if "battlefield" in mr.group(2).lower() else "hand"
-        return {"mode": "recur", "cost": _cost(mr.group(1)), "after": dest}
+    # recursión activada: "{coste}: return ~ from your graveyard to the battlefield/your hand" — SOLO si se
+    # devuelve a sí misma (antes "{T}, Sacrifice: return target creature card from your graveyard…" convertía
+    # la propia carta en recurrible). Respeta "Pay N life" y "Activate only if/during your upkeep/as a sorcery".
+    mr = re.search(r"((?:\{[^}]+\}(?:,\s*)?)+|pay (\w+) life)(,?\s*discard a card)?\s*:\s*return (?!target|up to|a |an |all |each |another"
+                   r"|other|two|three)([^.]*?) from your graveyard to (the battlefield|your hand)(?: tapped)?\."
+                   r"(?:\s*activate only ([^.]+)\.)?", t, re.I)
+    if mr and not re.search(r"\b(cards|target)\b", mr.group(4), re.I):
+        dest = "battlefield" if "battlefield" in mr.group(5).lower() else "hand"
+        out = {"mode": "recur", "cost": (_cost(mr.group(1)) if mr.group(1).startswith("{") else parse_cost("0")),
+               "after": dest}
+        if mr.group(2):
+            out["pay_life"] = _count_word(mr.group(2)) or 0
+        if mr.group(3):
+            out["discard"] = "any"
+        cond = (mr.group(6) or "").strip().lower()
+        if cond:
+            if cond == "during your upkeep":
+                out["cond"] = lambda g, p: getattr(g, "_upkeep_of", None) is p
+            elif cond in ("as a sorcery", "any time you could cast a sorcery"):
+                out["cond"] = lambda g, p: g.ap() is p and not g.stack
+            elif cond.startswith("if ") and (_gc := _cond_gc(cond[3:])) is not None:
+                out["cond"] = _gc
+            else:
+                return {}            # restricción desconocida: no se habilita a ciegas
+        return out
     return {}
 
 
@@ -6146,6 +6165,29 @@ def _effect_any_core(body: str):
             ctrl.draw(_d, game)
             _hand_to_library(game, ctrl, _p, _t)
         return _dp
+    # "You may discard N card(s). If you do, draw M cards[, then mill K cards]" (Quintorius +1, rummage)
+    _mdd = re.fullmatch(r"you may discard (\w+) cards?\. if you do, draw (\w+) cards?(?:,? then mill (\w+) cards?)?",
+                        re.sub(r"\s+", " ", _strip_reminder(body or "")).strip().rstrip(".").lower())
+    if _mdd and (_count_word(_mdd.group(1)) or _mdd.group(1) in ("a", "an")) and _count_word(_mdd.group(2)):
+        _dn = _count_word(_mdd.group(1)) or 1
+        _drw = _count_word(_mdd.group(2))
+        _ml = (_count_word(_mdd.group(3)) or (1 if _mdd.group(3) in ("a", "an") else 0)) if _mdd.group(3) else 0
+
+        def _mdd_eff(game, ctrl, *_a, _dn=_dn, _drw=_drw, _ml=_ml):
+            def _rest():
+                ctrl.draw(_drw, game)
+                if _ml:
+                    cards.mill(game, ctrl, _ml)
+
+            def _yes():
+                if len(ctrl.hand) < _dn:
+                    return
+                _human_or_auto_discard(game, ctrl, _dn, then=_rest)
+            if len(ctrl.hand) < _dn:
+                game.log(f"{ctrl.name} no tiene cartas para descartar")
+                return
+            _human_may(game, ctrl, f"¿Descartás {_dn} carta(s) para robar {_drw}?", _yes)
+        return _mdd_eff
     # patrones compuestos que el separador de oraciones parte mal: se resuelven enteros
     if body and _PRE_ATOMIC.fullmatch(re.sub(r"\s+", " ", _strip_reminder(body)).strip().rstrip(".").lower()):
         _pa = _atomic_effect(body)
@@ -15013,21 +15055,54 @@ def _generic_amount_single_core(oracle: str):
                                  ok_fn=ok)
         return eff
 
-    # regresar una carta del cementerio a la mano (elección automática + log)
-    if re.search(r"return .{0,70}?from your graveyard to your hand", t):
-        def eff(game, ctrl, *_a):
-            cands = [c for c in ctrl.graveyard if not c.is_land()]
-            if not cands:
+    # regresar carta(s) del cementerio a la mano: respeta "this card"/~ (la propia), el tipo
+    # ("instant or sorcery", "creature", "artifact or enchantment"…), "up to N", "another"/"other"
+    # y el valor de maná. Antes: siempre "la carta no-tierra más cara", sin filtro.
+    if re.search(r"return .{0,90}?from your graveyard to your hand", t):
+        _gh = _gy_to_hand_spec(t)
+
+        def eff(game, ctrl, *_a, _s=_gh):
+            src = getattr(game, "_trigger_source", None)
+            src_card = getattr(src, "card", src) if src is not None else None
+            if _s["self"]:
+                me_card = getattr(src_card, "_real", None) or src_card
+                if me_card is not None and me_card in ctrl.graveyard:
+                    ctrl.graveyard.remove(me_card)
+                    ctrl.hand.append(me_card)
+                    game.emit("leaves_graveyard", player=ctrl, card=me_card)
+                    game.log(f"{ctrl.name} devuelve {me_card.name} del cementerio a la mano")
                 return
-            cands.sort(key=lambda c: (c.cost.cmc if c.cost else 0), reverse=True)
+            ok = _s["ok"]
+            cands = [c for c in ctrl.graveyard if ok(c) and not (_s["other"] and c is src_card)]
+            if not cands:
+                game.log(f"{ctrl.name}: no hay carta válida en el cementerio")
+                return
+            cands.sort(key=lambda c: (not c.is_land(), c.cost.cmc if c.cost else 0), reverse=True)
+            got = []
 
             def _do(pick):
-                if pick in ctrl.graveyard:
+                if pick in ctrl.graveyard and pick not in got:
                     ctrl.graveyard.remove(pick)
                     ctrl.hand.append(pick)
+                    got.append(pick)
+                    game.emit("leaves_graveyard", player=ctrl, card=pick)
                     game.log(f"{ctrl.name} recupera {pick.name} del cementerio a la mano")
-            _pick_card_from_zone(game, ctrl, cands, _do,
-                                 "Elegí una carta del cementerio para tu mano")
+
+            def _step(k):
+                left = [c for c in cands if c in ctrl.graveyard and c not in got]
+                if k <= 0 or not left:
+                    return
+                if ctrl is getattr(game, "interactive_human", None):
+                    _human_target_choice(
+                        game, ctrl, "reanimate",
+                        "Elegí una carta del cementerio para tu mano" + (f" ({_s['n'] - k + 1} de {_s['n']})"
+                                                                           if _s["n"] > 1 else ""),
+                        [(c.name, c) for c in left], lambda c, _k=k: (_do(c), _step(_k - 1)),
+                        allow_none=_s["upto"] or k < _s["n"], on_none=lambda: None)
+                else:
+                    _do(left[0])
+                    _step(k - 1)
+            _route_choice(game, ctrl, lambda: _step(_s["n"]), lambda: _step(_s["n"]))
         return eff
 
     # recuperar una carta tuya desde el exilio (a la mano o al campo, con elección)
@@ -15931,6 +16006,64 @@ def _hand_to_library(game, ctrl, n, top=True):
 
 
 _TOKEN_COLOR = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
+
+
+def _gy_to_hand_spec(t):
+    """Analiza "return [up to] N [other] target <tipo> card(s) [with mana value …] from your graveyard to your
+    hand" -> dict(self, n, upto, other, ok)."""
+    t = re.sub(r"\s+", " ", t.lower())
+    if re.search(r"return (?:this card|~|it|this creature|this permanent) from your graveyard to your hand", t):
+        return {"self": True, "n": 1, "upto": False, "other": False, "ok": lambda c: True}
+    m = re.search(r"return (up to )?(a|an|one|two|three|four|\w+)? ?(?:(another|other) )?(?:target )?(.*?) cards? "
+                  r"(?:with [^.]*? )?from your graveyard to your hand", t)
+    upto, n, other, desc = False, 1, False, ""
+    if m:
+        upto = bool(m.group(1))
+        n = _count_word(m.group(2) or "a") or 1
+        other = bool(m.group(3))
+        desc = (m.group(4) or "").strip()
+    mv = re.search(r"with mana value (\d+) or (less|greater)", t)
+    mvf = (lambda c: True) if not mv else (
+        (lambda c, _v=int(mv.group(1)): (c.cost.cmc if c.cost else 0) <= _v) if mv.group(2) == "less"
+        else (lambda c, _v=int(mv.group(1)): (c.cost.cmc if c.cost else 0) >= _v))
+    desc = re.sub(r"\b(target|another|other|up to \w+)\b", "", desc).strip()
+    alts = [x.strip() for x in re.split(r",? or |, ", desc) if x.strip()] if desc else []
+
+    def one(c, w):
+        words = w.split()
+        for x in words:
+            if x in ("card", "cards", "a", "an"):
+                continue
+            if x == "permanent":
+                if {"instant", "sorcery"} & c.types:
+                    return False
+            elif x.startswith("non") and len(x) > 3:
+                k = x[3:].strip("-")
+                if k in c.types or k in {s_.lower() for s_ in c.subtypes} or k in c.supertypes:
+                    return False
+            elif x in ("creature", "artifact", "enchantment", "instant", "sorcery", "land", "planeswalker", "battle"):
+                if x not in c.types:
+                    return False
+            elif x in ("legendary", "basic", "snow"):
+                if x not in c.supertypes:
+                    return False
+            elif x == "historic":
+                if not ("artifact" in c.types or "legendary" in c.supertypes
+                        or "saga" in {s_.lower() for s_ in c.subtypes}):
+                    return False
+            elif x in ("red", "white", "blue", "black", "green"):
+                pass
+            else:
+                if x.rstrip("s") not in {s_.lower() for s_ in c.subtypes} and x not in {s_.lower() for s_ in c.subtypes}:
+                    return False
+        return True
+
+    def ok(c):
+        if not mvf(c):
+            return False
+        return any(one(c, w) for w in alts) if alts else True
+    return {"self": False, "n": n, "upto": upto, "other": other, "ok": ok}
+
 
 _RIDER_VERBS = {"gains": "gain", "loses": "lose", "draws": "draw", "creates": "create", "discards": "discard",
                 "mills": "mill", "puts": "put", "searches": "search", "sacrifices": "sacrifice", "scries": "scry",
@@ -19246,6 +19379,25 @@ def _wire_jace(card, data, name, types):
 
     def _mine(perm, kw):
         return kw.get("player") in (None, perm.controller)
+
+    # --- Chandra's Phoenix (y similares): vuelve de tu cementerio a tu mano cuando un hechizo rojo instantáneo o
+    # conjuro tuyo, o un planeswalker rojo tuyo, daña a un oponente (el motor lo dispara desde el cementerio)
+    if re.search(r"whenever an opponent is dealt damage by a red instant or sorcery spell you control or by a red "
+                 r"planeswalker you control, return (?:~|this card) from your graveyard to your hand", t):
+        card.phoenix_return = True
+        trg.pop("you_dealt_damage", None)
+
+    # --- "{coste}: Return this card from your graveyard to your hand/the battlefield": se activa DESDE el
+    # cementerio (gy_play "recur"); no es una habilidad del permanente en el campo (antes abría un selector de
+    # otras cartas del cementerio y no devolvía nada)
+    if card.activated_abilities:
+        _nm = name.lower()
+        _keep = [ab for ab in card.activated_abilities
+                 if not re.match(r"return (?:this card|this creature|it|~|" + re.escape(_nm) + r") from your graveyard",
+                                 (ab.get("label") or "").lower())]
+        if len(_keep) != len(card.activated_abilities):
+            card.activated_abilities = type(card.activated_abilities)(_keep) if isinstance(
+                card.activated_abilities, tuple) else _keep
 
     # --- protección impresa: "protection from white and from blue" / "from everything" / "from creatures"
     for _pm in re.finditer(r"protection from ([a-z ,]+?)(?:\.|\n|$|\()", _strip_reminder(raw).lower()):

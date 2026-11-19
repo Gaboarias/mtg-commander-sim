@@ -7,6 +7,7 @@ import { listDecks, bumpGamesPlayed, type SavedDeck } from "../localDecks";
 import { download, fileStamp } from "../download";
 import { Icon } from "../icons";
 import { Help } from "../Help";
+import { TableCenter, type TableEvent, type StackItem } from "./TableCenter";
 import { loadGlossary, keywordsIn, supportLabel, type GlossaryEntry } from "../reglas/Glossary";
 
 // etiquetas cortas de keywords (mismo criterio que el tablero)
@@ -114,6 +115,8 @@ type GameState = {
   opp_turns?: OppTurn[];
   card_briefs?: Record<string, CardDetail>;
   engine_error?: string;
+  events?: TableEvent[];
+  stack?: StackItem[];
 };
 type AbilityEvent = { turn: number; controller: string | null; card: string; kind: string };
 type OppTurn = { turn: number; player: string; lines: string[] };
@@ -152,7 +155,6 @@ export default function Play() {
   const pendingRef = useRef(SHARED_PENDING);
   const [thinking, setThinking] = useState(false);   // el motor está procesando
   const gameRef = useRef(0);       // id de la partida: descarta respuestas de una anterior
-  const [choiceHidden, setChoiceHidden] = useState(false);  // modal de decisión minimizado
   const [choicePick, setChoicePick] = useState<number | null>(null);  // opción elegida (feedback)
   const [status, setStatus] = useState<string>("");   // texto de carga
   const [booting, setBooting] = useState(false);
@@ -173,13 +175,10 @@ export default function Play() {
   // guardaba la posición en la lista y, si la lista cambiaba (muere un planeswalker,
   // cae un rival), el ataque iba a otro objetivo
   const [atkAssign, setAtkAssign] = useState<Record<number, string>>({});
-  const [abilityToast, setAbilityToast] = useState<AbilityEvent | null>(null);
   // aviso: criaturas TUYAS que dejaron el campo (destruidas, exiliadas, devueltas…)
   const [lossToast, setLossToast] = useState<Departure[] | null>(null);
   const depSeen = useRef<number>(0);
   const lossTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const abilitySeen = useRef<number>(0);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [art, setArt] = useState<Record<string, string>>({});
   const [info, setInfo] = useState<Record<string, CardInfo>>({});
   const [inspect, setInspect] = useState<Inspect | null>(null);
@@ -196,6 +195,11 @@ export default function Play() {
   const [modeSel, setModeSel] = useState<number[]>([]);  // modos elegidos (choose two)
   const [tsel, setTsel] = useState<number[]>([]);  // objetivos elegidos (multi)
   const [bottom, setBottom] = useState<number[]>([]);  // cartas al fondo tras mulligan
+  const [showSide, setShowSide] = useState(true);   // panel lateral (relato + más acciones)
+  useEffect(() => {
+    // en pantallas angostas la mesa ocupa todo: el relato se abre a pedido
+    if (typeof window !== "undefined" && window.innerWidth < 1100) setShowSide(false);
+  }, []);
 
   const examplesRef = useRef<Pickable[]>([]);
 
@@ -220,18 +224,7 @@ export default function Play() {
     });
   }
 
-  // aviso en pantalla cuando se activa/dispara una habilidad
-  useEffect(() => {
-    const feed = state?.ability_feed || [];
-    if (feed.length > abilitySeen.current) {
-      const ev = feed[feed.length - 1];
-      abilitySeen.current = feed.length;
-      setAbilityToast(ev);
-      if (toastTimer.current) clearTimeout(toastTimer.current);
-      toastTimer.current = setTimeout(() => setAbilityToast(null), 3600);
-    }
-    if (feed.length < abilitySeen.current) abilitySeen.current = feed.length; // nueva partida
-  }, [state]);
+
 
   useEffect(() => {
     const deps = state?.departures || [];
@@ -337,7 +330,7 @@ export default function Play() {
     if (!raw) return;
     const st = JSON.parse(raw) as GameState;
     setState(st);
-    setChoiceHidden(false);
+
     setError(st.engine_error
       ? `El motor tuvo un error (${st.engine_error}). La partida sigue: podés deshacer, seguir jugando o empezar una nueva.`
       : null);
@@ -345,7 +338,7 @@ export default function Play() {
 
   function newGame() {
     gameRef.current++;           // una acción en curso de la partida vieja se descarta
-    setState(null); setError(null); setChoiceHidden(false);
+    setState(null); setError(null);
   }
 
   function toggleFoe(id: string) {
@@ -604,6 +597,124 @@ export default function Play() {
   const legal = state?.legal;
   const attackableUids = new Set((legal?.attackers || []).map((a) => a.uid));
 
+  // decisión pendiente (scry, objetivo, descartar…): se muestra en el CENTRO de la mesa
+  const choicePanel = (state?.phase === "choose" && state.choice) ? (() => {
+        const ch = state.choice;
+        const isCardPick = ch.options.some((o) => o.is_land !== undefined);
+        const titles: Record<string, string> = {
+          scry: "Scry", surveil: "Surveil", fateseal: "Fateseal (biblioteca rival)",
+          explore: "Explorar", search: "Buscar en la biblioteca",
+          look_take: "Mirar y elegir", reveal_land: "Revelar y elegir",
+          etb_target: "Elegí un objetivo", creature_type: "Elegí un tipo de criatura",
+          discard: "Descartar", may: "¿Querés hacerlo?",
+          legend: "Regla de legendarios", x: "Elegí X",
+          reanimate: "Revivir desde el cementerio", exile_pick: "Elegí una carta del exilio",
+          cascade_target: "Cascada: elegí el objetivo",
+          gy_shuffle: "Barajar cartas del cementerio",
+          mode_choice: "Elegí un modo",
+          sacrifice: "Sacrificar", keep: "Elegí qué conservar",
+          opt_cost: "Coste opcional",
+          player_target: "Elegí un jugador", amount: "¿Cuánto?", color: "Elegí un color",
+        };
+        // Una línea que EXPLICA la mecánica (sobre todo la jerga de MTG), debajo del
+        // título. El `prompt` del motor da el detalle puntual (qué carta, cuántas faltan).
+        const hints: Record<string, string> = {
+          scry: "Mirá las cartas de arriba de tu biblioteca y mandá cada una arriba o al fondo.",
+          surveil: "Mirá las cartas de arriba y mandá cada una arriba o al cementerio.",
+          fateseal: "Mirá arriba de la biblioteca del rival y decidís si la dejás arriba o al fondo.",
+          explore: "Si la carta de arriba es tierra va a tu mano; si no, la criatura crece +1/+1.",
+          search: "Elegí una carta de tu biblioteca; después se baraja.",
+          legend: "Tenés dos legendarias iguales: conservá una, la otra va al cementerio.",
+          x: "Elegí cuánto maná pagar por X.",
+          etb_target: "Elegí a qué apunta la habilidad.",
+          cascade_target: "Cascada: elegí a qué carta revelada apuntar.",
+          gy_shuffle: "Elegí cartas de tu cementerio para barajar de vuelta a la biblioteca.",
+          look_take: "Mirá las cartas reveladas y llevate la que elijas.",
+          reveal_land: "Elegí una de las cartas reveladas.",
+          reanimate: "Elegí una carta del cementerio para ponerla en el campo de batalla.",
+          exile_pick: "Elegí una carta del exilio.",
+          creature_type: "Elegí un tipo de criatura (p. ej. Zombi, Elfo, Dragón).",
+          discard: "Elegí qué carta mandar al cementerio.",
+          may: "Decidí si querés aplicar el efecto opcional.",
+          mode_choice: "Al entrar elegís un modo; el permanente tiene solo la habilidad de ese modo.",
+          sacrifice: "Elegí qué permanente tuyo va al cementerio.",
+          keep: "Lo que no conserves se sacrifica.",
+          opt_cost: "Pagarlo es opcional; si no lo pagás, pasa lo que dice la otra opción.",
+          player_target: "El efecto apunta a un jugador: elegí a quién.",
+          amount: "Repartí el total entre los objetivos que elijas.",
+          color: "El permanente recuerda el color elegido para sus habilidades.",
+        };
+        const title = titles[ch.kind] || "Elegí una carta";
+        const hint = hints[ch.kind];
+        const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno"
+          : ch.kind === "gy_shuffle" ? "Ninguna más"
+          : "No llevarme ninguna";
+        return (
+          <div role="group" aria-label={title} className="decide-center">
+            <div key={`${ch.kind}:${ch.prompt}`} className={`inspect decide decide-${ch.kind}`}>
+              <h3><Icon name="book" size={17} /> {title}</h3>
+              {hint && <p className="muted" style={{ marginTop: 2, fontSize: ".82rem", opacity: .85 }}>{hint}</p>}
+              <p className="muted" style={{ marginTop: 2 }}>{ch.prompt}</p>
+              {ch.card && (() => {
+                const d = ch.card_detail;
+                return (
+                  <div className="choice-card">
+                    {art[ch.card]
+                      ? <div className="inspect-art" style={{ backgroundImage: `url(${art[ch.card]})` }} />
+                      : <div className="inspect-art ph"><span>{ch.card}</span></div>}
+                    <div className="choice-card-info">
+                      <b style={{ fontSize: "1.02rem" }}>{ch.card}</b>
+                      {d && (
+                        <>
+                          <div className="choice-card-line">
+                            {d.cost ? <span className="choice-cost">{d.cost}</span> : null}
+                            {d.pt ? <span className="choice-pt">{d.pt}</span> : null}
+                          </div>
+                          {d.type ? <span className="choice-type">{d.type}</span> : null}
+                          {d.keywords.length > 0 && (
+                            <div className="choice-kws">
+                              {d.keywords.filter((k) => KW_SHORT[k]).map((k) => (
+                                <span key={k} className="atk-kw" title={k}>{KW_SHORT[k]}</span>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+              <div className="target-list">
+                {ch.options.map((o, k) => (
+                  <button
+                    key={o.i}
+                    className={`ghost decide-opt${choicePick === o.i ? " picked" : ""}`}
+                    disabled={o.ok === false || choicePick !== null}
+                    onClick={() => pickChoice(o.i)}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6,
+                             animationDelay: `${Math.min(k, 10) * 40}ms` }}>
+                    {ch.kind === "color"
+                      ? <span className={`color-dot c-${o.name.split(" ")[0].toLowerCase()}`} />
+                      : art[o.name]
+                      ? <span className="choice-thumb" style={{ backgroundImage: `url(${art[o.name]})` }} />
+                      : <Icon name={isCardPick ? (o.is_land ? "land" : "cards") : "chevron-right"} size={13} />}
+                    {o.name}
+                    {o.ok === false ? <span className="muted"> · no elegible</span> : null}
+                  </button>
+                ))}
+              </div>
+              {ch.allow_none && (
+                <div className="act-block" style={{ marginTop: 10 }}>
+                  <button className="ghost decide-none" onClick={() => doAct("choose", { index: null })}>
+                    {noneLabel}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+  })() : null;
+
   return (
     <div className="wrap">
       {thinking && (
@@ -637,25 +748,13 @@ export default function Play() {
           </motion.div>
         )}
       </AnimatePresence>
-      <AnimatePresence>
-        {abilityToast && (
-          <motion.div className="ability-toast" role="status"
-            initial={reduce ? false : { opacity: 0, y: -12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reduce ? { opacity: 0 } : { opacity: 0, y: -12 }}
-            transition={{ type: "spring", stiffness: 400, damping: 28 }}>
-            <Icon name="sparkles" size={16} />
-            <span>
-              <b>{abilityToast.card}</b>: {abilityToast.kind}
-              {abilityToast.controller ? <span className="muted"> — {abilityToast.controller}</span> : null}
-            </span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <header>
-        <h1><Icon name="gamepad" size={26} /> Jugar contra el sistema</h1>
-        <p>Elegí tu deck y hasta 3 rivales. Todo corre en tu navegador y vos manejás tu turno; el resto lo juega el sistema.</p>
-      </header>
+      {/* las habilidades disparadas ahora se ven en el centro de la mesa (antes: aviso flotante) */}
+      {!state && (
+        <header>
+          <h1><Icon name="gamepad" size={26} /> Jugar contra el sistema</h1>
+          <p>Elegí tu deck y hasta 3 rivales. Todo corre en tu navegador y vos manejás tu turno; el resto lo juega el sistema.</p>
+        </header>
+      )}
 
       {!state && (
         <div className="card">
@@ -723,27 +822,24 @@ export default function Play() {
       )}
 
       {state && (
-        <>
-          <div className="card">
-            <div className="now">
-              <motion.span className="turnbadge" key={state.turn}
-                initial={reduce ? false : { scale: 1.3, backgroundColor: "rgba(224,163,90,.35)" }}
-                animate={{ scale: 1, backgroundColor: "rgba(255,255,255,0)" }}
-                transition={{ type: "spring", stiffness: 320, damping: 22 }}>Turno {state.turn}</motion.span>
-              <span className="label">
-                {state.phase === "over" ? "Partida terminada"
-                  : myTurn ? "Tu turno · jugá tus cartas" : `Juega ${state.players[state.active]?.name}`}
-              </span>
-              {myTurn && legal && legal.mana != null && (
-                <span className="mana-pool" title="maná disponible (fuentes sin girar)">
-                  <Icon name="sparkles" size={13} /> {legal.mana} maná
-                  <span className="muted"> · {legal.mana_sources} fuentes</span>
+        <div className="table-page">
+          <div className="table-bar">
+            <span className="tb-title"><Icon name="gamepad" size={16} /> Mesa</span>
+            <span className="tb-lives">
+              {state.players.map((p, k) => (
+                <span key={p.name} className={`tb-life ${k === state.active ? "on" : ""} ${p.lost ? "dead" : ""} ${k === meIdx ? "me" : ""}`}
+                  title={`${p.name}: ${p.life} de vida`}>
+                  {k === meIdx ? "Vos" : p.name.split(",")[0]} <b>{p.life}</b>
                 </span>
-              )}
-              <button className="ghost" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5 }} onClick={newGame}>
-                <Icon name="undo" size={14} /> Nueva partida
-              </button>
-            </div>
+              ))}
+            </span>
+            <button className="ghost tb-btn" onClick={() => setShowSide((v) => !v)} aria-expanded={showSide}>
+              <Icon name="scroll" size={14} /> {showSide ? "Ocultar relato" : "Relato y acciones"}
+            </button>
+            <button className="ghost tb-btn" onClick={newGame}>
+              <Icon name="undo" size={14} /> Nueva partida
+            </button>
+          </div>
             {error && (
               <p className="err" role="alert" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <Icon name="warning" size={15} /> <span style={{ flex: 1 }}>{error}</span>
@@ -751,39 +847,28 @@ export default function Play() {
               </p>
             )}
 
-            {myTurn && state.opp_turns && state.opp_turns.length > 0 && (
-              <div className="opp-recap">
-                <div className="opp-recap-head">
-                  <Icon name="scroll" size={13} /> Mientras no jugabas — turnos rivales
-                </div>
-                {state.opp_turns.map((ot, k) => (
-                  <div className="opp-turn" key={k}>
-                    <b>Turno {ot.turn} · {ot.player}</b>
-                    <ul>
-                      {ot.lines.length === 0
-                        ? <li className="muted">pasó sin jugar</li>
-                        : ot.lines.map((l, j) => <li key={j}>{l}</li>)}
-                    </ul>
-                  </div>
+
+          <div className={`table-layout ${showSide ? "side-open" : ""}`}>
+            <div className={`felt ${(state.combat || state.react || state.mulligan || choicePanel) ? "has-panel" : ""}`}>
+              <div className="opp-row" data-n={state.players.length - 1}>
+                {state.players.map((p, i) => i === meIdx ? null : (
+                  <Seat
+                    key={p.name} p={p} active={i === state.active} art={art} reduce={reduce} variant="opp"
+                    onInspect={(pm: Perm) => inspectCard(pm)}
+                    onZone={(title, names) => setZoneView({ title, names })}
+                    departures={state.departures} guessDepartures
+                    targetedUids={state.react?.targets?.length ? new Set(state.react.targets) : undefined}
+                  />
                 ))}
               </div>
-            )}
-
-            <div className="seats" data-n={state.players.length}>
-              {state.players.map((p, i) => (
-                <Seat
-                  key={p.name} p={p} active={i === state.active} art={art} reduce={reduce}
-                  selectableUids={myTurn && i === meIdx && !state.attacked ? attackableUids : undefined}
-                  selectedUids={i === meIdx ? picked : undefined}
-                  onCard={i === meIdx ? togglePick : undefined}
-                  onInspect={(pm: Perm) => inspectCard(pm)}
-                  onZone={(title, names) => setZoneView({ title, names })}
-                  departures={state.departures} guessDepartures
-                  targetedUids={state.react?.targets?.length ? new Set(state.react.targets) : undefined}
-                />
-              ))}
-            </div>
-
+              <TableCenter
+                events={state.events || []} stack={state.stack || []}
+                me={state.players[meIdx]?.name || ""} active={state.players[state.active]?.name || ""}
+                turn={state.turn} reduce={reduce} art={art}
+                phaseLabel={state.phase === "over" ? "Partida terminada"
+                  : myTurn ? "Tu turno · jugá tus cartas" : state.combat ? "Combate" : state.react ? "Respondé o pasá" : `Juega ${state.players[state.active]?.name}`}
+                onInspectName={(name) => inspectCard({ name })}
+                banner={state.winner ? (<>
             {state.winner && (
               <motion.p className="win-line"
                 initial={reduce ? false : { scale: 0.7, opacity: 0 }}
@@ -791,8 +876,9 @@ export default function Play() {
                 transition={{ type: "spring", stiffness: 300, damping: 16 }}>
                 <Icon name="trophy" size={18} /> {state.winner === "EMPATE" ? "Empate (límite de turnos)." : <>Gana <b>{state.winner}</b>.</>}</motion.p>
             )}
-          </div>
-
+                </>) : null}>
+                {(state.combat || state.react || state.mulligan || choicePanel) ? (<>
+                  {choicePanel}
           {state.combat && state.combat.stage !== "damage" && (
             <motion.div className="card defense"
               initial={reduce ? false : { opacity: 0, y: -10 }}
@@ -895,7 +981,7 @@ export default function Play() {
               </div>
               <p className="muted" style={{ fontSize: ".8rem" }}>
                 Antes de resolver el daño podés lanzar un instantáneo y asignar bloqueos.
-                El registro completo queda en el relato de abajo.
+                El registro completo está en el relato (botón «Relato y acciones»).
               </p>
             </motion.div>
           )}
@@ -1112,42 +1198,51 @@ export default function Play() {
             );
           })()}
 
-          {myTurn && (() => {
+                </>) : null}
+              </TableCenter>
+              <div className="my-row">
+                <Seat
+                  p={state.players[meIdx]} active={state.active === meIdx} art={art} reduce={reduce} variant="me"
+                  selectableUids={myTurn && !state.attacked ? attackableUids : undefined}
+                  selectedUids={picked}
+                  onCard={togglePick}
+                  onInspect={(pm: Perm) => inspectCard(pm)}
+                  onZone={(title, names) => setZoneView({ title, names })}
+                  departures={state.departures} guessDepartures
+                  targetedUids={state.react?.targets?.length ? new Set(state.react.targets) : undefined}
+                />
+              </div>
+            </div>
+
+            <aside className="table-side">
+            {state.opp_turns && state.opp_turns.length > 0 && (
+              <div className="opp-recap">
+                <div className="opp-recap-head">
+                  <Icon name="scroll" size={13} /> Mientras no jugabas — turnos rivales
+                </div>
+                {state.opp_turns.map((ot, k) => (
+                  <div className="opp-turn" key={k}>
+                    <b>Turno {ot.turn} · {ot.player}</b>
+                    <ul>
+                      {ot.lines.length === 0
+                        ? <li className="muted">pasó sin jugar</li>
+                        : ot.lines.map((l, j) => <li key={j}>{l}</li>)}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
+
+
+              {myTurn && (() => {
             const landIdx = new Set((legal?.lands || []).map((l) => l.i));
             const castMap = new Map((legal?.casts || []).filter((c) => c.zone === "hand").map((c) => [c.i, c]));
             const commandCasts = (legal?.casts || []).filter((c) => c.zone === "command");
-            // casts alternativos (dorso de DFC modal, aventura, evoke, dash, ciclar…)
             const altCasts = (legal?.casts || []).filter((c) => c.zone !== "hand" && c.zone !== "command");
             const hand = state.players[meIdx]?.hand_cards || [];
-            return (
-              <div className="card">
-                <h2>Tu mano</h2>
-                <div className="hand">
-                  {hand.map((hc) => {
-                    const canLand = landIdx.has(hc.i);
-                    const castOpt = castMap.get(hc.i);
-                    return (
-                      <div key={hc.i} className={`handcard ${canLand || castOpt ? "playable" : ""}`}>
-                        <div className="hc-art" onClick={() => inspectCard(hc)} title="Ver carta"
-                          style={art[hc.name] ? { backgroundImage: `url(${art[hc.name]})` } : undefined}>
-                          {!art[hc.name] && <span>{hc.name}</span>}
-                          {hc.cost && <span className="hc-cost">{hc.cost}</span>}
-                        </div>
-                        <div className="hc-foot">
-                          <span className="hc-name" onClick={() => inspectCard(hc)}>{hc.name}</span>
-                          {canLand && <button className="go tiny" onClick={() => doAct("land", { i: hc.i })}>Jugar</button>}
-                          {castOpt && castOpt.castable === false
-                            ? <em className="pw-txt" title={castOpt.reason || ""}>({castOpt.reason || "no jugable"})</em>
-                            : castOpt && <button className="go tiny" onClick={() => castCard(castOpt)} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                                Lanzar{castOpt.target_spec ? <Icon name="target" size={12} /> : null}
-                              </button>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {hand.length === 0 && <span className="muted">mano vacía</span>}
-                </div>
-
+                return (
+                  <div className="card side-actions">
+                    <h2><Icon name="sparkles" size={16} /> Más acciones</h2>
                 {altCasts.length > 0 && (
                   <div className="act-block">
                     <span className="act-label">Alternativas:</span>
@@ -1305,6 +1400,77 @@ export default function Play() {
                   </div>
                 )}
 
+                    {!(altCasts.length || commandCasts.length || (legal?.activatables?.length) || (legal?.abilities?.length)
+                      || (legal?.impulse?.length) || (legal?.graveyard?.length) || (legal?.exile_play?.length)
+                      || (legal?.gy_abilities?.length) || (legal?.foretell_hand?.length) || (legal?.face_up?.length))
+                      && <p className="muted" style={{ margin: 0 }}>Nada más para hacer: jugá desde tu mano o terminá el turno.</p>}
+                  </div>
+                );
+              })()}
+          <div className="card side-log">
+            <h2>Relato</h2>
+            <div className="log" ref={logRef}>
+              {groupLog(state.log || []).map((g, gi) => (
+                <div key={gi} className="log-turn">
+                  {g.head && <div className="log-turn-head">{g.head}</div>}
+                  {g.lines.map((ln, li) => <div key={li} className="log-line">{ln}</div>)}
+                </div>
+              ))}
+            </div>
+            <div className="act-block" style={{ marginTop: 10 }}>
+              <span className="act-label">Exportar todas las jugadas:</span>
+              <button className="ghost" onClick={() => exportGame("json")} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> JSON</button>
+              <button className="ghost" onClick={() => exportGame("txt")} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> Texto</button>
+            </div>
+          </div>
+            </aside>
+          </div>
+
+          {!state.mulligan && (() => {
+            const landIdx = new Set((legal?.lands || []).map((l) => l.i));
+            const castMap = new Map((legal?.casts || []).filter((c) => c.zone === "hand").map((c) => [c.i, c]));
+            const commandCasts = (legal?.casts || []).filter((c) => c.zone === "command");
+            const altCasts = (legal?.casts || []).filter((c) => c.zone !== "hand" && c.zone !== "command");
+            const hand = state.players[meIdx]?.hand_cards || [];
+            return (
+              <div className={`hand-dock ${myTurn ? "my-turn" : ""}`}>
+                <div className="dock-head">
+                  <span className="dock-title"><Icon name="hand" size={15} /> Tu mano · {hand.length}</span>
+                  {myTurn && legal && legal.mana != null && (
+                    <span className="mana-pool" title="maná disponible (fuentes sin girar)">
+                      <Icon name="sparkles" size={13} /> {legal.mana} maná
+                      <span className="muted"> · {legal.mana_sources} fuentes</span>
+                    </span>
+                  )}
+                  {!myTurn && <span className="muted dock-wait">{state.phase === "over" ? "Partida terminada" : `Esperando a ${state.players[state.active]?.name}…`}</span>}
+                </div>
+                <div className="hand">
+                  {hand.map((hc) => {
+                    const canLand = landIdx.has(hc.i);
+                    const castOpt = castMap.get(hc.i);
+                    return (
+                      <div key={hc.i} className={`handcard ${canLand || castOpt ? "playable" : ""}`}>
+                        <div className="hc-art" onClick={() => inspectCard(hc)} title="Ver carta"
+                          style={art[hc.name] ? { backgroundImage: `url(${art[hc.name]})` } : undefined}>
+                          {!art[hc.name] && <span>{hc.name}</span>}
+                          {hc.cost && <span className="hc-cost">{hc.cost}</span>}
+                        </div>
+                        <div className="hc-foot">
+                          <span className="hc-name" onClick={() => inspectCard(hc)}>{hc.name}</span>
+                          {myTurn && canLand && <button className="go tiny" onClick={() => doAct("land", { i: hc.i })}>Jugar</button>}
+                          {myTurn && castOpt && castOpt.castable === false
+                            ? <em className="pw-txt" title={castOpt.reason || ""}>({castOpt.reason || "no jugable"})</em>
+                            : myTurn && castOpt && <button className="go tiny" onClick={() => castCard(castOpt)} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                Lanzar{castOpt.target_spec ? <Icon name="target" size={12} /> : null}
+                              </button>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {hand.length === 0 && <span className="muted">mano vacía</span>}
+                </div>
+
+                {myTurn && (<>
                 {(legal?.attack_targets?.length || 0) > 1 && picked.size > 0 && (
                   <div className="act-block" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
                     <span className="act-label">A quién ataca cada criatura (rivales o sus planeswalkers):</span>
@@ -1400,27 +1566,11 @@ export default function Play() {
                   Cuando un rival te ataque, vos elegís los bloqueos y podés responder
                   con instantáneos.
                 </p>
+                </>)}
               </div>
             );
           })()}
-
-          <div className="card">
-            <h2>Relato</h2>
-            <div className="log" ref={logRef}>
-              {groupLog(state.log || []).map((g, gi) => (
-                <div key={gi} className="log-turn">
-                  {g.head && <div className="log-turn-head">{g.head}</div>}
-                  {g.lines.map((ln, li) => <div key={li} className="log-line">{ln}</div>)}
-                </div>
-              ))}
-            </div>
-            <div className="act-block" style={{ marginTop: 10 }}>
-              <span className="act-label">Exportar todas las jugadas:</span>
-              <button className="ghost" onClick={() => exportGame("json")} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> JSON</button>
-              <button className="ghost" onClick={() => exportGame("txt")} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="download" size={14} /> Texto</button>
-            </div>
-          </div>
-        </>
+        </div>
       )}
 
       {modePick && (
@@ -1490,133 +1640,7 @@ export default function Play() {
         </div>
       )}
 
-      {state?.phase === "choose" && state.choice && choiceHidden && (
-        <button className="go" onClick={() => setChoiceHidden(false)}
-          style={{ position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", zIndex: 50,
-                   display: "inline-flex", alignItems: "center", gap: 6, boxShadow: "var(--shadow)" }}>
-          <Icon name="book" size={14} /> Tenés una decisión pendiente · Abrir
-        </button>
-      )}
 
-      {state?.phase === "choose" && state.choice && !choiceHidden && (() => {
-        const ch = state.choice;
-        const isCardPick = ch.options.some((o) => o.is_land !== undefined);
-        const titles: Record<string, string> = {
-          scry: "Scry", surveil: "Surveil", fateseal: "Fateseal (biblioteca rival)",
-          explore: "Explorar", search: "Buscar en la biblioteca",
-          look_take: "Mirar y elegir", reveal_land: "Revelar y elegir",
-          etb_target: "Elegí un objetivo", creature_type: "Elegí un tipo de criatura",
-          discard: "Descartar", may: "¿Querés hacerlo?",
-          legend: "Regla de legendarios", x: "Elegí X",
-          reanimate: "Revivir desde el cementerio", exile_pick: "Elegí una carta del exilio",
-          cascade_target: "Cascada: elegí el objetivo",
-          gy_shuffle: "Barajar cartas del cementerio",
-          mode_choice: "Elegí un modo",
-          sacrifice: "Sacrificar", keep: "Elegí qué conservar",
-          opt_cost: "Coste opcional",
-          player_target: "Elegí un jugador", amount: "¿Cuánto?", color: "Elegí un color",
-        };
-        // Una línea que EXPLICA la mecánica (sobre todo la jerga de MTG), debajo del
-        // título. El `prompt` del motor da el detalle puntual (qué carta, cuántas faltan).
-        const hints: Record<string, string> = {
-          scry: "Mirá las cartas de arriba de tu biblioteca y mandá cada una arriba o al fondo.",
-          surveil: "Mirá las cartas de arriba y mandá cada una arriba o al cementerio.",
-          fateseal: "Mirá arriba de la biblioteca del rival y decidís si la dejás arriba o al fondo.",
-          explore: "Si la carta de arriba es tierra va a tu mano; si no, la criatura crece +1/+1.",
-          search: "Elegí una carta de tu biblioteca; después se baraja.",
-          legend: "Tenés dos legendarias iguales: conservá una, la otra va al cementerio.",
-          x: "Elegí cuánto maná pagar por X.",
-          etb_target: "Elegí a qué apunta la habilidad.",
-          cascade_target: "Cascada: elegí a qué carta revelada apuntar.",
-          gy_shuffle: "Elegí cartas de tu cementerio para barajar de vuelta a la biblioteca.",
-          look_take: "Mirá las cartas reveladas y llevate la que elijas.",
-          reveal_land: "Elegí una de las cartas reveladas.",
-          reanimate: "Elegí una carta del cementerio para ponerla en el campo de batalla.",
-          exile_pick: "Elegí una carta del exilio.",
-          creature_type: "Elegí un tipo de criatura (p. ej. Zombi, Elfo, Dragón).",
-          discard: "Elegí qué carta mandar al cementerio.",
-          may: "Decidí si querés aplicar el efecto opcional.",
-          mode_choice: "Al entrar elegís un modo; el permanente tiene solo la habilidad de ese modo.",
-          sacrifice: "Elegí qué permanente tuyo va al cementerio.",
-          keep: "Lo que no conserves se sacrifica.",
-          opt_cost: "Pagarlo es opcional; si no lo pagás, pasa lo que dice la otra opción.",
-          player_target: "El efecto apunta a un jugador: elegí a quién.",
-          amount: "Repartí el total entre los objetivos que elijas.",
-          color: "El permanente recuerda el color elegido para sus habilidades.",
-        };
-        const title = titles[ch.kind] || "Elegí una carta";
-        const hint = hints[ch.kind];
-        const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno"
-          : ch.kind === "gy_shuffle" ? "Ninguna más"
-          : "No llevarme ninguna";
-        return (
-          <div className="inspect-back decide-back" role="dialog" aria-modal="true" aria-label={title}>
-            <div key={`${ch.kind}:${ch.prompt}`} className={`inspect decide decide-${ch.kind}`}
-              onClick={(e) => e.stopPropagation()}>
-              {/* minimizar (no resuelve): deja ver el tablero y llegar a "Nueva partida" */}
-              <button className="inspect-x" aria-label="Ocultar decisión" title="Ocultar (mirar el tablero)" onClick={() => setChoiceHidden(true)}><Icon name="x" size={16} /></button>
-              <h3><Icon name="book" size={17} /> {title}</h3>
-              {hint && <p className="muted" style={{ marginTop: 2, fontSize: ".82rem", opacity: .85 }}>{hint}</p>}
-              <p className="muted" style={{ marginTop: 2 }}>{ch.prompt}</p>
-              {ch.card && (() => {
-                const d = ch.card_detail;
-                return (
-                  <div className="choice-card">
-                    {art[ch.card]
-                      ? <div className="inspect-art" style={{ backgroundImage: `url(${art[ch.card]})` }} />
-                      : <div className="inspect-art ph"><span>{ch.card}</span></div>}
-                    <div className="choice-card-info">
-                      <b style={{ fontSize: "1.02rem" }}>{ch.card}</b>
-                      {d && (
-                        <>
-                          <div className="choice-card-line">
-                            {d.cost ? <span className="choice-cost">{d.cost}</span> : null}
-                            {d.pt ? <span className="choice-pt">{d.pt}</span> : null}
-                          </div>
-                          {d.type ? <span className="choice-type">{d.type}</span> : null}
-                          {d.keywords.length > 0 && (
-                            <div className="choice-kws">
-                              {d.keywords.filter((k) => KW_SHORT[k]).map((k) => (
-                                <span key={k} className="atk-kw" title={k}>{KW_SHORT[k]}</span>
-                              ))}
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
-              <div className="target-list">
-                {ch.options.map((o, k) => (
-                  <button
-                    key={o.i}
-                    className={`ghost decide-opt${choicePick === o.i ? " picked" : ""}`}
-                    disabled={o.ok === false || choicePick !== null}
-                    onClick={() => pickChoice(o.i)}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 6,
-                             animationDelay: `${Math.min(k, 10) * 40}ms` }}>
-                    {ch.kind === "color"
-                      ? <span className={`color-dot c-${o.name.split(" ")[0].toLowerCase()}`} />
-                      : art[o.name]
-                      ? <span className="choice-thumb" style={{ backgroundImage: `url(${art[o.name]})` }} />
-                      : <Icon name={isCardPick ? (o.is_land ? "land" : "cards") : "chevron-right"} size={13} />}
-                    {o.name}
-                    {o.ok === false ? <span className="muted"> · no elegible</span> : null}
-                  </button>
-                ))}
-              </div>
-              {ch.allow_none && (
-                <div className="act-block" style={{ marginTop: 10 }}>
-                  <button className="ghost decide-none" onClick={() => doAct("choose", { index: null })}>
-                    {noneLabel}
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })()}
 
       {zoneView && (
         <div className="inspect-back" onClick={() => setZoneView(null)}>

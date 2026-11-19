@@ -2205,6 +2205,11 @@ class InteractiveGame:
             "opp_turns": self.opp_turns,
             # feed de habilidades activadas/disparadas (para avisar en pantalla)
             "ability_feed": self.g.ability_events[-10:],
+            # mesa: jugadas recientes y lo que está en la pila ahora
+            "events": self.g.table_events[-40:],
+            "stack": [{"name": getattr(o.source, "name", None) or o.label, "controller": getattr(o.controller, "name", None),
+                       "kind": o.kind, "targets": [getattr(t, "name", "?") for t in (o.targets or [])][:3]}
+                      for o in self.g.stack][-8:],
             # salidas del campo (destruida/exiliada/devuelta…): la UI las anima y avisa
             "departures": self.g.departures[-30:],
             # datos (coste/tipo/P-T/keywords) de las cartas en cementerio/exilio/

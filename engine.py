@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import random
+import re
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
@@ -1143,6 +1144,21 @@ class Game:
         "each_upkeep": "en cada mantenimiento", "each_end_step": "al final de cada turno",
         "cast": "cuando lanzás un hechizo", "draw": "al robar",
         "begin_combat": "al empezar el combate",
+        "any_blocks": "cuando una criatura bloquea", "any_cast": "cuando alguien lanza un hechizo",
+        "any_discarded": "cuando alguien descarta", "any_gain_life": "cuando alguien gana vida",
+        "become_monarch": "al volverse monarca", "cards_exiled": "cuando se exilian cartas",
+        "crime": "al cometer un crimen", "cycled": "al ciclar", "damage": "al hacer daño",
+        "damage_prevented": "al prevenirse daño", "discarded": "al descartar",
+        "each_combat": "al empezar cada combate", "gain_life": "al ganar vida", "leave": "al dejar el campo",
+        "loyalty_act": "al activar lealtad", "main1": "en tu fase principal", "main2": "en tu segunda fase principal",
+        "opp_cast": "cuando un rival lanza un hechizo", "opp_crime": "cuando un rival comete un crimen",
+        "opp_discarded": "cuando un rival descarta", "opp_draw": "cuando un rival roba",
+        "other_leaves": "cuando otro permanente deja el campo", "perm_leaves": "cuando un permanente deja el campo",
+        "ring_tempts": "cuando el Anillo te tienta", "sacrificed": "al sacrificar",
+        "turned_face_up": "al darse vuelta", "you_attack": "cuando atacás", "creature_attacks": "cuando una criatura tuya ataca",
+        "any_creature_attacks": "cuando una criatura ataca", "player_attacks": "cuando un jugador ataca",
+        "becomes_tapped": "al girarse", "token_created": "al crear fichas", "scry": "al adivinar", "surveil": "al vigilar",
+        "attacks_you": "cuando te atacan", "attacks_alone": "al atacar sola",
     }
 
     def __init__(self, players: list, seed: int = 0, max_turns: int = 60,
@@ -1150,6 +1166,8 @@ class Game:
         self.players = players
         for _p in players:
             _p.__dict__["_game"] = self
+        self._any_phoenix = any(getattr(c, "phoenix_return", False) for _p in players
+                                for c in list(getattr(_p, "deck_template", None) or []) + list(_p.commanders))
         self.rng = random.Random(seed)
         self.max_turns = max_turns
         self.log_enabled = log
@@ -1168,6 +1186,8 @@ class Game:
         # registro de habilidades que se activaron (para el resumen de la partida):
         # {turn, controller, card, kind}. No crea pasos en la traza.
         self.ability_events: list = []
+        self.table_events: list = []    # jugadas estructuradas para la mesa de la UI (lanzar, tierra, habilidad, ataque)
+        self._tev_seq = 0
         # salidas del campo (para avisar/animar en la UI): {seq, turn, uid, name,
         # player, kind (destroyed|died|sacrificed|exiled|bounced|library), source}
         self.departures: list = []
@@ -1288,6 +1308,24 @@ class Game:
         return p.hand[0]
 
     # -- registro de habilidades activadas (resumen) ---------------------- #
+    def table_event(self, kind: str, player=None, card=None, targets=None, text=None, **extra):
+        """Jugada para mostrar en el centro de la mesa (la UI anima la última)."""
+        def _tn(t):
+            if hasattr(t, "battlefield"):
+                return {"name": t.name, "player": True}
+            nm = getattr(t, "name", None) or getattr(getattr(t, "source", None), "name", None)
+            ctl = getattr(getattr(t, "controller", None), "name", None)
+            return {"name": nm or "?", "owner": ctl}
+        self._tev_seq += 1
+        ev = {"seq": self._tev_seq, "turn": self.turn, "kind": kind,
+              "player": getattr(player, "name", player),
+              "card": getattr(card, "name", card) if card is not None else None,
+              "targets": [_tn(t) for t in (targets or [])][:4], "text": text}
+        ev.update(extra)
+        self.table_events.append(ev)
+        if len(self.table_events) > 200:
+            del self.table_events[:-120]
+
     def note_ability(self, card, kind: str, controller=None):
         """Anota que se activó una habilidad de `card` (kind = descripción corta
         del disparo: 'entra al campo', 'al morir una criatura', 'lealtad +1'...)."""
@@ -1295,6 +1333,9 @@ class Game:
         if not name:
             return
         who = getattr(controller, "name", None)
+        if kind and re.fullmatch(r"[a-z0-9_]+", kind):
+            kind = self.EVENT_KIND.get(kind) or ("disparo: " + kind.replace("_", " "))   # nada de claves internas
+        self.table_event("ability", who, name, text=kind)
         self.ability_events.append({
             "turn": self.turn, "controller": who, "card": name, "kind": kind,
         })
@@ -3138,6 +3179,26 @@ class Game:
                     target.poison += getattr(source.card, "toxic_n", 1)
             else:
                 target.life -= amount
+            # Chandra's Phoenix: "whenever an opponent is dealt damage by a red instant or sorcery spell you
+            # control or by a red planeswalker you control, return this card from your graveyard to your hand"
+            if amount > 0 and getattr(self, "_any_phoenix", False):
+                _pc = None
+                if src_perm and "planeswalker" in source.card.types and "R" in _obj_colors(source.card):
+                    _pc = source.controller
+                elif not src_perm:
+                    _rc = source if (source is not None and hasattr(source, "types")) else getattr(self, "_resolving_card", None)
+                    if _rc is not None and {"instant", "sorcery"} & set(_rc.types) and "R" in _obj_colors(_rc):
+                        _pc = getattr(self, "_resolving_ctrl", None)
+                if _pc is not None and target in self.opponents(_pc):
+                    for _ph in [c for c in _pc.graveyard if getattr(c, "phoenix_return", False)]:
+                        def _ret(g, _c=_ph, _o=_pc):
+                            if _c in _o.graveyard:
+                                _o.graveyard.remove(_c)
+                                _o.hand.append(_c)
+                                g.emit("leaves_graveyard", player=_o, card=_c)
+                                g.log(f"{_c.name} vuelve del cementerio a la mano de {_o.name}")
+                        self.stack.append(StackObject(_pc, _ret, source=_ph, label=f"trigger:{_ph.name}:gy",
+                                                      kind="trigger"))
             # "whenever you're dealt damage" (Darien, Sun Droplet)
             for _w in list(target.battlefield):
                 _wc = (_w.card.triggers or {}).get("you_dealt_damage")
@@ -4093,6 +4154,7 @@ class Game:
             card._opt_paid = self._pay_opt_add(player, card, card.opt_add)
 
         self.log(f"{player.name} lanza {card.name}")
+        self.table_event("cast", player, card, targets=[t for t in (targets or []) if t is not None])
         # telemetria: registrar el lanzamiento y el turno del comandante
         st = getattr(player, "stats", None)
         if st is not None:
@@ -4136,6 +4198,7 @@ class Game:
             g.spell_x = cast_x
             prev_rc = getattr(g, "_resolving_card", None)
             g._resolving_card = card
+            g._resolving_ctrl = player
             try:
                 if getattr(card, "_gift_promised", False):
                     g._give_gift(player, card)
@@ -5285,6 +5348,7 @@ class Game:
             player.library.pop()
         player.lands_played += 1
         self.log(f"{player.name} juega tierra {card.name}")
+        self.table_event("land", player, card)
         self.move_to_battlefield(card, player)
         return True
 
@@ -5401,10 +5465,17 @@ class Game:
             self.sba()
             return True
         if after == "hand":
+            if gp.get("pay_life") and p.life <= gp["pay_life"]:
+                return False
             if cost is not None:
                 p.pay(cost)
+            if gp.get("pay_life"):
+                p.life -= gp["pay_life"]
+                self.log(f"{p.name} paga {gp['pay_life']} de vida")
+            _discard_for_play()
             p.graveyard.remove(card)
             p.hand.append(card)
+            self.emit("leaves_graveyard", player=p, card=card)
             self.log(f"{p.name} devuelve {card.name} del cementerio a la mano")
             return True
         # hechizo (flashback / escape / disturb): lanzar por el coste alternativo,
@@ -7068,6 +7139,14 @@ class Game:
                                 _ow, (lambda g, _cb=pcb, _s=src, _dd=_d:
                                       g._run_trigger(_cb, _s, {"attacker": p, "defender": _dd})),
                                 source=src, label=f"player_attacks:{src.name}", kind="trigger", perm=src))
+        if declared:
+            _dmap = {}
+            for _a in declared:
+                _dn = getattr(_a.attacking, "name", "?")
+                _dmap.setdefault(_dn, []).append({"name": _a.name, "power": self.combat_power(_a)
+                                                   if hasattr(self, "combat_power") else _a.power})
+            self.table_event("attack", p, None, text=f"ataca con {len(declared)}",
+                             attacks=[{"defender": k, "attackers": v} for k, v in _dmap.items()])
         self._combat_on = bool(declared)         # Marisi: "can't cast spells during combat"
         self._cur_declared = declared            # "tapped and attacking" (Kaalia) se suma acá
         try:

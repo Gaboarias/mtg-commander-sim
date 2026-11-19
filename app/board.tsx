@@ -248,7 +248,7 @@ export function Seat({
   p: PlayerState; active: boolean; art: Record<string, string>; reduce: boolean;
   selectableUids?: Set<number>; selectedUids?: Set<number>; onCard?: (uid: number) => void;
   onInspect?: (perm: Perm) => void; onZone?: (title: string, names: string[]) => void;
-  variant?: "grid" | "hero" | "mini";
+  variant?: "grid" | "hero" | "mini" | "opp" | "me";
   departures?: Departure[]; guessDepartures?: boolean; targetedUids?: Set<number>;
 }) {
   const ghosts = useGhosts(p, departures, guessDepartures);
@@ -424,7 +424,31 @@ export function Seat({
           </motion.div>
         );
       })()}
-      {lands.length > 0 && (
+      {lands.length > 0 && (variant === "opp" || variant === "me") && (() => {
+        // mesa: tierras iguales apiladas (mismo nombre y mismo estado girada/enderezada)
+        const groups = new Map<string, Perm[]>();
+        for (const pm of lands) {
+          const k = `${pm.name}|${pm.tapped ? 1 : 0}|${ghostBy.has(pm.uid) ? pm.uid : ""}|${targetedUids?.has(pm.uid) ? pm.uid : ""}|${pm.is_creature ? pm.uid : ""}`;
+          (groups.get(k) || groups.set(k, []).get(k)!).push(pm);
+        }
+        const untapped = lands.filter((x) => !x.tapped).length;
+        return (
+          <motion.div layout={!reduce} className="row-cards lands land-stacks">
+            <span className="land-count" title="tierras (enderezadas / total)"><Icon name="land" size={12} /> {untapped}/{lands.length}</span>
+            {[...groups.values()].map((members) => members.length === 1 ? (
+              <CardMini key={members[0].uid} perm={members[0]} art={members[0].is_token ? undefined : art[members[0].name]} reduce={reduce}
+                isCommander={p.commander.includes(members[0].name)}
+                onInspect={onInspect && !ghostBy.has(members[0].uid) ? () => onInspect(members[0]) : undefined}
+                leaving={ghostBy.get(members[0].uid)?.kind} leaveSource={ghostBy.get(members[0].uid)?.source}
+                targeted={targetedUids?.has(members[0].uid)} />
+            ) : (
+              <TokenStack key={members[0].name + (members[0].tapped ? "t" : "u")} members={members} reduce={reduce}
+                onInspect={onInspect} />
+            ))}
+          </motion.div>
+        );
+      })()}
+      {lands.length > 0 && variant !== "opp" && variant !== "me" && (
         <motion.div layout={!reduce} className="row-cards lands">
           <AnimatePresence>
             {lands.map((pm) => (
