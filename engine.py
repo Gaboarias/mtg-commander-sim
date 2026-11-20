@@ -1423,18 +1423,23 @@ class Game:
         s = getattr(self, "_fx_source", None)
         return f" [{s}]" if s else ""
 
-    def _run_fx(self, label, fn):
+    def _run_fx(self, label, fn, src=None):
         """Corre un efecto INLINE (ETB / muerte / al dejar el campo) con tope de
         re-entrancia. Si una carta mal modelada se auto-dispara en cadena, corta el
-        bucle y sigue, en vez de reventar la pila de Python (RecursionError)."""
+        bucle y sigue, en vez de reventar la pila de Python (RecursionError).
+        `src`: carta dueña del efecto (las decisiones que abra se atribuyen a ella)."""
         if self._fx_depth >= self._fx_max_depth:
             self.log(f"aviso: se cortó una cadena de efectos ({label}) por posible bucle")
             return None
         self._fx_depth += 1
+        prev_card = getattr(self, "_fx_card", None)
+        if src is not None:
+            self._fx_card = getattr(src, "card", src)
         try:
             return fn()
         finally:
             self._fx_depth -= 1
+            self._fx_card = prev_card
 
     # -- logging ---------------------------------------------------------- #
     def log(self, msg: str):
@@ -1598,6 +1603,14 @@ class Game:
 
     @pending_choice.setter
     def pending_choice(self, value):
+        # toda decisión dice DE QUÉ CARTA viene (un disparo de muerte durante una
+        # barrida no debe parecer parte del hechizo que se está resolviendo)
+        if isinstance(value, dict) and not value.get("card"):
+            src = getattr(self, "_fx_card", None)
+            nm = getattr(src, "name", None)
+            if nm:
+                value["card"] = nm
+                value.setdefault("card_obj", src)
         if value is not None and getattr(self, "_pending_choice", None) is not None:
             self.choice_queue.append(value)
             return
@@ -1955,12 +1968,16 @@ class Game:
             self._fx_controller = obj.controller
             prev_ss = getattr(self, "_stack_src", None)
             self._stack_src = getattr(obj, "source", None)
+            prev_fc = getattr(self, "_fx_card", None)
+            _src = getattr(obj, "source", None)
+            self._fx_card = getattr(_src, "card", _src) if _src is not None else None
             try:
                 obj.resolve(self)
             finally:
                 self._fx_source = prev
                 self._fx_controller = prev_c
                 self._stack_src = prev_ss
+                self._fx_card = prev_fc
             self.sba()
 
     # -- movimiento de cartas -------------------------------------------- #
@@ -2492,12 +2509,12 @@ class Game:
             self._fx_controller = player
             try:
                 self._run_fx(f"ETB {card.name}",
-                             lambda: card.on_etb(self, player, perm))
+                             lambda: card.on_etb(self, player, perm), src=card)
                 # Panharmonicon / Yarok: el disparo de entrada se dispara otra vez
                 for _ in range(self._etb_extra(player, perm)):
                     if perm in player.battlefield:
                         self._run_fx(f"ETB extra {card.name}",
-                                     lambda: card.on_etb(self, player, perm))
+                                     lambda: card.on_etb(self, player, perm), src=card)
             finally:
                 self._fx_source = prev
                 self._fx_controller = prev_c
@@ -2779,7 +2796,7 @@ class Game:
                 (getattr(perm.card, "_real", None) or perm.card, ctrl)]
         if perm.card.on_leave:
             self._run_fx(f"on_leave {perm.name}",
-                         lambda: perm.card.on_leave(self, ctrl, perm))
+                         lambda: perm.card.on_leave(self, ctrl, perm), src=perm.card)
         ctrl.left_turn = self.turn
         if not perm.card.is_land():
             self.nonland_left_turn = self.turn
@@ -2831,7 +2848,7 @@ class Game:
         self.emit("other_leaves", perm=perm)
         if perm.card.on_leave:                # "cuando deja el campo" (muerte/exilio)
             self._run_fx(f"on_leave {perm.name}",
-                         lambda: perm.card.on_leave(self, ctrl, perm))
+                         lambda: perm.card.on_leave(self, ctrl, perm), src=perm.card)
         if getattr(perm, "_blitz", False):    # blitz: su muerte roba una carta
             ctrl.draw(1, self)
             self.log(f"{ctrl.name} roba una carta (blitz de {perm.name})")
@@ -2840,7 +2857,7 @@ class Game:
             # on_death puede devolver True (persist/undying) para indicar que la
             # carta ya volvió al campo y NO debe ir al cementerio.
             relocated = bool(self._run_fx(f"on_death {perm.name}",
-                                          lambda: perm.card.on_death(self, ctrl, perm)))
+                                          lambda: perm.card.on_death(self, ctrl, perm), src=perm.card))
         # "muere" = una CRIATURA va del campo al cementerio. Antes se emitía también
         # para artefactos/fichas no-criatura (sacrificar una Treasure disparaba a
         # los aristócratas) y para criaturas exiliadas por un reemplazo.
@@ -7926,7 +7943,7 @@ class Game:
                         owner.battlefield.remove(perm)
                         if perm.card.on_leave:
                             self._run_fx(f"on_leave {perm.name}",
-                                         lambda _pm=perm, _o=owner: _pm.card.on_leave(self, _o, _pm))
+                                         lambda _pm=perm, _o=owner: _pm.card.on_leave(self, _o, _pm), src=perm.card)
                         card._play_cost = card.cost
                         owner.exile_play.append(card)
                         self.log(f"{card.name} se exilia (warp): se puede volver a lanzar")

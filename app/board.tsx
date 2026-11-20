@@ -42,9 +42,11 @@ export type PlayerState = {
 
 export function CardMini({
   perm, art, reduce, selectable, selected, onClick, onInspect, isCommander, leaving, leaveSource, targeted,
-  attachedLabel,
+  attachedLabel, actionCount, onAction,
 }: {
   perm: Perm; art?: string; reduce: boolean;
+  actionCount?: number;        // habilidades activables ahora (planeswalker / pagar costo)
+  onAction?: () => void;       // abrir el menú de habilidades de esta carta
   selectable?: boolean; selected?: boolean; onClick?: () => void; onInspect?: () => void;
   isCommander?: boolean;
   leaving?: string;            // se está yendo del campo (destroyed/exiled/…): se anima
@@ -72,6 +74,8 @@ export function CardMini({
   const kws = (perm.keywords || []).filter((k) => KW_SHORT[k]);
   // doble golpe: resaltar la carta de forma especial (temporal o permanente da igual)
   const doubleStrike = (perm.keywords || []).includes("double_strike");
+  const act = !!(actionCount && onAction);
+  const handler = onClick || (act ? onAction : undefined);
   return (
     <motion.div
       layout={!reduce}
@@ -79,18 +83,18 @@ export function CardMini({
       animate={{ opacity: 1, scale: 1, y: 0, rotate: perm.tapped ? 9 : 0 }}
       exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.5, y: 10 }}
       transition={{ type: "spring", stiffness: 420, damping: 30 }}
-      className={`cardmini ${perm.attacking ? "atk" : ""} ${perm.tapped ? "tapped" : ""} ${selectable ? "sel-able" : ""} ${selected ? "sel" : ""} ${doubleStrike ? "dstrike" : ""} ${leaving ? `leaving lv-${leaving}${reduce ? " lv-static" : ""}` : ""} ${targeted ? "targeted" : ""}`}
+      className={`cardmini ${perm.attacking ? "atk" : ""} ${perm.tapped ? "tapped" : ""} ${selectable ? "sel-able" : ""} ${selected ? "sel" : ""} ${doubleStrike ? "dstrike" : ""} ${leaving ? `leaving lv-${leaving}${reduce ? " lv-static" : ""}` : ""} ${targeted ? "targeted" : ""} ${act ? "has-act" : ""}`}
       title={leaving ? `${perm.name}: ${LEAVE_LABEL[leaving] || "deja el campo"}${leaveSource ? ` (${leaveSource})` : ""}`
         : perm.tapped ? `${perm.name} (girada)` : perm.name}
-      onClick={onClick}
-      style={onClick ? { cursor: "pointer" } : undefined}
-      // seleccionable con teclado (Tab + Enter/Espacio) para elegir atacantes
-      role={onClick ? "button" : undefined}
-      tabIndex={onClick ? 0 : undefined}
+      onClick={handler}
+      style={handler ? { cursor: "pointer" } : undefined}
+      // seleccionable con teclado (Tab + Enter/Espacio) para elegir atacantes o abrir habilidades
+      role={handler ? "button" : undefined}
+      tabIndex={handler ? 0 : undefined}
       aria-pressed={onClick ? !!selected : undefined}
-      aria-label={onClick ? `${perm.name}${selected ? " (elegida)" : ""}` : undefined}
-      onKeyDown={onClick ? (e) => {
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
+      aria-label={onClick ? `${perm.name}${selected ? " (elegida)" : ""}` : act ? `${perm.name}: activar habilidad` : undefined}
+      onKeyDown={handler ? (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); }
       } : undefined}
     >
       {leaving && (
@@ -120,6 +124,13 @@ export function CardMini({
         <span className="cm-badge ds" title="doble golpe (pega dos veces)">
           <Icon name="swords" size={9} /> ×2
         </span>
+      )}
+      {act && !leaving && (
+        <button type="button" className="cm-act" title={perm.is_planeswalker ? "Activar habilidad de lealtad" : "Activar habilidad"}
+          aria-label={`Activar habilidad de ${perm.name}`}
+          onClick={(e) => { e.stopPropagation(); onAction!(); }}>
+          <Icon name="bolt" size={12} />{actionCount! > 1 ? <span className="cm-act-n">{actionCount}</span> : null}
+        </button>
       )}
       {perm.is_token && <span className="cm-badge tok" title="ficha">ficha</span>}
       {perm.is_creature && perm.sick && (
@@ -249,14 +260,18 @@ function useGhosts(p: PlayerState, departures: Departure[] | undefined, guess: b
 
 export function Seat({
   p, active, art, reduce, selectableUids, selectedUids, onCard, onInspect, onZone, variant = "grid",
-  departures, guessDepartures = false, targetedUids,
+  departures, guessDepartures = false, targetedUids, actionUids, onAction,
 }: {
   p: PlayerState; active: boolean; art: Record<string, string>; reduce: boolean;
   selectableUids?: Set<number>; selectedUids?: Set<number>; onCard?: (uid: number) => void;
   onInspect?: (perm: Perm) => void; onZone?: (title: string, names: string[]) => void;
   variant?: "grid" | "hero" | "mini" | "opp" | "me";
   departures?: Departure[]; guessDepartures?: boolean; targetedUids?: Set<number>;
+  actionUids?: Map<number, number>;          // uid → cantidad de habilidades activables ahora
+  onAction?: (uid: number) => void;
 }) {
+  const actProps = (x: Perm) => (actionUids?.get(x.uid) && onAction && !ghostBy.has(x.uid)
+    ? { actionCount: actionUids.get(x.uid), onAction: () => onAction(x.uid) } : {});
   const ghosts = useGhosts(p, departures, guessDepartures);
   const ghostBy = new Map(ghosts.map((g) => [g.perm.uid, g]));
   const field = [...p.battlefield, ...ghosts.map((g) => g.perm)];
@@ -381,7 +396,7 @@ export function Seat({
           if (isAttached(pm)) continue;
           if (attachedBy.has(pm.uid)) { individuals.push(pm); continue; }
           const interactive = selectableUids?.has(pm.uid) || selectedUids?.has(pm.uid)
-            || ghostBy.has(pm.uid) || targetedUids?.has(pm.uid);
+            || ghostBy.has(pm.uid) || targetedUids?.has(pm.uid) || actionUids?.has(pm.uid);
           if (pm.is_token && !interactive) {
             const sig = tokenSig(pm);
             (groups.get(sig) || groups.set(sig, []).get(sig)!).push(pm);
@@ -406,6 +421,7 @@ export function Seat({
                     leaveSource={ghostBy.get(x.uid)?.source}
                     targeted={targetedUids?.has(x.uid)}
                     attachedLabel={extra?.attachedLabel}
+                    {...actProps(x)}
                   />
                 );
                 const atts = attachedBy.get(pm.uid);
@@ -446,7 +462,7 @@ export function Seat({
         // mesa: tierras iguales apiladas (mismo nombre y mismo estado girada/enderezada)
         const groups = new Map<string, Perm[]>();
         for (const pm of lands) {
-          const k = `${pm.name}|${pm.tapped ? 1 : 0}|${ghostBy.has(pm.uid) ? pm.uid : ""}|${targetedUids?.has(pm.uid) ? pm.uid : ""}|${pm.is_creature ? pm.uid : ""}`;
+          const k = `${pm.name}|${pm.tapped ? 1 : 0}|${ghostBy.has(pm.uid) ? pm.uid : ""}|${targetedUids?.has(pm.uid) ? pm.uid : ""}|${pm.is_creature || actionUids?.has(pm.uid) ? pm.uid : ""}`;
           (groups.get(k) || groups.set(k, []).get(k)!).push(pm);
         }
         const untapped = lands.filter((x) => !x.tapped).length;
@@ -458,7 +474,7 @@ export function Seat({
                 isCommander={p.commander.includes(members[0].name)}
                 onInspect={onInspect && !ghostBy.has(members[0].uid) ? () => onInspect(members[0]) : undefined}
                 leaving={ghostBy.get(members[0].uid)?.kind} leaveSource={ghostBy.get(members[0].uid)?.source}
-                targeted={targetedUids?.has(members[0].uid)} />
+                targeted={targetedUids?.has(members[0].uid)} {...actProps(members[0])} />
             ) : (
               <TokenStack key={members[0].name + (members[0].tapped ? "t" : "u")} members={members} reduce={reduce}
                 onInspect={onInspect} />

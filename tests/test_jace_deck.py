@@ -375,3 +375,26 @@ def test_quintorius_plus_one_discard_draw_two_mill_one():
     g.activate_loyalty(pm, 0)
     run(g)
     assert len(me.hand) == 3 and len(me.graveyard) == 2
+
+
+def test_wipe_death_trigger_choice_names_its_source_and_spirit_colors():
+    """Ceaseless Conflict mata a Atsushi: el modo de su disparo de muerte se pide
+    atribuido a Atsushi (no parece parte del hechizo), y las fichas son rojo-blancas."""
+    cc = cardsdb.build_card_from_data({
+        "name": "Ceaseless Conflict", "mana_cost": "{3}{W}{W}", "type_line": "Sorcery",
+        "oracle_text": "Destroy all creatures. Then create a 3/2 red and white Spirit creature token for "
+                       "each nontoken creature you controlled that was destroyed this way."})
+    at = cardsdb.build_card_from_data({
+        "name": "Atsushi, the Blazing Sky", "mana_cost": "{2}{R}{R}", "type_line": "Legendary Creature — Dragon Spirit",
+        "power": "4", "toughness": "4", "keywords": ["Flying", "Trample"],
+        "oracle_text": "Flying, trample\nWhen Atsushi dies, choose one —\n• Exile the top two cards of your library. "
+                       "Until the end of your next turn, you may play those cards.\n• Create three Treasure tokens."})
+    g, me, _ = _g()
+    g.interactive_human = me
+    put(g, at, me)
+    cc.on_cast_resolve(g, me, None)
+    pc = g.pending_choice
+    assert pc is not None and pc.get("card") == "Atsushi, the Blazing Sky"
+    spirits = [p for p in me.battlefield if p.name == "Spirit"]
+    assert len(spirits) == 1
+    assert set(getattr(spirits[0].card, "colors", ()) or ()) >= {"R", "W"}

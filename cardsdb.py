@@ -5635,14 +5635,16 @@ def _wipe_then_tokens_effect(oracle: str):
     if not m:
         return None
     p_, tgh, sub = int(m.group(1)), int(m.group(2)), m.group(3).capitalize()
+    _cmap = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
+    cols = tuple(_cmap[w] for w in re.findall(r"\b(white|blue|black|red|green)\b", m.group(0).lower()))
 
-    def eff(game, ctrl, targets=None, _p=p_, _t=tgh, _st=sub):
+    def eff(game, ctrl, targets=None, _p=p_, _t=tgh, _st=sub, _c=cols):
         mine = [pm for pm in list(ctrl.battlefield)
                 if pm.is_creature() and not pm.is_token]
         cards.wrath(game, ctrl, None)
         destroyed = sum(1 for pm in mine if pm not in ctrl.battlefield)
         for _ in range(destroyed):
-            cards.make_token(game, ctrl, _st, _p, _t, subtypes=(_st,))
+            cards.make_token(game, ctrl, _st, _p, _t, subtypes=(_st,), colors=_c)
         if destroyed:
             game.log(f"{ctrl.name}: crea {destroyed} ficha(s) {_p}/{_t} {_st}")
     return eff

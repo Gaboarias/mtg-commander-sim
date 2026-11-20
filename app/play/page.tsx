@@ -195,6 +195,7 @@ export default function Play() {
   const [modeSel, setModeSel] = useState<number[]>([]);  // modos elegidos (choose two)
   const [tsel, setTsel] = useState<number[]>([]);  // objetivos elegidos (multi)
   const [bottom, setBottom] = useState<number[]>([]);  // cartas al fondo tras mulligan
+  const [abilSheet, setAbilSheet] = useState<number | "all" | null>(null);  // menú de habilidades (uid o todas)
   const [showSide, setShowSide] = useState(true);   // panel lateral (relato + más acciones)
   useEffect(() => {
     // en pantallas angostas la mesa ocupa todo: el relato se abre a pedido
@@ -602,6 +603,16 @@ export default function Play() {
   const myTurn = !!state && state.phase === "main" && state.active === meIdx;
   const legal = state?.legal;
   const attackableUids = new Set((legal?.attackers || []).map((a) => a.uid));
+  // habilidades activables ahora, por permanente: lealtad + habilidades con costo
+  const actionUids = new Map<number, number>();
+  if (myTurn && legal) {
+    for (const pw of legal.activatables || []) actionUids.set(pw.uid, (actionUids.get(pw.uid) || 0) + pw.abilities.length);
+    for (const pm of legal.abilities || []) {
+      const n = pm.abilities.filter((a) => a.playable !== false).length;
+      if (n) actionUids.set(pm.uid, (actionUids.get(pm.uid) || 0) + n);
+    }
+  }
+  const actionTotal = [...actionUids.values()].reduce((a, b) => a + b, 0);
 
   // decisión pendiente (scry, objetivo, descartar…): se muestra en el CENTRO de la mesa
   const choicePanel = (state?.phase === "choose" && state.choice) ? (() => {
@@ -617,7 +628,8 @@ export default function Play() {
           reanimate: "Revivir desde el cementerio", exile_pick: "Elegí una carta del exilio",
           cascade_target: "Cascada: elegí el objetivo",
           gy_shuffle: "Barajar cartas del cementerio",
-          mode_choice: "Elegí un modo",
+          mode_choice: "Elegí un modo", mode: "Elegí un modo", mode_target: "Elegí un objetivo",
+          mana: "Elegí el maná", life: "Pagar vida",
           sacrifice: "Sacrificar", keep: "Elegí qué conservar",
           opt_cost: "Coste opcional",
           player_target: "Elegí un jugador", amount: "¿Cuánto?", color: "Elegí un color",
@@ -658,7 +670,7 @@ export default function Play() {
         return (
           <div role="group" aria-label={title} className="decide-center">
             <div key={`${ch.kind}:${ch.prompt}`} className={`inspect decide decide-${ch.kind}`}>
-              <h3><Icon name="book" size={17} /> {title}</h3>
+              <h3><Icon name="book" size={17} /> {title}{ch.card ? <span className="choice-src"> · {ch.card}</span> : null}</h3>
               {hint && <p className="muted" style={{ marginTop: 2, fontSize: ".82rem", opacity: .85 }}>{hint}</p>}
               <p className="muted" style={{ marginTop: 2 }}>{ch.prompt}</p>
               {ch.card && (() => {
@@ -1244,12 +1256,62 @@ export default function Play() {
                   onZone={(title, names) => setZoneView({ title, names })}
                   departures={state.departures} guessDepartures
                   targetedUids={state.react?.targets?.length ? new Set(state.react.targets) : undefined}
+                  actionUids={actionUids} onAction={(uid) => setAbilSheet(uid)}
                 />
                 </FitBox>
               </div>
               {choicePanel && (
                 <div className="felt-overlay">{choicePanel}</div>
               )}
+              {!choicePanel && abilSheet != null && myTurn && legal && (() => {
+                const pws = (legal.activatables || []).filter((pw) => abilSheet === "all" || pw.uid === abilSheet);
+                const pas = (legal.abilities || []).filter((pm) => abilSheet === "all" || pm.uid === abilSheet);
+                const one = abilSheet !== "all" ? state.players[meIdx].battlefield.find((x) => x.uid === abilSheet) : undefined;
+                const close = () => setAbilSheet(null);
+                return (
+                  <div className="felt-overlay" onClick={close}>
+                    <div className="inspect decide abil-sheet" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+                      <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={close}><Icon name="x" size={16} /></button>
+                      <h3><Icon name="bolt" size={17} /> {one ? one.name : "Habilidades disponibles"}</h3>
+                      <div className={one ? "choice-card" : ""}>
+                        {one && (art[one.name]
+                          ? <div className="inspect-art" style={{ backgroundImage: `url(${art[one.name]})` }} />
+                          : <div className="inspect-art ph"><span>{one.name}</span></div>)}
+                        <div className="abil-list">
+                          {pws.map((pw) => pw.abilities.map((ab) => (
+                            <button key={pw.uid + "-" + ab.i} className="ghost decide-opt abil-opt"
+                              onClick={() => { close(); doAct("activate", { uid: pw.uid, index: ab.i }); }}>
+                              <span className={`abil-cost loy ${ab.cost >= 0 ? "up" : "down"}`}>{ab.cost > 0 ? `+${ab.cost}` : ab.cost}</span>
+                              <span className="abil-txt">
+                                {!one && <b>{pw.name} <span className="muted">(◆{pw.loyalty})</span></b>}
+                                {ab.text || "Habilidad de lealtad"}
+                              </span>
+                            </button>
+                          )))}
+                          {pas.map((pm) => pm.abilities.map((ab) => (
+                            <button key={pm.uid + "-a" + ab.i} className="ghost decide-opt abil-opt"
+                              disabled={ab.playable === false}
+                              onClick={() => { close(); useAbility(pm.uid, ab); }}>
+                              <span className="abil-cost">{ab.cost || "—"}{ab.tap ? <Icon name="refresh" size={12} /> : null}</span>
+                              <span className="abil-txt">
+                                {!one && <b>{pm.name}</b>}
+                                {ab.label}
+                                {ab.target_spec ? <span className="muted"> <Icon name="target" size={11} /> elegís objetivo</span> : null}
+                                {ab.playable === false && ab.reason ? <em className="pw-txt"> ({ab.reason})</em> : null}
+                              </span>
+                            </button>
+                          )))}
+                          {pws.length === 0 && pas.length === 0 && <p className="muted">No hay habilidades para activar ahora.</p>}
+                          {one?.is_planeswalker && <p className="muted abil-note">Una sola habilidad de lealtad por turno, a velocidad de conjuro.</p>}
+                        </div>
+                      </div>
+                      <div className="act-block" style={{ marginTop: 10 }}>
+                        <button className="ghost" onClick={close}>Cancelar</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             <aside className="table-side">
@@ -1585,6 +1647,11 @@ export default function Play() {
                     style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                     <Icon name="swords" size={15} /> Atacar {picked.size > 0 ? `(${picked.size})` : ""}
                   </button>
+                  {actionTotal > 0 && (
+                    <button className="ghost abil-dock" onClick={() => setAbilSheet("all")} title="Activar habilidades de tus permanentes (lealtad de planeswalkers, habilidades con costo)">
+                      <Icon name="bolt" size={14} /> Habilidades ({actionTotal})
+                    </button>
+                  )}
                   <button className="ghost" onClick={() => doAct("undo")} disabled={!legal?.can_undo} title="Deshacer la última jugada de este turno" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="undo" size={14} /> Deshacer</button>
                   <button className="ghost" onClick={() => doAct("end")} disabled={!legal?.can_end} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Terminar turno <Icon name="skip-forward" size={14} /></button>
                 </div>
