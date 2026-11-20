@@ -1499,6 +1499,9 @@ class Game:
                             and pm.enchanting in pm.enchanting.controller.battlefield else None),
             "attached_name": (pm.enchanting.name if isinstance(getattr(pm, "enchanting", None), Permanent)
                               and pm.enchanting in pm.enchanting.controller.battlefield else None),
+            # prepared: el hechizo que la criatura puede copiar y si está preparada ahora
+            "prepared": (dict(pm.card.prepared_spell, ready=bool(getattr(pm, "_prepared", False)))
+                         if getattr(pm.card, "prepared_spell", None) else None),
             # station: carga actual, próximo umbral y en cuál pasa a ser criatura (la UI lo muestra)
             "station": ({"charge": pm.counters.get("charge", 0),
                          "tiers": list(getattr(pm.card, "station_tiers", ()) or ()),

@@ -61,7 +61,7 @@ export function TableCenter({
   const fromTop = spotlight && spotlight.player !== me;
 
   return (
-    <section className="table-center" aria-label="Centro de la mesa">
+    <section className={`table-center ${children ? "tc-has-panel" : "tc-idle"}`} aria-label="Centro de la mesa">
       <div className="tc-head">
         <motion.span className="tc-turn" key={turn}
           initial={reduce ? false : { scale: 1.25 }} animate={{ scale: 1 }}

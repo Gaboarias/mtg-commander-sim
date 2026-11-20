@@ -494,8 +494,15 @@ def card_info(names):
         if not c:
             continue
         oracle = c.get("oracle_text") or ""
-        if not oracle and c.get("card_faces"):
-            oracle = c["card_faces"][0].get("oracle_text", "")
+        faces = c.get("card_faces") or []
+        if not oracle and faces:
+            # dos caras (aventura, preparada, MDFC…): mostrar TODAS, no solo la primera
+            parts = [faces[0].get("oracle_text", "") or ""]
+            for f in faces[1:]:
+                head = " ".join(x for x in (f.get("name", ""), f.get("mana_cost", "")) if x)
+                tl = f.get("type_line", "")
+                parts.append(f"— {head}{f' · {tl}' if tl else ''} —\n{f.get('oracle_text', '') or ''}")
+            oracle = "\n\n".join(p for p in parts if p.strip())
         out[n] = {"art": _art_url(c), "type": c.get("type_line", ""),
                   "oracle": oracle}
     return out

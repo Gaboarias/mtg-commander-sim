@@ -398,3 +398,32 @@ def test_wipe_death_trigger_choice_names_its_source_and_spirit_colors():
     spirits = [p for p in me.battlefield if p.name == "Spirit"]
     assert len(spirits) == 1
     assert set(getattr(spirits[0].card, "colors", ()) or ()) >= {"R", "W"}
+
+
+def _prep(name, face0, spell):
+    return cardsdb.build_card_from_data({
+        "name": name, "layout": "prepare", "mana_cost": face0[0], "type_line": face0[1],
+        "card_faces": [
+            {"name": name.split(" // ")[0], "mana_cost": face0[0], "type_line": face0[1], "oracle_text": face0[2],
+             "power": "2", "toughness": "2"},
+            {"name": name.split(" // ")[1], "mana_cost": spell[0], "type_line": spell[1], "oracle_text": spell[2]}],
+        "power": "2", "toughness": "2"})
+
+
+def test_prepared_state_exposed_and_only_enters_prepared_when_stated():
+    eater = _prep("Adventurous Eater // Have a Bite",
+                  ("{2}{B}", "Creature — Human Warlock",
+                   "This creature enters prepared. (While it's prepared, you may cast a copy of its spell. Doing so unprepares it.)"),
+                  ("{B}", "Sorcery", "Put a +1/+1 counter on target creature. You gain 1 life."))
+    abig = _prep("Abigale, Poet Laureate // Heroic Stanza",
+                 ("{1}{W}{B}", "Legendary Creature — Bird Bard",
+                  "Flying\nWhenever you cast a creature spell, Abigale becomes prepared. (While it's prepared, you may cast a copy of its spell. Doing so unprepares it.)"),
+                 ("{1}{W/B}", "Sorcery", "Put a +1/+1 counter on target creature."))
+    g, me, _ = _g()
+    pe = put(g, eater, me)
+    pa = put(g, abig, me)
+    run(g)
+    se, sa = g._perm_state(pe), g._perm_state(pa)
+    assert se["prepared"]["name"] == "Have a Bite" and se["prepared"]["ready"] is True
+    assert "+1/+1 counter" in se["prepared"]["text"]
+    assert sa["prepared"]["name"] == "Heroic Stanza" and sa["prepared"]["ready"] is False

@@ -21763,6 +21763,12 @@ def _build_card_from_data_impl(data: dict) -> Card:
             and {"instant", "sorcery"} & set(parse_type_line(
                 _faces[1].get("type_line", ""))[0])):
         spell = _faces[1]
+        # la UI muestra el hechizo preparado (nombre, coste y texto) aunque no se simule
+        card.prepared_spell = {"name": spell.get("name", ""), "cost": spell.get("mana_cost", "") or "",
+                               "type": spell.get("type_line", "") or "",
+                               "text": spell.get("oracle_text", "") or ""}
+        _enters_prep = bool(re.search(r"enters(?: the battlefield)? prepared",
+                                      (_faces[0].get("oracle_text", "") or ""), re.I))
         pcost = parse_cost(mana_cost_to_str(spell.get("mana_cost", "") or "0"))
         peff, pspec, pcount = _fragment_effect(spell.get("oracle_text", "") or "")
         if peff is None:
@@ -21770,11 +21776,12 @@ def _build_card_from_data_impl(data: dict) -> Card:
             peff = (lambda g, c, tg=None, _e=peff2: _e(g, c)) if peff2 else None
             pspec, pcount = None, 1
         if peff is not None:
-            def _prep_etb(g, ctrl, perm, _prev=card.on_etb):
-                perm._prepared = True
-                if _prev:
-                    _prev(g, ctrl, perm)
-            card.on_etb = _prep_etb
+            if _enters_prep:      # "enters prepared"; si no, se prepara por su disparo
+                def _prep_etb(g, ctrl, perm, _prev=card.on_etb):
+                    perm._prepared = True
+                    if _prev:
+                        _prev(g, ctrl, perm)
+                card.on_etb = _prep_etb
 
             _mgl = re.search(r"gain (\w+) life", spell.get("oracle_text", "") or "", re.I)
             _gl = _count_word(_mgl.group(1)) if _mgl else 0

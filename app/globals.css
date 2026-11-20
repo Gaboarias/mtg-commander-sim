@@ -1465,3 +1465,145 @@ h3 svg { color: currentColor; }
 .abil-dock { border-color: rgba(255, 196, 64, .7) !important; color: #ffd36b; }
 .cardmini .cm-act .cm-act-n { font-size: .62rem; }
 .choice-src { color: var(--accent); font-weight: 600; }
+
+/* botones sobre la carta (ⓘ / ⚡) proporcionales al tamaño: en cartas chicas no
+   tapan la carta, así el clic selecciona (p. ej. elegir varios atacantes) */
+.seat .cardmini .cm-info {
+  width: clamp(13px, calc(var(--cw, 84px) * .22), 22px); height: clamp(13px, calc(var(--cw, 84px) * .22), 22px);
+}
+.seat .cardmini .cm-info svg { width: 70%; height: 70%; }
+.seat .cardmini .cm-act {
+  min-width: clamp(13px, calc(var(--cw, 84px) * .24), 22px); height: clamp(13px, calc(var(--cw, 84px) * .24), 22px);
+  padding: 0 2px;
+}
+.seat .cardmini .cm-act svg { width: 75%; height: 75%; }
+.seat .cardmini.sel-able .cm-info, .seat .cardmini.sel-able .cm-act { opacity: .85; }
+/* la barra de mano no se come el tablero al elegir atacantes */
+@media (min-width: 761px) {
+  .table-page > .hand-dock { max-height: 32%; overflow-y: auto; flex-shrink: 0; }
+  .table-layout > .felt:not(.has-panel) .table-center { flex: .75 1 0; min-height: 110px; }
+  .table-layout > .felt:not(.has-panel) .my-row { flex: 1.6 1 0; }
+}
+/* eligiendo atacantes: la mano se pliega para dejarle lugar al tablero */
+.hand-dock.picking .hand { display: none; }
+.hand-dock.picking .dock-title::after { content: " (oculta mientras elegís atacantes)"; font-weight: 400; color: var(--muted); font-size: .8rem; }
+
+/* ===================== MESA v2: el tablero primero, sin relleno ===================== */
+/* rival compacto: una línea de cabecera, tierras resumidas, botón para ampliar */
+.seat.compact .seat-head { flex: 0 1 auto !important; gap: 8px; margin: 0; }
+.seat.compact .seat-meta { flex: 1 1 auto !important; margin: 0 !important; gap: 8px; font-size: .72rem; }
+.seat.compact .cmdr-chip { font-size: .66rem; padding: 1px 7px; }
+.seat.compact .empty { flex: 0 1 auto !important; margin: 0; font-size: .74rem; }
+.seat-expand {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; margin-left: 2px;
+  border-radius: 999px; border: 1px solid rgba(255,255,255,.18); background: rgba(0,0,0,.35); color: var(--felt-text, #fff); cursor: pointer;
+}
+.seat-expand:hover { border-color: var(--accent); color: var(--accent); }
+.land-sum {
+  align-self: flex-end; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; margin-top: 2px;
+  border-radius: 999px; border: 1px solid rgba(255,255,255,.16); background: rgba(0,0,0,.3);
+  color: var(--felt-text, #fff); font-size: .72rem; font-weight: 700; cursor: pointer;
+}
+.land-sum-k { font-weight: 400; color: var(--felt-muted, #ccc); }
+/* tablero rival ampliado */
+.inspect.opp-focus { max-width: min(1200px, 96vw); width: 96vw; max-height: 90vh; padding: 14px 16px; background: var(--felt-2, #22402d); }
+.opp-focus .seat { --cw: 108px; border: 0; background: transparent; padding: 0; }
+.opp-focus .seat-piles { position: static; margin: 6px 0; }
+.opp-focus .cardmini { width: var(--cw) !important; }
+.opp-focus .cardmini .art { height: calc(var(--cw) * .71) !important; }
+.opp-focus .cardmini .cm-name { font-size: .72rem !important; }
+.opp-focus .row-cards { gap: 8px; flex-wrap: wrap; }
+
+@media (min-width: 761px) {
+  .table-page { height: calc(100dvh - 76px); }
+  .table-bar { padding: 2px 2px 6px; gap: 8px; }
+  .table-bar .tb-btn { padding: 4px 10px; font-size: .8rem; }
+  /* relato y acciones: cajón sobre la mesa, no una columna fija */
+  .table-layout, .table-layout.side-open { grid-template-columns: minmax(0, 1fr); position: relative; }
+  .table-layout.side-open > .table-side {
+    position: absolute; top: 0; right: 0; bottom: 0; width: min(360px, 92vw); z-index: 45;
+    background: var(--bg, #14110c); border-left: 1px solid var(--border); border-radius: 14px 0 0 14px;
+    padding: 10px; overflow-y: auto; box-shadow: -18px 0 40px -12px rgba(0,0,0,.85);
+  }
+  .table-layout > .felt { border-width: 4px; border-radius: 16px; padding: 8px; gap: 6px; }
+  .table-layout > .felt .opp-row { flex: 0 0 30% !important; height: 30% !important; }
+  .felt.has-panel .opp-row { flex-basis: 22% !important; height: 22% !important; }
+  .felt .seat { padding: 6px 8px; border-radius: 12px; }
+  /* centro: una franja fina cuando no hay nada que decidir */
+  .table-center.tc-idle {
+    flex: 0 0 auto !important; min-height: 0 !important; flex-direction: row; flex-wrap: nowrap; align-items: center;
+    justify-content: flex-start; gap: 14px; padding: 6px 12px !important; border: 0; border-radius: 12px;
+    background: rgba(0,0,0,.16); overflow: hidden;
+  }
+  .table-center.tc-idle .tc-head { flex-direction: column; align-items: flex-start; gap: 2px; flex: 0 0 auto; }
+  .table-center.tc-idle .tc-stage { flex: 0 1 auto; width: auto; flex-wrap: nowrap; gap: 12px; justify-content: flex-start; }
+  .table-center.tc-idle .tc-spot { gap: 10px; }
+  .table-center.tc-idle .tc-card.big { width: 64px; }
+  .table-center.tc-idle .tc-card.big .tc-art { height: 46px; }
+  .table-center.tc-idle .tc-card.big .tc-name { font-size: .62rem; padding: 2px 4px; }
+  .table-center.tc-idle .tc-card { width: 52px; }
+  .table-center.tc-idle .tc-art { height: 38px; }
+  .table-center.tc-idle .tc-spot-icon { width: 46px; height: 46px; }
+  .table-center.tc-idle .tc-spot-who { font-size: .9rem; }
+  .table-center.tc-idle .tc-spot-line { font-size: .78rem; }
+  .table-center.tc-idle .tc-empty { margin: 0; font-size: .82rem; }
+  .table-center.tc-idle .tc-feed { flex: 1 1 0; min-width: 0; margin: 0; max-height: 52px; overflow: hidden; justify-content: flex-end; max-width: none; }
+  .table-center.tc-idle .tc-ev { font-size: .68rem; padding: 2px 7px; }
+  .table-center.tc-has-panel { flex: 1 1 0 !important; border: 0; border-radius: 12px; background: rgba(0,0,0,.16); padding: 8px 12px !important; }
+  .table-layout > .felt:not(.has-panel) .my-row { flex: 1 1 0 !important; min-height: 0; }
+  .felt.has-panel .my-row { flex: 0 0 26% !important; height: 26%; }
+  .felt.has-panel .opp-row { flex-basis: 20% !important; height: 20% !important; }
+  /* mano: más baja */
+  .table-page > .hand-dock { margin-top: 6px; padding: 5px 10px 6px; max-height: 30%; }
+  .hand-dock .handcard { width: 96px; }
+  .hand-dock .hc-art { height: 58px; }
+  .hand-dock .hand { padding: 4px 2px 2px; margin: 0 0 4px; }
+  .hand-dock .dock-head { margin-bottom: 0; }
+}
+@media (min-width: 761px) {
+  .table-center.tc-idle .tc-art.ph span { font-size: .52rem !important; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  .seat .cardmini .cm-name { font-size: clamp(.5rem, calc(var(--cw, 84px) / 11), .78rem); }
+  .seat .cardmini .cm-pt { font-size: clamp(.6rem, calc(var(--cw, 84px) / 9), .95rem); }
+}
+/* vista ampliada del rival: filas ordenadas (cabecera, datos, pilas, permanentes, tierras) */
+.opp-focus .seat { display: flex !important; flex-direction: column !important; align-items: stretch; gap: 8px; }
+.opp-focus .seat > * { flex: none !important; width: 100%; max-width: none; }
+.opp-focus .seat-head { padding-right: 40px; font-size: 1.1rem; }
+.opp-focus .seat-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: .85rem; }
+.opp-focus .seat-meta .cmdr-chip { width: auto; }
+.opp-focus .seat-piles { display: flex; gap: 10px; width: auto; }
+.opp-focus .row-cards { display: flex; flex-wrap: wrap; justify-content: flex-start; }
+.opp-focus .land-count { align-self: center; }
+.opp-focus .inspect-x { top: 10px; right: 12px; z-index: 3; }
+.seat.compact { align-items: flex-start !important; align-content: flex-start !important; }
+.seat.compact > .seat-meta { flex: 1 1 50% !important; align-self: center; }
+.seat.compact > .seat-head { align-self: center; }
+.seat.compact .seat-meta .zone-chip, .seat.compact .seat-meta .cmdr-chip { align-self: center; height: auto; }
+@media (max-width: 760px) {
+  .felt-overlay .inspect.decide { width: 100% !important; max-width: 100% !important; box-sizing: border-box; padding: 14px 14px; }
+  .felt-overlay .choice-card { grid-template-columns: 1fr !important; gap: 10px; }
+  .felt-overlay .choice-card .inspect-art { aspect-ratio: auto !important; height: 110px !important; }
+  .felt-overlay .target-list .decide-opt { flex: 1 1 100% !important; }
+  .felt-overlay .abil-opt { width: 100%; }
+  .inspect.opp-focus { width: 100vw; max-width: 100vw; padding: 12px; }
+  .opp-focus .seat { --cw: 84px; }
+}
+/* rivales en la mesa: tocar la carta la muestra; sin botones/insignias secundarias encima */
+.seat.compact .cardmini .cm-info, .seat.compact .cardmini .cm-badge.sick { display: none; }
+.seat .cardmini[role="button"] { cursor: pointer; }
+@media (max-width: 760px) {
+  .seat.compact .cardmini .cm-badge.tok { font-size: .5rem; padding: 0 3px; }
+  .table-bar .tb-btn { padding: 4px 9px; font-size: .78rem; }
+}
+/* criaturas "prepared": insignia + hechizo en el detalle */
+.cardmini .cm-badge.prep { position: absolute; left: 1px; bottom: calc(var(--cw, 84px) * .3); z-index: 2; font-size: .55rem; padding: 0 4px; border-radius: 999px; display: inline-flex; align-items: center; gap: 2px; }
+.cardmini .cm-badge.prep.on { background: #6b4bd6; color: #fff; box-shadow: 0 0 8px rgba(140, 110, 255, .7); }
+.cardmini .cm-badge.prep.off { background: rgba(0,0,0,.6); color: #bbb; }
+.prep-box { margin: 10px 0 4px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2); }
+.prep-box.on { border-color: #8a6cf0; box-shadow: 0 0 0 1px rgba(138,108,240,.35); }
+.prep-head { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: .88rem; }
+.prep-state { margin-left: auto; font-size: .72rem; padding: 1px 8px; border-radius: 999px; background: rgba(0,0,0,.3); }
+.prep-box.on .prep-state { background: #6b4bd6; color: #fff; }
+.prep-type { font-size: .76rem; margin-top: 2px; }
+.prep-text { margin: 6px 0 4px; font-size: .88rem; white-space: pre-wrap; }
+.prep-note { font-size: .74rem; margin: 0; }

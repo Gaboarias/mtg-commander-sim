@@ -78,6 +78,7 @@ type Inspect = {
   name: string; cost?: string; types?: string[]; power?: number | null;
   toughness?: number | null; keywords?: string[]; abilities?: string[];
   is_token?: boolean; subtypes?: string[];
+  prepared?: { name: string; cost: string; type: string; text: string; ready: boolean } | null;
 };
 type FaceUpOpt = { uid: number; name: string; cost: string; playable: boolean };
 type NinjaOpt = { i: number; zone: string; name: string; cost: string; attackers: { uid: number; name: string; power: number; toughness: number }[] };
@@ -196,11 +197,9 @@ export default function Play() {
   const [tsel, setTsel] = useState<number[]>([]);  // objetivos elegidos (multi)
   const [bottom, setBottom] = useState<number[]>([]);  // cartas al fondo tras mulligan
   const [abilSheet, setAbilSheet] = useState<number | "all" | null>(null);  // menú de habilidades (uid o todas)
-  const [showSide, setShowSide] = useState(true);   // panel lateral (relato + más acciones)
-  useEffect(() => {
-    // en pantallas angostas la mesa ocupa todo: el relato se abre a pedido
-    if (typeof window !== "undefined" && window.innerWidth < 1100) setShowSide(false);
-  }, []);
+  // panel lateral (relato + más acciones): cajón que se abre a pedido, la mesa ocupa todo
+  const [showSide, setShowSide] = useState(false);
+  const [oppView, setOppView] = useState<number | null>(null);   // tablero rival ampliado
 
   const examplesRef = useRef<Pickable[]>([]);
 
@@ -503,11 +502,11 @@ export default function Play() {
       .catch(() => {});
   }, [state]);
 
-  function inspectCard(x: { name: string; cost?: string; types?: string[]; power?: number | null; toughness?: number | null; keywords?: string[]; abilities?: string[]; is_token?: boolean; subtypes?: string[] }) {
+  function inspectCard(x: { name: string; cost?: string; types?: string[]; power?: number | null; toughness?: number | null; keywords?: string[]; abilities?: string[]; is_token?: boolean; subtypes?: string[]; prepared?: Inspect["prepared"] }) {
     setInspect({
       name: x.name, cost: x.cost, types: x.types, power: x.power,
       toughness: x.toughness, keywords: x.keywords, abilities: x.abilities,
-      is_token: x.is_token, subtypes: x.subtypes,
+      is_token: x.is_token, subtypes: x.subtypes, prepared: x.prepared,
     });
   }
 
@@ -875,6 +874,7 @@ export default function Play() {
                   <FitBox key={p.name} className="opp-fit" dep={`${p.battlefield.length}:${p.battlefield.filter((x) => x.tapped).length}:${p.graveyard.length > 0}:${showSide}:${!!(state.combat || state.react || state.mulligan || choicePanel)}`}>
                   <Seat
                     key={p.name} p={p} active={i === state.active} art={art} reduce={reduce} variant="opp"
+                    compact onExpand={() => setOppView(i)}
                     onInspect={(pm: Perm) => inspectCard(pm)}
                     onZone={(title, names) => setZoneView({ title, names })}
                     departures={state.departures} guessDepartures
@@ -1524,7 +1524,7 @@ export default function Play() {
             const altCasts = (legal?.casts || []).filter((c) => c.zone !== "hand" && c.zone !== "command");
             const hand = state.players[meIdx]?.hand_cards || [];
             return (
-              <div className={`hand-dock ${myTurn ? "my-turn" : ""}`}>
+              <div className={`hand-dock ${myTurn ? "my-turn" : ""} ${myTurn && picked.size > 0 ? "picking" : ""}`}>
                 <div className="dock-head">
                   <span className="dock-title"><Icon name="hand" size={15} /> Tu mano · {hand.length}</span>
                   {myTurn && legal && legal.mana != null && (
@@ -1738,6 +1738,21 @@ export default function Play() {
 
 
 
+      {oppView != null && state?.players[oppView] && (() => {
+        const op = state.players[oppView];
+        return (
+          <div className="inspect-back" onClick={() => setOppView(null)}>
+            <div className="inspect opp-focus" role="dialog" aria-modal="true" aria-label={`Mesa de ${op.name}`}
+              onClick={(e) => e.stopPropagation()}>
+              <button className="inspect-x" aria-label="Cerrar" title="Cerrar" onClick={() => setOppView(null)}><Icon name="x" size={16} /></button>
+              <Seat p={op} active={oppView === state.active} art={art} reduce={reduce} variant="opp"
+                onInspect={(pm: Perm) => inspectCard(pm)}
+                onZone={(title, names) => setZoneView({ title, names })} />
+            </div>
+          </div>
+        );
+      })()}
+
       {zoneView && (
         <div className="inspect-back" onClick={() => setZoneView(null)}>
           <div className="inspect zone-view" onClick={(e) => e.stopPropagation()}>
@@ -1817,6 +1832,22 @@ export default function Play() {
               <ul className="abil">{inspect.abilities.map((a, k) => <li key={k}>{a}</li>)}</ul>
             ) : (
               <p className="muted">{tok ? "Ficha sin habilidades." : "Sin habilidades (carta básica)."}</p>
+            )}
+            {inspect.prepared && (
+              <div className={`prep-box ${inspect.prepared.ready ? "on" : "off"}`}>
+                <div className="prep-head">
+                  <Icon name="book" size={13} /> Hechizo preparado: <b>{inspect.prepared.name}</b>
+                  {inspect.prepared.cost ? <span className="muted"> {inspect.prepared.cost}</span> : null}
+                  <span className="prep-state">{inspect.prepared.ready ? "lista para lanzar" : "sin preparar"}</span>
+                </div>
+                {inspect.prepared.type ? <div className="muted prep-type">{inspect.prepared.type}</div> : null}
+                <p className="prep-text">{inspect.prepared.text}</p>
+                <p className="muted prep-note">
+                  {inspect.prepared.ready
+                    ? "Mientras esté preparada podés lanzar una copia de este hechizo (paga su coste). Hacerlo la desprepara."
+                    : "Ya la usaste o todavía no se preparó: vuelve a estar lista cuando se cumpla lo que dice la carta."}
+                </p>
+              </div>
             )}
             {!tok && !info[inspect.name] && (
               <p className="muted" style={{ fontSize: ".75rem" }}>

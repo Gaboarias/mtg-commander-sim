@@ -14,6 +14,8 @@ export type Perm = {
   attached_to?: number | null; attached_name?: string | null;   // equipo/aura anexado a…
   // station (naves): carga actual, umbrales y en cuál pasa a ser criatura
   station?: { charge: number; tiers: number[]; creature_at: number | null; next: number | null } | null;
+  // prepared: hechizo que la criatura puede copiar; ready = está preparada ahora
+  prepared?: { name: string; cost: string; type: string; text: string; ready: boolean } | null;
 };
 // salida del campo registrada por el motor (destruida, exiliada, devuelta…)
 export type Departure = {
@@ -75,7 +77,8 @@ export function CardMini({
   // doble golpe: resaltar la carta de forma especial (temporal o permanente da igual)
   const doubleStrike = (perm.keywords || []).includes("double_strike");
   const act = !!(actionCount && onAction);
-  const handler = onClick || (act ? onAction : undefined);
+  // clic: seleccionar (si aplica) > menú de habilidades > ver la carta
+  const handler = onClick || (act ? onAction : undefined) || (leaving ? undefined : onInspect);
   return (
     <motion.div
       layout={!reduce}
@@ -92,7 +95,7 @@ export function CardMini({
       role={handler ? "button" : undefined}
       tabIndex={handler ? 0 : undefined}
       aria-pressed={onClick ? !!selected : undefined}
-      aria-label={onClick ? `${perm.name}${selected ? " (elegida)" : ""}` : act ? `${perm.name}: activar habilidad` : undefined}
+      aria-label={onClick ? `${perm.name}${selected ? " (elegida)" : ""}` : act ? `${perm.name}: activar habilidad` : handler ? `Ver ${perm.name}` : undefined}
       onKeyDown={handler ? (e) => {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); }
       } : undefined}
@@ -131,6 +134,12 @@ export function CardMini({
           onClick={(e) => { e.stopPropagation(); onAction!(); }}>
           <Icon name="bolt" size={12} />{actionCount! > 1 ? <span className="cm-act-n">{actionCount}</span> : null}
         </button>
+      )}
+      {perm.prepared && !leaving && (
+        <span className={`cm-badge prep ${perm.prepared.ready ? "on" : "off"}`}
+          title={`${perm.prepared.ready ? "Preparada" : "Sin preparar"}: ${perm.prepared.name} ${perm.prepared.cost} — ${perm.prepared.text}`}>
+          <Icon name="book" size={9} /> {perm.prepared.ready ? "lista" : "—"}
+        </span>
       )}
       {perm.is_token && <span className="cm-badge tok" title="ficha">ficha</span>}
       {perm.is_creature && perm.sick && (
@@ -260,7 +269,7 @@ function useGhosts(p: PlayerState, departures: Departure[] | undefined, guess: b
 
 export function Seat({
   p, active, art, reduce, selectableUids, selectedUids, onCard, onInspect, onZone, variant = "grid",
-  departures, guessDepartures = false, targetedUids, actionUids, onAction,
+  departures, guessDepartures = false, targetedUids, actionUids, onAction, compact = false, onExpand,
 }: {
   p: PlayerState; active: boolean; art: Record<string, string>; reduce: boolean;
   selectableUids?: Set<number>; selectedUids?: Set<number>; onCard?: (uid: number) => void;
@@ -269,6 +278,8 @@ export function Seat({
   departures?: Departure[]; guessDepartures?: boolean; targetedUids?: Set<number>;
   actionUids?: Map<number, number>;          // uid → cantidad de habilidades activables ahora
   onAction?: (uid: number) => void;
+  compact?: boolean;                        // rival en la mesa: tierras resumidas, sin pilas grandes
+  onExpand?: () => void;                    // abrir la vista ampliada de este tablero
 }) {
   const actProps = (x: Perm) => (actionUids?.get(x.uid) && onAction && !ghostBy.has(x.uid)
     ? { actionCount: actionUids.get(x.uid), onAction: () => onAction(x.uid) } : {});
@@ -279,7 +290,7 @@ export function Seat({
   const nonlands = field.filter((x) => !x.is_land);
   const maxCmdr = Math.max(0, ...Object.values(p.cmdr_damage || {}));
   return (
-    <motion.div layout={!reduce} className={`seat seat-${variant} ${active ? "active" : ""} ${p.lost ? "dead" : ""}`}>
+    <motion.div layout={!reduce} className={`seat seat-${variant} ${compact ? "compact" : ""} ${active ? "active" : ""} ${p.lost ? "dead" : ""}`}>
       <div className="seat-head">
         <span className="seat-name">
           {p.lost ? <Icon name="skull" size={13} /> : active ? <Icon name="play" size={11} /> : null}
@@ -295,6 +306,12 @@ export function Seat({
         >
           <Icon name="heart-fill" size={13} /> {p.life}
         </motion.span>
+        {onExpand && (
+          <button type="button" className="seat-expand" onClick={onExpand} title={`Ver la mesa de ${p.name} en grande`}
+            aria-label={`Ver la mesa de ${p.name} en grande`}>
+            <Icon name="search" size={13} />
+          </button>
+        )}
       </div>
       <div className="seat-meta">
         {onZone && p.revealed ? (
@@ -338,7 +355,7 @@ export function Seat({
           </span>
         )) : <span title="comandante"><Icon name="crown" size={13} /> {p.commander.join(", ") || "—"}</span>)}
       </div>
-      {variant === "opp" && (
+      {variant === "opp" && !compact && (
         <div className="seat-piles">
           <ZonePile kind="graveyard" names={p.graveyard} art={art} compact
             onOpen={onZone ? () => onZone(`Cementerio de ${p.name}`, p.graveyard) : undefined} />
@@ -458,7 +475,19 @@ export function Seat({
           </motion.div>
         );
       })()}
-      {lands.length > 0 && (variant === "opp" || variant === "me") && (() => {
+      {lands.length > 0 && compact && (() => {
+        const untapped = lands.filter((x) => !x.tapped).length;
+        const named = new Map<string, number>();
+        for (const l of lands) named.set(l.name, (named.get(l.name) || 0) + 1);
+        const tip = [...named.entries()].map(([n, k]) => `${k}× ${n}`).join(", ");
+        return (
+          <button type="button" className="land-sum" title={`Tierras: ${tip}`} onClick={onExpand}>
+            <Icon name="land" size={12} /> {untapped}/{lands.length}
+            <span className="land-sum-k">tierras</span>
+          </button>
+        );
+      })()}
+      {lands.length > 0 && !compact && (variant === "opp" || variant === "me") && (() => {
         // mesa: tierras iguales apiladas (mismo nombre y mismo estado girada/enderezada)
         const groups = new Map<string, Perm[]>();
         for (const pm of lands) {
@@ -587,6 +616,13 @@ export function FitBox({ children, dep, className = "" }: { children: React.Reac
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  // las cartas entran animadas (escala/desplazamiento) y eso infla la medición:
+  // volver a medir cuando las animaciones terminaron
+  useEffect(() => {
+    const t1 = setTimeout(() => setTick((t) => t + 1), 450);
+    const t2 = setTimeout(() => setTick((t) => t + 1), 1100);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [dep]);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -594,7 +630,7 @@ export function FitBox({ children, dep, className = "" }: { children: React.Reac
       el.style.removeProperty("--cw");
       return;
     }
-    const sizes = [104, 96, 88, 80, 72, 66, 60, 54, 48, 42, 36];
+    const sizes = [150, 136, 124, 112, 104, 96, 88, 80, 72, 66, 60, 54, 48, 42, 36];
     let pick = sizes[sizes.length - 1];
     for (const w of sizes) {
       el.style.setProperty("--cw", `${w}px`);
