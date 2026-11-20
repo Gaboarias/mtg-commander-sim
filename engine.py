@@ -1503,6 +1503,30 @@ class Game:
                         if getattr(pm.card, "station_max", 0) else None),
         }
 
+    def _cmdr_state(self, p: "Player", i: int, c) -> dict:
+        """Dónde está cada comandante (zona de mando, en juego, cementerio, exilio, mano, pila…) y su impuesto."""
+        def _is(x):
+            return x is c or getattr(x, "_real", None) is c
+        zone = "unknown"
+        if any(_is(x) for x in p.command):
+            zone = "command"
+        elif any(_is(pm.card) for pl in self.players for pm in pl.battlefield):
+            zone = "battlefield"
+        elif any(_is(getattr(o, "source", None)) for o in self.stack):
+            zone = "stack"
+        elif any(_is(x) for x in p.graveyard):
+            zone = "graveyard"
+        elif any(_is(x) for x in p.exile):
+            zone = "exile"
+        elif any(_is(x) for x in p.hand):
+            zone = "hand"
+        elif any(_is(x) for x in p.library):
+            zone = "library"
+        tax = p.cmdr_taxes[i] if i < len(p.cmdr_taxes) else 0
+        return {"name": c.name, "zone": zone, "cost": _cost_txt(c.cost) if c.cost is not None else "",
+                "tax": tax, "power": c.power if c.is_creature() else None,
+                "toughness": c.toughness if c.is_creature() else None}
+
     def _player_state(self, p: "Player") -> dict:
         return {
             "name": p.name,
@@ -1518,6 +1542,7 @@ class Game:
             "energy": getattr(p, "energy", 0),            # contadores de energía
             "graveyard": [c.name for c in p.graveyard],
             "exile": [c.name for c in p.exile],
+            "commanders": [self._cmdr_state(p, i, c) for i, c in enumerate(p.commanders)],
             "battlefield": [self._perm_state(pm) for pm in p.battlefield],
             **({"revealed": [c.name for c in p.hand]} if self._hand_revealed(p) else {}),
         }

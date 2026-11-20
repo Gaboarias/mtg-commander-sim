@@ -129,7 +129,7 @@ export function TableCenter({
         </div>
       )}
 
-      {recent.length > 1 && (
+      {recent.length > 1 && !children && (
         <ol className="tc-feed" aria-label="Jugadas recientes">
           {recent.slice(1).map((e) => (
             <li key={e.seq} className={`tc-ev k-${e.kind} ${e.player === me ? "mine" : ""}`}>

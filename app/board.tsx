@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Icon } from "./icons";
 
@@ -26,8 +26,14 @@ export const LEAVE_LABEL: Record<string, string> = {
 };
 const LEAVE_MS = 1700;
 
+export type CmdrState = { name: string; zone: string; cost: string; tax: number; power?: number | null; toughness?: number | null };
+export const CMDR_ZONE: Record<string, string> = {
+  command: "en la zona de mando", battlefield: "en juego", stack: "en la pila", graveyard: "en el cementerio",
+  exile: "en el exilio", hand: "en la mano", library: "en la biblioteca", unknown: "fuera de la zona",
+};
 export type PlayerState = {
   name: string; life: number; lost: boolean; hand: number; library: number;
+  commanders?: CmdrState[];
   commander: string[]; cmdr_tax: number; cmdr_damage?: Record<string, number>;
   poison?: number; experience?: number; energy?: number;
   graveyard: string[]; exile?: string[]; battlefield: Perm[]; revealed?: string[];
@@ -311,8 +317,20 @@ export function Seat({
             <span title="exilio"><Icon name="x" size={13} /> {p.exile!.length}</span>
           )
         )}
-        <span title="comandante"><Icon name="crown" size={13} /> {p.commander.join(", ") || "—"}</span>
+        {variant !== "me" && (p.commanders && p.commanders.length ? p.commanders.map((c) => (
+          <span key={c.name} className={`cmdr-chip z-${c.zone}`} title={`${c.name}: ${CMDR_ZONE[c.zone] || c.zone}${c.tax ? ` · impuesto +${c.tax}` : ""}`}>
+            <Icon name="crown" size={12} /> {c.name.split(",")[0]} · {c.zone === "battlefield" ? "en juego" : c.zone === "command" ? "en mando" : CMDR_ZONE[c.zone] || c.zone}
+          </span>
+        )) : <span title="comandante"><Icon name="crown" size={13} /> {p.commander.join(", ") || "—"}</span>)}
       </div>
+      {variant === "opp" && (
+        <div className="seat-piles">
+          <ZonePile kind="graveyard" names={p.graveyard} art={art} compact
+            onOpen={onZone ? () => onZone(`Cementerio de ${p.name}`, p.graveyard) : undefined} />
+          <ZonePile kind="exile" names={p.exile || []} art={art} compact
+            onOpen={onZone ? () => onZone(`Exilio de ${p.name}`, p.exile || []) : undefined} />
+        </div>
+      )}
       {/* chips de ESTADO destacados: peligros (veneno, daño de comandante) y recursos
           (experiencia, energía). Solo aparecen cuando hay algo que mostrar. */}
       {(maxCmdr > 0 || (p.poison || 0) > 0 || (p.experience || 0) > 0 || (p.energy || 0) > 0) && (
@@ -464,4 +482,109 @@ export function Seat({
       {p.battlefield.length === 0 && <p className="muted empty">sin permanentes</p>}
     </motion.div>
   );
+}
+
+
+/* Pila visual de cementerio / exilio: cartas apiladas con la de arriba visible y la cantidad.
+   Clic: ver todas las cartas de esa zona. */
+export function ZonePile({
+  kind, names, art, onOpen, compact = false,
+}: {
+  kind: "graveyard" | "exile"; names: string[]; art: Record<string, string>;
+  onOpen?: () => void; compact?: boolean;
+}) {
+  const n = names.length;
+  const top = n ? names[n - 1] : null;
+  const label = kind === "graveyard" ? "Cementerio" : "Exilio";
+  const layers = Math.min(4, n);
+  return (
+    <button type="button" className={`zone-pile zp-${kind} ${compact ? "compact" : ""} ${n ? "" : "empty"}`}
+      onClick={n && onOpen ? onOpen : undefined} disabled={!n}
+      title={n ? `${label}: ${n} carta${n === 1 ? "" : "s"} — arriba: ${top}. Clic para ver todas.` : `${label} vacío`}
+      aria-label={`${label}: ${n} carta${n === 1 ? "" : "s"}`}>
+      <span className="zp-stack">
+        {Array.from({ length: layers }).map((_, k) => (
+          <span key={k} className="zp-layer" style={{ transform: `translate(${(layers - 1 - k) * 2}px, ${(layers - 1 - k) * -2}px)` }} />
+        ))}
+        {top ? (
+          <span className="zp-top" style={art[top] ? { backgroundImage: `url(${art[top]})` } : undefined}>
+            {!art[top] && <span>{top}</span>}
+          </span>
+        ) : <span className="zp-top empty"><Icon name={kind === "graveyard" ? "grave" : "x"} size={16} /></span>}
+        <span className="zp-count">{n}</span>
+      </span>
+      <span className="zp-label"><Icon name={kind === "graveyard" ? "grave" : "x"} size={11} /> {label}</span>
+    </button>
+  );
+}
+
+/* Zona de mando: tus comandantes con su estado. Si está en la zona de mando y lo podés pagar, se lanza desde acá;
+   si ya entró al juego (o está en otra zona) se muestra deshabilitado con dónde está. */
+export function CommandZone({
+  cmdrs, art, castable, onCast, onInspect,
+}: {
+  cmdrs: CmdrState[]; art: Record<string, string>;
+  castable: Record<string, { ok: boolean; reason?: string | null; cost?: string; onClick?: () => void }>;
+  onCast?: (name: string) => void; onInspect?: (name: string) => void;
+}) {
+  return (
+    <div className="cmd-zone" aria-label="Zona de mando">
+      <span className="cz-label"><Icon name="crown" size={11} /> Comandante</span>
+      {cmdrs.map((c) => {
+        const inCz = c.zone === "command";
+        const cast = castable[c.name];
+        const can = inCz && !!cast?.ok;
+        return (
+          <div key={c.name} className={`cz-card ${inCz ? "in" : "out"} z-${c.zone} ${can ? "can" : ""}`}>
+            <button type="button" className="cz-face" onClick={() => onInspect?.(c.name)} title={`Ver ${c.name}`}
+              style={art[c.name] ? { backgroundImage: `url(${art[c.name]})` } : undefined}>
+              {!art[c.name] && <span>{c.name}</span>}
+              {c.tax > 0 && <span className="cz-tax" title="impuesto de comandante">+{c.tax}</span>}
+            </button>
+            {!inCz && <span className="cz-state">{CMDR_ZONE[c.zone] || c.zone}</span>}
+            {inCz ? (
+              <button type="button" className={`go tiny cz-cast`} disabled={!can}
+                onClick={() => onCast?.(c.name)}
+                title={can ? "Lanzar desde la zona de mando" : (cast?.reason || "No disponible ahora")}>
+                <Icon name="crown" size={11} /> Lanzar {cast?.cost || c.cost}{c.tax ? ` +${c.tax}` : ""}
+              </button>
+            ) : (
+              <span className="cz-off"><Icon name="lock" size={10} /> {c.zone === "battlefield" ? "ya en juego" : "no disponible"}</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
+/* Ajusta el tamaño de las cartas (variable --cw) para que TODO el contenido entre en el alto disponible
+   sin scroll: prueba de mayor a menor y se queda con el primero que entra. */
+export function FitBox({ children, dep, className = "" }: { children: React.ReactNode; dep: string; className?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setTick((t) => t + 1));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (typeof window !== "undefined" && window.innerWidth <= 760) {
+      el.style.removeProperty("--cw");
+      return;
+    }
+    const sizes = [104, 96, 88, 80, 72, 66, 60, 54, 48, 42, 36];
+    let pick = sizes[sizes.length - 1];
+    for (const w of sizes) {
+      el.style.setProperty("--cw", `${w}px`);
+      if (el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1) { pick = w; break; }
+    }
+    el.style.setProperty("--cw", `${pick}px`);
+  }, [dep, tick]);
+  return <div ref={ref} className={`fit-box ${className}`}>{children}</div>;
 }

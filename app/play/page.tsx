@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { Seat, LEAVE_LABEL, type PlayerState, type Perm, type Departure } from "../board";
+import { Seat, LEAVE_LABEL, ZonePile, CommandZone, FitBox, type PlayerState, type Perm, type Departure } from "../board";
 import { listDecks, bumpGamesPlayed, type SavedDeck } from "../localDecks";
 import { download, fileStamp } from "../download";
 import { Icon } from "../icons";
@@ -475,7 +475,13 @@ export default function Play() {
       p.graveyard.forEach((n) => names.add(n));
       p.battlefield.forEach((pm) => names.add(pm.name));
       (p.hand_cards || []).forEach((c) => names.add(c.name));
+      (p.exile || []).forEach((n) => names.add(n));
     }
+    // la carta de una decisión (scry, revelar…) y sus opciones, la pila y las jugadas recientes
+    if (state.choice?.card) names.add(state.choice.card);
+    (state.choice?.options || []).forEach((o) => { if (o.name && o.name.length < 60) names.add(o.name); });
+    (state.stack || []).forEach((x) => names.add(x.name));
+    (state.events || []).slice(-10).forEach((e) => { if (e.card) names.add(e.card); });
     const need = [...names].filter((n) => n && !infoReq.current.has(n));
     if (need.length === 0) return;
     need.forEach((n) => infoReq.current.add(n));
@@ -664,6 +670,7 @@ export default function Play() {
                       : <div className="inspect-art ph"><span>{ch.card}</span></div>}
                     <div className="choice-card-info">
                       <b style={{ fontSize: "1.02rem" }}>{ch.card}</b>
+                      {info[ch.card]?.type ? <span className="choice-type">{info[ch.card]?.type}</span> : null}
                       {d && (
                         <>
                           <div className="choice-card-line">
@@ -680,6 +687,7 @@ export default function Play() {
                           )}
                         </>
                       )}
+                      {info[ch.card]?.oracle ? <p className="choice-oracle">{info[ch.card]?.oracle}</p> : null}
                     </div>
                   </div>
                 );
@@ -849,9 +857,10 @@ export default function Play() {
 
 
           <div className={`table-layout ${showSide ? "side-open" : ""}`}>
-            <div className={`felt ${(state.combat || state.react || state.mulligan || choicePanel) ? "has-panel" : ""}`}>
+            <div className={`felt ${(state.combat || state.react || state.mulligan) ? "has-panel" : ""} ${choicePanel ? "has-choice" : ""}`}>
               <div className="opp-row" data-n={state.players.length - 1}>
                 {state.players.map((p, i) => i === meIdx ? null : (
+                  <FitBox key={p.name} className="opp-fit" dep={`${p.battlefield.length}:${p.battlefield.filter((x) => x.tapped).length}:${p.graveyard.length > 0}:${showSide}:${!!(state.combat || state.react || state.mulligan || choicePanel)}`}>
                   <Seat
                     key={p.name} p={p} active={i === state.active} art={art} reduce={reduce} variant="opp"
                     onInspect={(pm: Perm) => inspectCard(pm)}
@@ -859,6 +868,7 @@ export default function Play() {
                     departures={state.departures} guessDepartures
                     targetedUids={state.react?.targets?.length ? new Set(state.react.targets) : undefined}
                   />
+                  </FitBox>
                 ))}
               </div>
               <TableCenter
@@ -877,8 +887,7 @@ export default function Play() {
                 <Icon name="trophy" size={18} /> {state.winner === "EMPATE" ? "Empate (límite de turnos)." : <>Gana <b>{state.winner}</b>.</>}</motion.p>
             )}
                 </>) : null}>
-                {(state.combat || state.react || state.mulligan || choicePanel) ? (<>
-                  {choicePanel}
+                {(state.combat || state.react || state.mulligan) ? (<>
           {state.combat && state.combat.stage !== "damage" && (
             <motion.div className="card defense"
               initial={reduce ? false : { opacity: 0, y: -10 }}
@@ -1201,6 +1210,31 @@ export default function Play() {
                 </>) : null}
               </TableCenter>
               <div className="my-row">
+                <div className="my-zones">
+                  {(() => {
+                    const meP = state.players[meIdx];
+                    const cc = (legal?.casts || []).filter((c) => c.zone === "command");
+                    const castable: Record<string, { ok: boolean; reason?: string | null; cost?: string }> = {};
+                    for (const c of meP.commanders || []) {
+                      const opt = cc.find((x) => x.name === c.name);
+                      castable[c.name] = !myTurn ? { ok: false, reason: "Solo en tu turno (fase principal)" }
+                        : !opt ? { ok: false, reason: "No se puede lanzar ahora" }
+                          : { ok: opt.castable !== false, reason: opt.reason, cost: opt.cost };
+                    }
+                    return (
+                      <CommandZone cmdrs={meP.commanders || []} art={art} castable={castable}
+                        onInspect={(name) => inspectCard({ name })}
+                        onCast={(name) => { const opt = cc.find((x) => x.name === name); if (opt) castCard(opt); }} />
+                    );
+                  })()}
+                  <div className="my-piles">
+                    <ZonePile kind="graveyard" names={state.players[meIdx].graveyard} art={art}
+                      onOpen={() => setZoneView({ title: "Tu cementerio", names: state.players[meIdx].graveyard })} />
+                    <ZonePile kind="exile" names={state.players[meIdx].exile || []} art={art}
+                      onOpen={() => setZoneView({ title: "Tu exilio", names: state.players[meIdx].exile || [] })} />
+                  </div>
+                </div>
+                <FitBox className="my-fit" dep={`${state.players[meIdx].battlefield.length}:${state.players[meIdx].battlefield.filter((x) => x.tapped).length}:${state.players[meIdx].battlefield.filter((x) => x.attached_to != null).length}:${showSide}:${!!(state.combat || state.react || state.mulligan || choicePanel)}`}>
                 <Seat
                   p={state.players[meIdx]} active={state.active === meIdx} art={art} reduce={reduce} variant="me"
                   selectableUids={myTurn && !state.attacked ? attackableUids : undefined}
@@ -1211,7 +1245,11 @@ export default function Play() {
                   departures={state.departures} guessDepartures
                   targetedUids={state.react?.targets?.length ? new Set(state.react.targets) : undefined}
                 />
+                </FitBox>
               </div>
+              {choicePanel && (
+                <div className="felt-overlay">{choicePanel}</div>
+              )}
             </div>
 
             <aside className="table-side">
@@ -1257,16 +1295,7 @@ export default function Play() {
                   </div>
                 )}
 
-                {commandCasts.length > 0 && (
-                  <div className="act-block">
-                    <span className="act-label">Zona de mando:</span>
-                    {commandCasts.map((c, k) => (
-                      <button key={k} className="ghost" onClick={() => castCard(c)} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                        <Icon name="crown" size={13} /> Lanzar {c.name}{c.target_spec ? <Icon name="target" size={12} /> : null} <span className="muted">{c.cost}{c.tax ? ` +${c.tax}` : ""}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
+
 
                 {legal && legal.activatables.length > 0 && (
                   <div className="act-block">
