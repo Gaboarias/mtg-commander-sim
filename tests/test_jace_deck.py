@@ -502,3 +502,45 @@ def test_prepared_striking_palette_copies_next_instant_or_sorcery():
     g.activate_ability(pm, i)
     run(g)
     assert getattr(me, "_copy_next", None) == (g.turn, "instant or sorcery")
+
+
+def test_primary_research_reanimates_and_draws_when_card_left_graveyard():
+    """Primary Research: su ETB saca una carta del cementerio y eso cuenta para
+    'if a card left your graveyard this turn' (antes el reanimar no lo registraba)."""
+    pr = cardsdb.build_card_from_data({
+        "name": "Primary Research", "mana_cost": "{4}{W}", "type_line": "Enchantment",
+        "oracle_text": "When this enchantment enters, return target nonland permanent card with mana value 3 or less "
+                       "from your graveyard to the battlefield.\nAt the beginning of your end step, if a card left "
+                       "your graveyard this turn, draw a card."})
+    g, me, _ = _g()
+    me.library = [creature(f"L{i}", "1", 1, 1) for i in range(5)]
+    bear = creature("Bear", "1G", 2, 2)
+    me.graveyard.append(bear)
+    put(g, pr, me)
+    run(g)
+    assert any(p.name == "Bear" for p in me.battlefield) and bear not in me.graveyard
+    assert getattr(me, "gy_left_turn", None) == g.turn
+    h0 = len(me.hand)
+    g.emit("end_step", player=me)
+    run(g)
+    assert len(me.hand) == h0 + 1
+
+
+def test_any_graveyard_removal_counts_as_leaving():
+    """Cualquier salida del cementerio (aunque el efecto no lo avise) dispara
+    'whenever one or more cards leave your graveyard' una vez por tanda."""
+    g, me, _ = _g()
+    a, b = creature("A", "1", 1, 1), creature("B", "1", 1, 1)
+    me.graveyard.extend([a, b])
+    me.graveyard.remove(a)
+    me.graveyard.remove(b)
+    seen = []
+    orig = g.emit
+
+    def spy(ev, **kw):
+        if ev == "leaves_graveyard":
+            seen.append(kw.get("cards"))
+        return orig(ev, **kw)
+    g.emit = spy
+    g.sba()
+    assert len(seen) == 1 and len(seen[0]) == 2 and me.gy_left_turn == g.turn

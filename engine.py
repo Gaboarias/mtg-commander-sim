@@ -682,9 +682,34 @@ class _GYList(list):
         for c in list(cs):
             self.append(c)
 
+    # toda salida del cementerio queda registrada: el motor emite después UN
+    # "leaves_graveyard" por jugador ("whenever one or more cards leave your
+    # graveyard", "if a card left your graveyard this turn") aunque el efecto que
+    # la sacó no lo haya avisado
+    def _left(self, cs):
+        o = self.owner
+        if o is not None and cs:
+            o.__dict__.setdefault("_gy_left_pending", []).extend(c for c in cs if hasattr(c, "types"))
+
     def remove(self, c):
         if c in self:
             super().remove(c)
+            self._left([c])
+
+    def pop(self, i=-1):
+        c = super().pop(i)
+        self._left([c])
+        return c
+
+    def __delitem__(self, i):
+        gone = self[i] if isinstance(i, slice) else [self[i]]
+        super().__delitem__(i)
+        self._left(gone)
+
+    def clear(self):
+        gone = list(self)
+        super().clear()
+        self._left(gone)
 
     def __reduce_ex__(self, proto):
         return (_GYList, (self.owner, list(self)))
@@ -697,7 +722,13 @@ class Player:
 
     @graveyard.setter
     def graveyard(self, v):
+        old = self.__dict__.get("_gy")
         self.__dict__["_gy"] = v if isinstance(v, _GYList) and v.owner is self else _GYList(self, v or ())
+        if old:
+            keep = {id(x) for x in self.__dict__["_gy"]}
+            gone = [x for x in old if id(x) not in keep and hasattr(x, "types")]
+            if gone:
+                self.__dict__.setdefault("_gy_left_pending", []).extend(gone)
 
     @property
     def life(self):
@@ -1947,6 +1978,7 @@ class Game:
         # registro genérico para condiciones "if a card left your graveyard this turn"
         if event == "leaves_graveyard" and who is not None:
             who.gy_left_turn = self.turn
+            who.__dict__["_gy_left_pending"] = []     # este aviso cubre las salidas pendientes
         for pl in self.players:
             if pl.lost:
                 continue
@@ -3511,7 +3543,18 @@ class Game:
         self.log(f"{cmd.name} vuelve a la zona de mando")
         return True
 
+    def _flush_gy_left(self):
+        """Emite 'leaves_graveyard' por cada jugador con salidas del cementerio que
+        ningún efecto avisó (una vez por tanda: 'one or more cards')."""
+        for pl in self.players:
+            pend = pl.__dict__.get("_gy_left_pending")
+            if pend and not pl.lost:
+                cs = list(pend)
+                pl.__dict__["_gy_left_pending"] = []
+                self.emit("leaves_graveyard", player=pl, card=cs[0], cards=cs)
+
     def sba(self):
+        self._flush_gy_left()
         # "when this artifact has twenty or more charge counters on it, you win the game" (Darksteel Reactor)
         for _pl in self.players:
             if _pl.lost:
