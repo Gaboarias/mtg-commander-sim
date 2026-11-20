@@ -90,7 +90,8 @@ def _cost_str(card):
 def _cost_str_cost(c):
     if c is None:
         return ""
-    return (str(c.generic) if c.generic else "") + "".join(c.pips)
+    # híbridos / phyrexianos entre llaves para que se lean: "1{R/G}", "{W/P}"
+    return (str(c.generic) if c.generic else "") + "".join(f"{{{x}}}" if "/" in str(x) else x for x in c.pips)
 
 
 class InteractiveGame:

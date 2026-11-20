@@ -147,7 +147,7 @@ def _card_row(name, qty, card):
     cost = ""
     if card.cost is not None:
         cost = (str(card.cost.generic) if card.cost.generic else "") + \
-               "".join(card.cost.pips)
+               "".join(f"{{{x}}}" if "/" in str(x) else x for x in card.cost.pips)
     types = " ".join(sorted(card.types))
     pt = f"{card.power}/{card.toughness}" if "creature" in card.types else ""
     colors = sorted(card.identity())

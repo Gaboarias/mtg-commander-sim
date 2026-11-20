@@ -85,7 +85,7 @@ def _obj_colors(card) -> set:
     if cols:
         return set(cols)
     if getattr(card, "cost", None) is not None and card.cost.pips:
-        return {p for p in card.cost.pips if p in COLORS}
+        return {c for p in card.cost.pips for c in pip_colors(p)}
     return {c for c in (getattr(card, "color_id", None) or ()) if c in COLORS} if getattr(card, "cost", None) is None else set()
 
 
@@ -166,10 +166,21 @@ class Cost:
 
     @property
     def cmc(self) -> int:
-        return self.generic + len(self.pips)
+        # híbrido {2/W} vale 2 de valor de maná; {R/G} y {W/P} valen 1
+        return self.generic + sum(2 if str(p).startswith("2/") else 1 for p in self.pips)
 
     def color_identity(self) -> set:
-        return {p for p in self.pips if p in COLORS}
+        return {c for p in self.pips for c in pip_colors(p)}
+
+
+def pip_colors(pip) -> tuple:
+    """Colores de un símbolo de maná: 'R' -> (R,), 'R/G' -> (R, G), '2/W' -> (W,),
+    'W/P' -> (W,). 'C' (incoloro) no es un color."""
+    return tuple(c for c in str(pip).split("/") if c in COLORS)
+
+
+def is_hybrid(pip) -> bool:
+    return "/" in str(pip)
 
 
 def _cmc_card(card) -> int:
@@ -194,6 +205,13 @@ def parse_cost(s: str) -> Cost:
     """
     generic_digits = ""
     pips = []
+    # símbolos híbridos / phyrexianos entre paréntesis: "(R/G)", "(2/W)", "(W/P)"
+    for hy in re.findall(r"\(([^)]+)\)", s):
+        parts = hy.upper().split("/")
+        if len(parts) < 2 or not all(x in (W, U, B, R, G, C, "P", "2") for x in parts):
+            raise ValueError(f"simbolo híbrido no soportado: {hy!r} en {s!r}")
+        pips.append("/".join(parts))
+    s = re.sub(r"\([^)]+\)", "", s)
     for ch in s:
         if ch.isdigit():
             generic_digits += ch
@@ -941,15 +959,65 @@ class Player:
         alcanza); si falla, una búsqueda con vuelta atrás sobre los colores: el
         voraz daba falsos negativos (Plateau W/R + Tundra W/U no pagaban {W}{R}).
         """
+        return self._assign_full(cost, exclude)[0]
+
+    def _assign_full(self, cost: Cost, exclude=None):
+        """Como _assign, pero entiende los símbolos alternativos y devuelve (plan, vida):
+        {2/W} se paga con W o con 2 genéricos; {W/P} con W o con 2 de vida. Se prueba
+        primero pagar con color (sin vida ni genérico extra)."""
         sources = []
         for p in self.mana_sources(exclude):
             opts = self.produced(p)
             if opts:
                 sources.append((p, dict(opts)))
+        alts = [i for i, pp in enumerate(cost.pips) if str(pp).startswith("2/") or str(pp).endswith("/P")]
+        if not alts:
+            return self._assign_plain(cost, sources), 0
+        import itertools as _it
+        combos = list(_it.product((False, True), repeat=len(alts))) if len(alts) <= 6 else \
+            [tuple([False] * len(alts)), tuple([True] * len(alts))]
+
+        def _price(combo):
+            life = sum(2 for k, use in zip(alts, combo) if use and str(cost.pips[k]).endswith("/P"))
+            gen = sum(2 for k, use in zip(alts, combo) if use and str(cost.pips[k]).startswith("2/"))
+            return life, gen
+        combos.sort(key=_price)
+        for combo in combos:
+            life, gen = _price(combo)
+            if life and self.life <= life:
+                continue                       # no se paga vida hasta morir
+            alt_on = {k for k, use in zip(alts, combo) if use}
+            pips = []
+            for k, pp in enumerate(cost.pips):
+                if k in alt_on:
+                    continue
+                if k in alts:                  # pagado con su color: queda como pip (híbrido si hay 2)
+                    cols = pip_colors(pp)
+                    pips.append(cols[0] if len(cols) == 1 else "/".join(cols))
+                else:
+                    pips.append(pp)
+            plan = self._assign_plain(Cost(cost.generic + gen, tuple(pips)), sources)
+            if plan is not None:
+                return plan, life
+        return None, 0
+
+    def _assign_plain(self, cost, sources):
         plan = self._assign_greedy(cost, sources)
         if plan is None and cost.pips:
             plan = self._assign_search(cost, sources)
         return plan
+
+    @staticmethod
+    def _pip_pay(pip, opts):
+        """Color con el que la fuente `opts` paga `pip` (None si no puede). Híbrido
+        {R/G}: cualquiera de sus colores (el que más produzca)."""
+        if pip in opts:
+            return pip
+        if "/" in str(pip):
+            cs = [c for c in pip_colors(pip) if c in opts]
+            if cs:
+                return max(cs, key=lambda c: opts[c])
+        return None
 
     @staticmethod
     def _generic_plan(cost, sources, used, surplus):
@@ -975,7 +1043,7 @@ class Player:
         """Vuelta atrás sobre los pips (el más restringido primero)."""
         cands = {}
         for pip in set(cost.pips):
-            cands[pip] = sorted((i for i, (_p, o) in enumerate(sources) if pip in o),
+            cands[pip] = sorted((i for i, (_p, o) in enumerate(sources) if self._pip_pay(pip, o)),
                                 key=lambda i: (len(sources[i][1]), max(sources[i][1].values())))
         if any(not cands[pip] for pip in cands):
             return None
@@ -993,9 +1061,10 @@ class Player:
             for i in cands[pip]:
                 if i in used:
                     continue
-                amt = sources[i][1][pip]
+                col = self._pip_pay(pip, sources[i][1])
+                amt = sources[i][1][col]
                 r = rec(k + 1, used | {i}, surplus + amt - 1,
-                        plan + [(sources[i][0], pip, amt)])
+                        plan + [(sources[i][0], col, amt)])
                 if r is not None:
                     return r
             return None
@@ -1009,11 +1078,12 @@ class Player:
 
         # 1) simbolos de color: el mas restrictivo primero conceptualmente,
         #    resuelto con la fuente MENOS flexible que sirva.
-        for pip in cost.pips:
+        # los híbridos (más flexibles) después de los pips de un solo color
+        for pip in sorted(cost.pips, key=lambda x: len(pip_colors(x)) if "/" in str(x) else 0):
             best = None
             best_key = None
             for i, (p, opts) in enumerate(sources):
-                if i in used or pip not in opts:
+                if i in used or self._pip_pay(pip, opts) is None:
                     continue
                 flexibility = (len(opts), max(opts.values()))
                 if best is None or flexibility < best_key:
@@ -1023,8 +1093,9 @@ class Player:
                 return None
             p, opts = sources[best]
             used.add(best)
-            amt = opts[pip]
-            plan.append((p, pip, amt))
+            col = self._pip_pay(pip, opts)
+            amt = opts[col]
+            plan.append((p, col, amt))
             generic_pool += amt - 1  # 1 paga el pip, el resto va a generico
 
         # 2) generico: primero el sobrante, luego las fuentes que mas produzcan.
@@ -1056,23 +1127,22 @@ class Player:
         return max(0, self.life - 1)
 
     def _channel_plan(self, cost: Cost, exclude=None):
-        """(plan, vida) mínimos: primero con maná; lo genérico que falte, con vida."""
-        plan = self._assign(cost, exclude)
+        """(plan, vida) mínimos: primero con maná; lo genérico que falte, con vida
+        (Channel). La vida incluye la de los símbolos phyrexianos."""
+        plan, life = self._assign_full(cost, exclude)
         if plan is not None or cost is None:
-            return plan, 0
+            return plan, life
         room = min(self._channel_room(), cost.generic)
         for k in range(1, room + 1):
-            plan = self._assign(Cost(cost.generic - k, cost.pips), exclude)
-            if plan is not None:
-                return plan, k
+            plan, life = self._assign_full(Cost(cost.generic - k, cost.pips), exclude)
+            if plan is not None and self.life > k + life:
+                return plan, k + life
         return None, 0
 
     def can_pay(self, cost: Cost, exclude=None) -> bool:
         if cost is None:
             return True
-        if self._channel_room():
-            return self._channel_plan(self._pool_reduced(cost), exclude)[0] is not None
-        return self._assign(self._pool_reduced(cost), exclude) is not None
+        return self._channel_plan(self._pool_reduced(cost), exclude)[0] is not None
 
     def _pool_reduced(self, cost: Cost) -> Cost:
         """El maná flotante (genérico) cubre parte del coste genérico."""
@@ -1084,17 +1154,16 @@ class Player:
         if cost is None:
             return True
         use = min(self.mana_pool, cost.generic) if self.mana_pool > 0 else 0
-        _life_paid = 0
-        if self._channel_room():
-            plan, _life_paid = self._channel_plan(self._pool_reduced(cost), exclude)
-        else:
-            plan = self._assign(self._pool_reduced(cost), exclude)
+        plan, _life_paid = self._channel_plan(self._pool_reduced(cost), exclude)
         if plan is None:
             return False
         if _life_paid:
-            self.life -= _life_paid           # Channel: 1 vida por cada {C}
-            _chg = self._channel[0]
-            _chg.log(f"{self.name} paga {_life_paid} de vida por {_life_paid} maná incoloro (Channel)")
+            # Channel (1 vida por {C}) y maná phyrexiano (2 vida por símbolo)
+            self.life -= _life_paid
+            _gl = next((getattr(p_, "game", None) for p_, _c, _a in plan if getattr(p_, "game", None) is not None), None) \
+                or (self._channel[0] if getattr(self, "_channel", None) else None)
+            if _gl is not None:
+                _gl.log(f"{self.name} paga {_life_paid} de vida como parte del coste de maná")
         for perm, _color, _amt in plan:
             perm.tapped = True
         self._last_plan_colors = [c for _p, c, a in plan for _ in range(max(1, a or 1))]

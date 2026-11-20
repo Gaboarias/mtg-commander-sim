@@ -32,7 +32,7 @@ def _cost_str(card):
     c = getattr(card, "cost", None)
     if not c:
         return "—"
-    s = (str(c.generic) if c.generic or not c.pips else "") + "".join(c.pips)
+    s = (str(c.generic) if c.generic or not c.pips else "") + "".join(f"({x})" if "/" in str(x) else x for x in c.pips)
     return "{" + s + "}" if s else "{0}"
 
 
@@ -66,7 +66,7 @@ def _stuck_cards(players, losers):
                 continue
             cost = getattr(c, "cost", None)
             cmc = cost.cmc if cost else 0
-            need_colors = ({s for s in cost.pips if s in _COLOR_ES} - colors_avail) if cost else set()
+            need_colors = ({s for s in cost.pips if s in _COLOR_ES} - colors_avail) if cost else set()   # híbridos: no exigen un color fijo
             subs = {s.lower() for s in getattr(c, "subtypes", set())}
             addc = getattr(c, "additional_cost", {}) or {}
             need = None

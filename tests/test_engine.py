@@ -3034,22 +3034,52 @@ def test_x_spell_scales_with_available_mana():
     assert op.life == l0 - 4
 
 
-def test_hybrid_cost_payable_with_any_color():
-    # {W/U} se cuenta como genérico -> pagable con cualquier maná (no bloquea).
+def test_hybrid_cost_requires_one_of_its_colors():
+    # {W/U} exige W o U (antes se aproximaba como genérico pagable con cualquier maná)
     import cardsdb, cards
     from engine import Game, Player
-    c = cardsdb.build_card_from_data({
-        "name": "Hyb", "type_line": "Creature", "mana_cost": "{2}{W/U}",
-        "power": "2", "toughness": "2", "color_identity": ["W", "U"]})
-    assert c.cost.cmc == 3 and c.cost.pips == ()
-    me = Player("me", [cards.creature("F", "1G", 1, 1) for _ in range(10)],
-                cards.creature("Cmd", "2G", 3, 3, legendary=True))
-    op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(3)],
-                cards.creature("O", "2U", 1, 1, legendary=True))
-    g = Game([me, op], seed=1)
-    for _ in range(3):
-        g.move_to_battlefield(cards.land("Forest", ["G"], basic=True), me)
-    assert g.cast(me, c) is not False     # pagable con 3 bosques pese a ser W/U
+    def mk():
+        return cardsdb.build_card_from_data({
+            "name": "Hyb", "type_line": "Creature", "mana_cost": "{2}{W/U}",
+            "power": "2", "toughness": "2", "color_identity": ["W", "U"]})
+    c = mk()
+    assert c.cost.cmc == 3 and c.cost.pips == ("W/U",)
+
+    def game(land, color):
+        me = Player("me", [cards.creature("F", "1G", 1, 1) for _ in range(10)],
+                    cards.creature("Cmd", "2G", 3, 3, legendary=True))
+        op = Player("op", [cards.creature("G", "1U", 1, 1) for _ in range(3)],
+                    cards.creature("O", "2U", 1, 1, legendary=True))
+        g = Game([me, op], seed=1)
+        for _ in range(3):
+            g.move_to_battlefield(cards.land(land, [color], basic=True), me)
+        return g, me
+    g, me = game("Forest", "G")
+    assert not me.can_pay(c.cost)             # 3 bosques: no hay W ni U
+    g, me = game("Island", "U")
+    assert g.cast(me, mk()) is not False      # con islas sí
+
+
+def test_two_hybrid_and_phyrexian_alternatives():
+    from cardsdb import parse_cost, mana_cost_to_str
+    from engine import W, U, G
+    from test_parser_corpus import new_game, give_lands
+    two_w = parse_cost(mana_cost_to_str("{2/W}"))
+    assert two_w.cmc == 2
+    g, me, _ = new_game()
+    give_lands(g, me, 2, colors=(U,))
+    assert me.can_pay(two_w)                  # sin W: 2 genéricos
+    g, me, _ = new_game()
+    give_lands(g, me, 1, colors=(W,))
+    assert me.pay(two_w) and sum(p.tapped for p in me.battlefield) == 1   # con W: 1 sola tierra
+    phy = parse_cost(mana_cost_to_str("{G/P}"))
+    g, me, _ = new_game()
+    l0 = me.life
+    assert me.pay(phy) and me.life == l0 - 2  # sin G: 2 de vida
+    g, me, _ = new_game()
+    give_lands(g, me, 1, colors=(G,))
+    l0 = me.life
+    assert me.pay(phy) and me.life == l0      # con G: maná, sin vida
 
 
 def test_enters_with_counters():

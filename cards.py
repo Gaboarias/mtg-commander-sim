@@ -636,7 +636,7 @@ def GrayMerchant():
     def etb(game, ctrl, perm):
         # devoción al negro = cantidad de SÍMBOLOS {B} en los costes de tus
         # permanentes (antes contaba permanentes: Gray Merchant mismo valía 1, no 2)
-        devocion = sum(p.card.cost.pips.count(B) for p in ctrl.battlefield
+        devocion = sum(sum(1 for pp in p.card.cost.pips if B in str(pp).split("/")) for p in ctrl.battlefield
                        if p.card.cost)
         # "each opponent loses X life. You gain life equal to the life lost"
         # (pérdida de vida, no daño: no se previene)

@@ -68,7 +68,9 @@ _COLOR_MAP = {"W": W, "U": U, "B": B, "R": R, "G": G, "C": C}
 
 
 def mana_cost_to_str(mana_cost: str) -> str:
-    """'{2}{R}{W}' -> '2RW'. Ignora X (0) e hibridos (toma el primer simbolo)."""
+    """'{2}{R}{W}' -> '2RW'. Ignora X (0). Los símbolos híbridos / phyrexianos se
+    conservan entre paréntesis: '{1}{R/G}' -> '1(R/G)', '{2/W}' -> '(2/W)',
+    '{W/P}' -> '(W/P)' (parse_cost los entiende y el pago respeta sus colores)."""
     if not mana_cost:
         return "0"
     generic = 0
@@ -79,8 +81,12 @@ def mana_cost_to_str(mana_cost: str) -> str:
             generic += int(s)
         elif s == "X":
             continue                 # X se maneja aparte (card.x_spell)
-        elif "/" in s:               # híbrido / phyrexiano: pagable con cualquier
-            generic += 1             # maná (aprox: cuenta como 1 genérico)
+        elif "/" in s:
+            parts = s.split("/")
+            if all(x in _COLOR_MAP or x in ("P", "2") for x in parts):
+                pips += f"({s})"
+            else:
+                generic += 1         # símbolo raro desconocido: 1 genérico
         elif s in _COLOR_MAP:
             pips += s            # {C} es un pip INCOLORO (Thought-Knot Seer: CMC 4)
     return (str(generic) if generic else "") + pips or "0"
