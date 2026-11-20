@@ -922,7 +922,7 @@ class Player:
 
     def available_mana(self) -> int:
         """Cota superior: suma de max(opciones) por fuente sin tapear + pool flotante."""
-        total = self.mana_pool
+        total = self.mana_pool + self._channel_room()
         for p in self.mana_sources():
             opts = self.produced(p)
             if opts:
@@ -1047,9 +1047,31 @@ class Player:
                 return None
         return plan
 
+    def _channel_room(self) -> int:
+        """Channel: 'hasta el fin del turno, podés pagar 1 vida para agregar {C}' cuando
+        podrías activar una habilidad de maná. Cuánta vida se puede convertir (sin morir)."""
+        ch = getattr(self, "_channel", None)
+        if not ch or ch[0].turn != ch[1] or self.__dict__.get("_life_lock"):
+            return 0
+        return max(0, self.life - 1)
+
+    def _channel_plan(self, cost: Cost, exclude=None):
+        """(plan, vida) mínimos: primero con maná; lo genérico que falte, con vida."""
+        plan = self._assign(cost, exclude)
+        if plan is not None or cost is None:
+            return plan, 0
+        room = min(self._channel_room(), cost.generic)
+        for k in range(1, room + 1):
+            plan = self._assign(Cost(cost.generic - k, cost.pips), exclude)
+            if plan is not None:
+                return plan, k
+        return None, 0
+
     def can_pay(self, cost: Cost, exclude=None) -> bool:
         if cost is None:
             return True
+        if self._channel_room():
+            return self._channel_plan(self._pool_reduced(cost), exclude)[0] is not None
         return self._assign(self._pool_reduced(cost), exclude) is not None
 
     def _pool_reduced(self, cost: Cost) -> Cost:
@@ -1062,9 +1084,17 @@ class Player:
         if cost is None:
             return True
         use = min(self.mana_pool, cost.generic) if self.mana_pool > 0 else 0
-        plan = self._assign(self._pool_reduced(cost), exclude)
+        _life_paid = 0
+        if self._channel_room():
+            plan, _life_paid = self._channel_plan(self._pool_reduced(cost), exclude)
+        else:
+            plan = self._assign(self._pool_reduced(cost), exclude)
         if plan is None:
             return False
+        if _life_paid:
+            self.life -= _life_paid           # Channel: 1 vida por cada {C}
+            _chg = self._channel[0]
+            _chg.log(f"{self.name} paga {_life_paid} de vida por {_life_paid} maná incoloro (Channel)")
         for perm, _color, _amt in plan:
             perm.tapped = True
         self._last_plan_colors = [c for _p, c, a in plan for _ in range(max(1, a or 1))]
@@ -4959,6 +4989,7 @@ class Game:
         "ben_artifact": lambda o: isinstance(o, Permanent) and "artifact" in o.card.types,
         "ben_creature": lambda o: isinstance(o, Permanent) and o.is_creature(),
         "own_nt_artifact": lambda o: isinstance(o, Permanent) and "artifact" in o.card.types and not o.is_token,
+        "own_nonpilot": lambda o: isinstance(o, Permanent) and o.is_creature() and not o.has_subtype("Pilot"),
         "stack_spell": lambda o: isinstance(o, StackObject),
         "stack_ability": lambda o: isinstance(o, StackObject),
     }

@@ -706,6 +706,10 @@ class InteractiveGame:
             mine = list(p.creatures())
             mine.sort(key=lambda x: (x.power, x.toughness), reverse=True)
             return mine[:n]
+        if ts == "own_nonpilot":
+            mine = [pm for pm in p.creatures() if not pm.has_subtype("Pilot")]
+            mine.sort(key=lambda x: (bool(x.card.on_etb), not x.is_token), reverse=True)
+            return mine[:n]
         if ts == "opp_creature":
             pool = self.g.legal_creature_targets(p)
             pool.sort(key=lambda x: (x.power, x.toughness), reverse=True)
@@ -756,6 +760,10 @@ class InteractiveGame:
             return [{"idx": self.players.index(o), "name": o.name,
                      "from": f"{o.life} de vida"}
                     for o in self.g.targetable_opponents(self.human())]
+        if ts == "own_nonpilot":
+            return [{"uid": pm.uid, "name": pm.name, "power": pm.power,
+                     "toughness": pm.toughness, "from": "tuyo"}
+                    for pm in self.human().creatures() if not pm.has_subtype("Pilot")]
         if ts == "own_nt_artifact":
             return [{"uid": pm.uid, "name": pm.name, "power": None, "toughness": None,
                      "from": f"tuyo · VM {pm.card.cost.cmc if pm.card.cost else 0}"}
@@ -790,7 +798,7 @@ class InteractiveGame:
     _MUST_TARGET = {"own_creature", "opp_creature", "opp_player", "own_perm",
                     "stack_spell", "any_artifact", "any_enchantment", "any_art_ench",
                     "any_planeswalker", "any_nonland", "any_perm", "any_acel",
-                    "ben_artifact", "ben_creature", "own_nt_artifact"}
+                    "ben_artifact", "ben_creature", "own_nt_artifact", "own_nonpilot"}
 
     def _has_legal_target(self, card, precomputed=None):
         """False sólo si la carta EXIGE objetivo, no es modal y no hay ninguno legal.
@@ -835,6 +843,14 @@ class InteractiveGame:
             for uid in uids:
                 pm = self._find_any_perm(uid)
                 if pm is not None and self.g.can_target(self.human(), pm):
+                    out.append(pm)
+            return out
+        if ts == "own_nonpilot":
+            out = []
+            for uid in uids:
+                pm = self._find_any_perm(uid)
+                if pm is not None and pm.controller is self.human() and pm.is_creature() \
+                        and not pm.has_subtype("Pilot"):
                     out.append(pm)
             return out
         if ts in ("own_perm", "own_nt_artifact"):

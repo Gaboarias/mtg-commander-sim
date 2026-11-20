@@ -427,3 +427,78 @@ def test_prepared_state_exposed_and_only_enters_prepared_when_stated():
     assert se["prepared"]["name"] == "Have a Bite" and se["prepared"]["ready"] is True
     assert "+1/+1 counter" in se["prepared"]["text"]
     assert sa["prepared"]["name"] == "Heroic Stanza" and sa["prepared"]["ready"] is False
+
+
+def _prep_ready(name, f0_type, f0_text, sp_cost, sp_type, sp_text, lands=6, cols=(W, U, B, R, G)):
+    c = _prep(name, ("{2}{G}", f0_type, f0_text), (sp_cost, sp_type, sp_text))
+    g, me, ops = _g()
+    pm = put(g, c, me)
+    run(g)
+    give_lands(g, me, lands, colors=cols)
+    pm._prepared = True
+    i = next(k for k, ab in enumerate(c.activated_abilities) if ab.get("prepared"))
+    return g, me, ops, pm, i, c.activated_abilities[i]
+
+
+_ENTERS = "This creature enters prepared. (While it's prepared, you may cast a copy of its spell. Doing so unprepares it.)"
+
+
+def test_prepared_soul_tether_heartwood_token_rg_mana():
+    g, me, _, pm, i, ab = _prep_ready("Heartwood Crafter // Soul Tether", "Creature — Elf Artificer", _ENTERS,
+                                      "{2}{R/G}", "Sorcery", "Create a Heartwood token.")
+    assert ab["sorcery_speed"] and g.activate_ability(pm, i)
+    run(g)
+    hw = [p for p in me.battlefield if p.name == "Heartwood"]
+    assert len(hw) == 1 and me.produced(hw[0]) == {"R": 1, "G": 1} and not pm._prepared
+
+
+def test_prepared_x_spells_stream_of_life_and_exsanguinate():
+    g, me, _, pm, i, ab = _prep_ready("Infirmary Healer // Stream of Life", "Creature — Cat Cleric", _ENTERS,
+                                      "{X}{G}", "Sorcery", "Target player gains X life.")
+    assert ab["x_cost"]
+    l0 = me.life
+    g.activate_ability(pm, i, x=4)
+    run(g)
+    assert me.life == l0 + 4
+    g, me, ops, pm, i, ab = _prep_ready("Stensian Sanguinist // Exsanguinate", "Creature — Vampire Cleric", _ENTERS,
+                                        "{X}{B}{B}", "Sorcery",
+                                        "Each opponent loses X life. You gain life equal to the life lost this way.")
+    l0, o0 = me.life, ops[0].life
+    g.activate_ability(pm, i, x=3)
+    run(g)
+    assert ops[0].life == o0 - 3 and me.life == l0 + 3
+
+
+def test_prepared_all_aboard_flickers_non_pilot():
+    g, me, _, pm, i, ab = _prep_ready("Skycoach Conductor // All Aboard", "Creature — Bird Pilot", _ENTERS,
+                                      "{U}", "Instant", "Exile target non-Pilot creature you control, then return "
+                                      "that card to the battlefield under its owner's control.")
+    assert ab["target_spec"] == "own_nonpilot" and not ab["sorcery_speed"]
+    bear = put(g, creature("Bear", "1G", 2, 2), me)
+    run(g)
+    g.activate_ability(pm, i, targets=[bear])
+    run(g)
+    assert bear not in me.battlefield and any(p.name == "Bear" for p in me.battlefield)
+
+
+def test_prepared_channel_pays_generic_with_life_this_turn_only():
+    g, me, _, pm, i, ab = _prep_ready("Yavimaya Bloomsage // Channel", "Creature — Dryad Druid", _ENTERS, "{G}{G}",
+                                      "Sorcery", "Until end of turn, any time you could activate a mana ability, you "
+                                      "may pay 1 life. If you do, add {C}.", lands=2, cols=(G,))
+    g.activate_ability(pm, i)
+    run(g)
+    big = creature("Big", "7", 7, 7)
+    l0 = me.life
+    assert me.can_pay(big.cost) and me.pay(big.cost)
+    assert me.life == l0 - 7
+    g.turn += 1
+    assert not me.can_pay(big.cost)
+
+
+def test_prepared_striking_palette_copies_next_instant_or_sorcery():
+    g, me, _, pm, i, ab = _prep_ready("Pigment Wrangler // Striking Palette", "Creature — Orc Sorcerer", _ENTERS,
+                                      "{R}", "Sorcery", "When you next cast an instant or sorcery spell this turn, "
+                                      "copy that spell. You may choose new targets for the copy.")
+    g.activate_ability(pm, i)
+    run(g)
+    assert getattr(me, "_copy_next", None) == (g.turn, "instant or sorcery")

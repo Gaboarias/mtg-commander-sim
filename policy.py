@@ -757,6 +757,10 @@ class Policy:
         if spec == "ben_creature":
             mine = sorted(me.creatures(), key=lambda p: (p.power, p.toughness), reverse=True)
             return mine[:max(1, count)]
+        if spec == "own_nonpilot":
+            pool = [pm for pm in me.creatures() if not pm.has_subtype("Pilot")]
+            pool.sort(key=lambda pm: (bool(pm.card.on_etb), not pm.is_token), reverse=True)
+            return pool[:max(1, count)] if any(pm.card.on_etb for pm in pool) else []
         if spec == "own_nt_artifact":
             pool = [pm for pm in me.battlefield if "artifact" in pm.card.types and not pm.is_token]
             pool.sort(key=lambda pm: pm.card.cost.cmc if pm.card.cost else 0, reverse=True)

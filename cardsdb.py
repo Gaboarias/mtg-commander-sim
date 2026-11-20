@@ -631,6 +631,81 @@ def _pump_spell_effect(oracle: str):
     return None
 
 
+def _prepared_special(text: str):
+    """Hechizos de cartas 'prepared' que el parser genérico no cubre. Devuelve
+    (effect(g, ctrl, targets), target_spec, count) o (None, None, 1). Si el texto
+    usa X, el efecto lee g._ability_x (la habilidad se activa con x_cost)."""
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    tl = t.lower()
+    # Soul Tether: "Create a Heartwood token. (It's a red and green artifact with "{T}: Add {R} or {G}.")"
+    # (el texto recordatorio entre paréntesis puede venir recortado: fichas conocidas)
+    _KNOWN_MANA_TOK = {"heartwood": (("R", "G"), "R", "G")}
+    m = re.match(r"create an? (\w+) token\. \(it's an? ([a-z ]+?) artifact with \"\{t\}: add \{(\w)\} or \{(\w)\}\.\"\)", tl)
+    mk = re.fullmatch(r"create an? (\w+) token\.", tl)
+    if m or (mk and mk.group(1) in _KNOWN_MANA_TOK):
+        cmap = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
+        if m:
+            tname = m.group(1).capitalize()
+            cols = tuple(cmap[w] for w in re.findall(r"white|blue|black|red|green", m.group(2)))
+            c1, c2 = m.group(3).upper(), m.group(4).upper()
+        else:
+            tname = mk.group(1).capitalize()
+            cols, c1, c2 = _KNOWN_MANA_TOK[mk.group(1)]
+
+        def eff_tok(g, ctrl, targets=None, _n=tname, _c=cols, _o=(c1, c2)):
+            import copy as _cp
+            tok = Card(name=_n, types={"artifact"}, cost=None, subtypes={_n}, tags={"token"},
+                       color_id=set(_c), produces=(lambda perm, pl, __o=_o: {k: 1 for k in __o}))
+            tok.colors = set(_c)
+            for _ in range(g.token_multiplier(ctrl)):
+                g.move_to_battlefield(_cp.deepcopy(tok), ctrl, is_token=True)
+            g.log(f"{ctrl.name} crea una ficha {_n} (maná {_o[0]} o {_o[1]})")
+        return eff_tok, None, 1
+    # Stream of Life: "Target player gains X life."
+    if re.fullmatch(r"target player gains x life\.", tl):
+        def eff_sol(g, ctrl, targets=None):
+            x = int(getattr(g, "_ability_x", 0) or 0)
+            if x > 0:
+                g.gain_life(ctrl, x)
+                g.log(f"{ctrl.name} gana {x} de vida")
+        return eff_sol, None, 1
+    # Exsanguinate: "Each opponent loses X life. You gain life equal to the life lost this way."
+    if re.fullmatch(r"each opponent loses x life\. you gain life equal to the life lost this way\.", tl):
+        def eff_exs(g, ctrl, targets=None):
+            x = int(getattr(g, "_ability_x", 0) or 0)
+            lost = 0
+            for op in g.opponents(ctrl):
+                b4 = op.life
+                op.life -= x
+                lost += max(0, b4 - op.life)
+            if lost:
+                g.gain_life(ctrl, lost)
+            g.log(f"{ctrl.name}: cada rival pierde {x}; gana {lost} de vida")
+            g.sba()
+        return eff_exs, None, 1
+    # Striking Palette: "When you next cast an instant or sorcery spell this turn, copy that spell. …"
+    if re.match(r"when you next cast an instant or sorcery spell this turn, copy that spell", tl):
+        def eff_pal(g, ctrl, targets=None):
+            ctrl._copy_next = (g.turn, "instant or sorcery")
+            g.log(f"{ctrl.name}: se copiará el próximo instantáneo o conjuro que lance este turno")
+        return eff_pal, None, 1
+    # All Aboard: "Exile target non-Pilot creature you control, then return that card to the battlefield under its owner's control."
+    m = re.fullmatch(r"exile target (?:non-(\w+) )?creature you control, then return that card to the "
+                     r"battlefield under its owner's control\.", tl)
+    if m:
+        return (lambda g, ctrl, targets=None, _e=_blink_effect(m.group(1).capitalize() if m.group(1) else None):
+                _e(g, ctrl, targets)), ("own_nonpilot" if (m.group(1) or "") == "pilot" else "own_creature"), 1
+    # Channel: "Until end of turn, any time you could activate a mana ability, you may pay 1 life. If you do, add {C}."
+    if re.match(r"until end of turn, any time you could activate a mana ability, you may pay 1 life\. "
+                r"if you do, add \{c\}", tl):
+        def eff_ch(g, ctrl, targets=None):
+            ctrl._channel = (g, g.turn)
+            g.log(f"{ctrl.name}: hasta el fin del turno puede pagar 1 vida por cada {{C}} (Channel)")
+        return eff_ch, None, 1
+    return None, None, 1
+
+
+
 def _blink_effect(non_sub=None):
     """Parpadeo: exilia el/los permanente(s) objetivo y los devuelve al campo
     (re-dispara ETB). Los tokens desaparecen. `non_sub`: "non-Angel" (no apunta a ese
@@ -21771,8 +21846,13 @@ def _build_card_from_data_impl(data: dict) -> Card:
                                       (_faces[0].get("oracle_text", "") or ""), re.I))
         pcost = parse_cost(mana_cost_to_str(spell.get("mana_cost", "") or "0"))
         peff, pspec, pcount = _fragment_effect(spell.get("oracle_text", "") or "")
+        _sp_txt = spell.get("oracle_text", "") or ""
+        if peff is None or re.search(r"\bX\b", _sp_txt) or "copy that spell" in _sp_txt.lower():
+            _se, _ss, _sc = _prepared_special(_sp_txt)
+            if _se is not None:
+                peff, pspec, pcount = _se, _ss, _sc
         if peff is None:
-            peff2 = _generic_amount_effect(spell.get("oracle_text", "") or "")
+            peff2 = _generic_amount_effect(_sp_txt)
             peff = (lambda g, c, tg=None, _e=peff2: _e(g, c)) if peff2 else None
             pspec, pcount = None, 1
         if peff is not None:
@@ -21798,6 +21878,9 @@ def _build_card_from_data_impl(data: dict) -> Card:
                 "label": f"Lanzar {spell.get('name', 'hechizo')} (preparada)",
                 "effect": _prep_eff, "target_spec": pspec,
                 "target_count": pcount, "is_copy_ability": False,
+                # copia de un CONJURO: solo en tu fase principal con la pila vacía
+                "sorcery_speed": "sorcery" in (spell.get("type_line", "") or "").lower(),
+                "x_cost": "{X}" in (spell.get("mana_cost", "") or ""),
                 "prepared": True},)
 
     # "Spells your opponents cast that target this creature cost {N} more to cast":
