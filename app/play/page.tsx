@@ -629,7 +629,7 @@ export default function Play() {
           cascade_target: "Cascada: elegí el objetivo",
           gy_shuffle: "Barajar cartas del cementerio",
           mode_choice: "Elegí un modo", mode: "Elegí un modo", mode_target: "Elegí un objetivo",
-          mana: "Elegí el maná", life: "Pagar vida", pile: "Separá en dos pilas", sector: "Elegí un sector",
+          mana: "Elegí el maná", life: "Pagar vida", pile: "Separá en dos pilas", sector: "Elegí un sector", multi: "Elegí cuáles",
           sacrifice: "Sacrificar", keep: "Elegí qué conservar",
           opt_cost: "Coste opcional",
           player_target: "Elegí un jugador", amount: "¿Cuánto?", color: "Elegí un color",
@@ -660,6 +660,7 @@ export default function Play() {
           opt_cost: "Pagarlo es opcional; si no lo pagás, pasa lo que dice la otra opción.",
           player_target: "El efecto apunta a un jugador: elegí a quién.",
           pile: "Elegí de a uno lo que va a la pila A. El rival después elige qué pila sacrifica.",
+          multi: "Elegí de a una; «Todas» toma lo que queda y «Listo» termina.",
           sector: "Space Beleren divide el campo en tres sectores: α, β y γ.",
           amount: "Repartí el total entre los objetivos que elijas.",
           color: "El permanente recuerda el color elegido para sus habilidades.",
@@ -668,6 +669,7 @@ export default function Play() {
         const hint = hints[ch.kind];
         const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno"
           : ch.kind === "pile" ? "Listo: el resto va a la pila B"
+          : ch.kind === "multi" ? "Listo"
           : ch.kind === "gy_shuffle" ? "Ninguna más"
           : "No llevarme ninguna";
         return (

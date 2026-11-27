@@ -7526,6 +7526,30 @@ def _eot_animate(game, perm, p, t, kws=(), subtypes=()):
         perm.temp_subtypes = set(getattr(perm, "temp_subtypes", set()) or set()) | set(subtypes)
 
 
+def _multi_pick(game, ctrl, prompt, items, done, chosen=None):
+    """'Any number of …': el humano elige de a uno (con 'Todas' y 'Listo'); el bot
+    toma todo. `items` = [(etiqueta, objeto)], `done(lista_elegida)`."""
+    if ctrl is not getattr(game, "interactive_human", None):
+        done([o for _l, o in items])
+        return
+    chosen = chosen if chosen is not None else []
+    rest = [(l, o) for l, o in items if not any(o is c for c in chosen)]
+    if not rest:
+        done(chosen)
+        return
+    ALL = object()
+    opts = [(f"✓ Todas las que quedan ({len(rest)})", ALL)] + rest
+    sel = ", ".join(getattr(c, "name", str(c)) for c in chosen) or "ninguna"
+
+    def pick(o):
+        if o is ALL:
+            done(chosen + [x for _l, x in rest])
+        else:
+            _multi_pick(game, ctrl, prompt, items, done, chosen + [o])
+    _human_target_choice(game, ctrl, "multi", f"{prompt} (elegidas: {sel})", opts, pick,
+                         allow_none=True, on_none=lambda: done(chosen))
+
+
 def _pick_perm(game, ctrl, pool, key, prompt, apply):
     """Objetivo permanente: el humano lo elige (modal); el bot toma el mejor según key."""
     pool = [x for x in pool if x is not None]
@@ -7581,13 +7605,18 @@ def _pw_named_table():
     def f(game, ctrl, perm):
         n = max(0, ctrl.life)
         top = list(reversed(ctrl.library[-n:])) if n else []
-        put = [c for c in top if not c.is_land() and (set(c.types) & {"creature", "artifact", "enchantment", "planeswalker", "battle"})
-               and (c.cost.cmc if c.cost else 0) <= 3]
-        for c in put:
-            ctrl.library.remove(c)
-            game.move_to_battlefield(c, ctrl)
-        game.rng.shuffle(ctrl.library)
-        game.log(f"{ctrl.name} pone en el campo {len(put)} permanente(s) de VM 3 o menos")
+        elig = [c for c in top if not c.is_land() and (set(c.types) & {"creature", "artifact", "enchantment", "planeswalker", "battle"})
+                and (c.cost.cmc if c.cost else 0) <= 3]
+
+        def done(put):
+            for c in put:
+                if c in ctrl.library:
+                    ctrl.library.remove(c)
+                    game.move_to_battlefield(c, ctrl)
+            game.rng.shuffle(ctrl.library)
+            game.log(f"{ctrl.name} mira {len(top)} cartas y pone en el campo {len(put)} permanente(s) de VM 3 o menos")
+        _multi_pick(game, ctrl, f"Ajani: de las {len(top)} cartas de arriba, elegí qué permanentes de VM 3 o menos poner en el campo",
+                    [(f"{c.name} (VM {c.cost.cmc if c.cost else 0})", c) for c in elig], done)
     T["look at the top x cards of your library, where x is your life total. you may put any number of nonland permanent cards with mana value 3 or less from among them onto the battlefield. then shuffle"] = f
 
     # Ajani, Strength of the Pride 0
@@ -7719,25 +7748,40 @@ def _pw_named_table():
     # Chandra, Heart of Fire −9
     def f(game, ctrl, perm):
         pool = [c for c in list(ctrl.graveyard) + list(ctrl.library) if {"instant", "sorcery"} & set(c.types) and _is_red(c)]
-        for c in pool:
-            (ctrl.graveyard if c in ctrl.graveyard else ctrl.library).remove(c)
-        game.rng.shuffle(ctrl.library)
-        _to_impulse(game, ctrl, pool)
-        ctrl.mana_pool += 6
-        game.log(f"{ctrl.name} exilia {len(pool)} hechizos rojos (jugables este turno) y agrega RRRRRR")
+
+        def done(sel):
+            for c in sel:
+                if c in ctrl.graveyard:
+                    ctrl.graveyard.remove(c)
+                elif c in ctrl.library:
+                    ctrl.library.remove(c)
+            game.rng.shuffle(ctrl.library)
+            _to_impulse(game, ctrl, sel)
+            ctrl.mana_pool += 6
+            game.log(f"{ctrl.name} exilia {len(sel)} hechizos rojos (jugables este turno) y agrega RRRRRR")
+        _multi_pick(game, ctrl, "Chandra: elegí qué instantáneos/conjuros rojos exiliar (los podés lanzar este turno)",
+                    [(f"{c.name} ({'cementerio' if c in ctrl.graveyard else 'biblioteca'})", c) for c in pool], done)
     T["search your graveyard and library for any number of red instant and/or sorcery cards, exile them, then shuffle. you may cast them this turn. add six {r}"] = f
 
     # Chandra, Legacy of Fire 0
     def f(game, ctrl, perm):
-        n = 0
-        for pm in ctrl.battlefield:
-            if pm.counters.get("loyalty", 0) > 1:
-                pm.counters["loyalty"] -= 1
-                n += 1
-        k = min(n, len(ctrl.library))
-        got = [ctrl.library.pop() for _ in range(k)]
-        _to_impulse(game, ctrl, got)
-        game.log(f"{ctrl.name} quita {n} contadores de lealtad y exilia {k} cartas (jugables este turno)")
+        pws = [pm for pm in ctrl.battlefield if pm.counters.get("loyalty", 0) > 0]
+        if ctrl is not getattr(game, "interactive_human", None):
+            pws = [pm for pm in pws if pm.counters.get("loyalty", 0) > 1]     # el bot no mata a sus planeswalkers
+
+        def done(sel):
+            n = 0
+            for pm in sel:
+                if pm in ctrl.battlefield and pm.counters.get("loyalty", 0) > 0:
+                    pm.counters["loyalty"] -= 1
+                    n += 1
+            k = min(n, len(ctrl.library))
+            got = [ctrl.library.pop() for _ in range(k)]
+            _to_impulse(game, ctrl, got)
+            game.log(f"{ctrl.name} quita {n} contadores de lealtad y exilia {k} cartas (jugables este turno)")
+            game.sba()
+        _multi_pick(game, ctrl, "Chandra: elegí de qué permanentes quitar un contador de lealtad",
+                    [(f"{pm.name} (lealtad {pm.counters.get('loyalty', 0)})", pm) for pm in pws], done)
     T["remove a loyalty counter from each of any number of permanents you control. exile that many cards from the top of your library. you may play them this turn"] = f
 
     # Comet, Stellar Pup 0 (tabla del dado)
@@ -8256,12 +8300,15 @@ def _pw_named_table():
 
     # Quintorius Kand −6
     def f(game, ctrl, perm):
-        pool = list(ctrl.graveyard)
-        for c in pool:
-            ctrl.graveyard.remove(c)
-        _to_impulse(game, ctrl, pool)
-        ctrl.mana_pool += len(pool)
-        game.log(f"{ctrl.name} exilia {len(pool)} cartas de su cementerio (jugables este turno) y agrega {len(pool)} R")
+        def done(sel):
+            for c in sel:
+                if c in ctrl.graveyard:
+                    ctrl.graveyard.remove(c)
+            _to_impulse(game, ctrl, sel)
+            ctrl.mana_pool += len(sel)
+            game.log(f"{ctrl.name} exilia {len(sel)} cartas de su cementerio (jugables este turno) y agrega {len(sel)} R")
+        _multi_pick(game, ctrl, "Quintorius: elegí qué cartas de tu cementerio exiliar (las podés jugar este turno, +R por cada una)",
+                    [(c.name, c) for c in ctrl.graveyard], done)
     T["exile any number of target cards from your graveyard. add {r} for each card exiled this way. you may play those cards this turn"] = f
 
     # Ral Zarek, Guest Lecturer −1 / −7
