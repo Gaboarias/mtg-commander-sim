@@ -721,3 +721,32 @@ def test_onakke_oathkeeper_tax_stacks_and_only_for_planeswalkers():
     assert scen(False, 0) == 5          # al jugador: Onakke no cobra nada
     assert scen(True, 10) == 5          # al planeswalker: {2} por criatura (dos Onakke)
     assert scen(True, 5) == 2           # con 5 maná solo pagan 2 criaturas
+
+
+def test_planeswalker_auras_target_planeswalkers():
+    """Auras 'Enchant planeswalker' (Talents) van a tu planeswalker y le dan su habilidad;
+    las de bloqueo ('… activated abilities can't be activated') anulan la lealtad rival."""
+    talent = cardsdb.build_card_from_data({
+        "name": "Elspeth's Talent", "mana_cost": "{2}{W}{W}", "type_line": "Enchantment — Aura",
+        "oracle_text": "Enchant planeswalker\nEnchanted planeswalker has \"[+1]: Create three 1/1 white Soldier "
+        "creature tokens.\"\nWhenever you activate a loyalty ability of enchanted planeswalker, creatures you control "
+        "get +2/+2 and gain vigilance until end of turn."})
+    binding = cardsdb.build_card_from_data({
+        "name": "Nahiri's Binding", "mana_cost": "{1}{W}{W}", "type_line": "Enchantment — Aura",
+        "oracle_text": "Enchant creature or planeswalker\nEnchanted permanent can't attack or block, and its "
+        "activated abilities can't be activated."})
+    g, me, ops = _g()
+    mine = put(g, _mk("Elspeth, Sun's Champion"), me)
+    theirs = put(g, _mk("Elspeth, Sun's Champion"), ops[0])
+    put(g, creature("Bear", "1G", 2, 2), me)
+    run(g)
+    au = put(g, talent, me)
+    run(g)
+    assert au.enchanting is mine and len(mine.loyalty_abils()[0]) == 4
+    assert g.activate_loyalty(mine, 3)
+    run(g)
+    assert sum(1 for p in me.battlefield if p.name == "Soldier") == 3
+    assert all(p.power >= 3 and p.has("vigilance") for p in me.creatures())
+    b = put(g, binding, me)
+    run(g)
+    assert b.enchanting is theirs and not g.activate_loyalty(theirs, 0)

@@ -1560,6 +1560,9 @@ class InteractiveGame:
                     if not self._has_legal_target(c, tgts):
                         entry["castable"] = False
                         entry["reason"] = "Sin objetivos legales"
+                    elif not self.g.aura_has_host(p, c):
+                        entry["castable"] = False
+                        entry["reason"] = "No hay a qué anexarla"
                     casts.append(entry)
                 # Suspend: opción extra para suspender (se lanza gratis en N turnos).
                 sus = getattr(c, "suspend", None)
@@ -1729,15 +1732,14 @@ class InteractiveGame:
                                           "power": pm.power, "toughness": pm.toughness,
                                           "keywords": sorted(pm.keywords)})
             for pm in p.battlefield:
-                if ("planeswalker" in pm.card.types and not pm.activated_this_turn
-                        and pm.card.loyalty_abilities):
-                    texts = pm.card.loyalty_texts or ()
+                _la, texts = pm.loyalty_abils() if "planeswalker" in pm.card.types else ((), ())
+                if (_la and not pm.activated_this_turn and not pm.aura_flag("aura_no_activate")):
                     activatables.append({
                         "uid": pm.uid, "name": pm.name,
                         "loyalty": pm.counters.get("loyalty", 0),
                         "abilities": [{"i": i, "cost": cost,
                                        "text": texts[i] if i < len(texts) else ""}
-                                      for i, (cost, _e) in enumerate(pm.card.loyalty_abilities)],
+                                      for i, (cost, _e) in enumerate(_la)],
                     })
         # habilidades activadas con maná (creaturas/permanentes/tierras)
         abilities = []

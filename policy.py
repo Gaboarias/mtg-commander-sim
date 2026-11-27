@@ -876,7 +876,7 @@ class Policy:
 
     def _castable_spells(self, game, me):
         return [c for c in list(me.hand)
-                if not c.is_land() and c.cost is not None]
+                if not c.is_land() and c.cost is not None and game.aura_has_host(me, c)]
 
     def choose_targets(self, game, me, card):
         prev = getattr(game, "_targeting_src", None)
@@ -929,8 +929,8 @@ class Policy:
         for perm in list(me.battlefield):
             if "planeswalker" not in perm.card.types or perm.activated_this_turn:
                 continue
-            abils = perm.card.loyalty_abilities
-            if not abils:
+            abils = perm.loyalty_abils()[0]
+            if not abils or perm.aura_flag("aura_no_activate"):
                 continue
             idx = self._pick_loyalty(game, me, perm)
             if idx is not None:
@@ -941,8 +941,8 @@ class Policy:
         hay una amenaza que la justifique; si el planeswalker está en peligro, la de
         +; si no, la + con efecto. Nunca una habilidad que el motor no simula (salvo
         que sea la única forma de subir lealtad)."""
-        abils = perm.card.loyalty_abilities
-        texts = list(getattr(perm.card, "loyalty_texts", ()) or ())
+        abils, texts = perm.loyalty_abils()
+        texts = list(texts)
         loy = perm.counters.get("loyalty", 0)
         opps = [o for o in game.opponents(me) if not o.lost]
         threats = [pm for o in opps for pm in o.battlefield

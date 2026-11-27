@@ -483,8 +483,13 @@ class Permanent:
         return any(getattr(src, "enchanting", None) is self and getattr(src.card, "aura_moon", False)
                    for pl in g.players for src in pl.battlefield)
 
+    def _clued(self) -> bool:
+        """In Too Deep: el permanente encantado es una Clue artefacto (no criatura ni PW)."""
+        g = self.game
+        return bool(g is not None and getattr(g, "_any_aura_ntc", False) and self.aura_flag("aura_not_creature"))
+
     def is_creature(self) -> bool:
-        if self._mooned():
+        if self._mooned() or self._clued():
             return False
         dv = getattr(self.card, "devotion_req", None)
         if dv and self.controller is not None and self.controller.devotion(dv[0]) < dv[1]:
@@ -580,6 +585,25 @@ class Permanent:
                 if t and not pm.abilities_off():
                     q.add(t)
         return q
+
+    def loyalty_abils(self):
+        """Habilidades de lealtad de este permanente: las propias + las que le dan
+        las auras anexadas (Talents: 'Enchanted planeswalker has "[+1]: …"').
+        Devuelve (((coste, efecto), ...), (texto, ...)). Si perdió sus habilidades
+        o un aura le prohíbe activarlas, no tiene ninguna usable."""
+        if self.abilities_off() or self.aura_flag("aura_abilities_off"):
+            return (), ()
+        abil = list(self.card.loyalty_abilities or ())
+        texts = list(self.card.loyalty_texts or ())
+        texts += [""] * (len(abil) - len(texts))
+        if self.game is not None:
+            for pl in self.game.players:
+                for src in pl.battlefield:
+                    if getattr(src, "enchanting", None) is self:
+                        for cost, eff, txt in (getattr(src.card, "aura_grant_loyalty", None) or ()):
+                            abil.append((cost, eff))
+                            texts.append(txt)
+        return tuple(abil), tuple(texts)
 
     def aura_flag(self, flag: str) -> bool:
         """¿Algún aura anexada a este permanente tiene `flag`? (Pacifism, Claustrophobia…)"""
@@ -1632,8 +1656,8 @@ class Game:
         pw = "planeswalker" in pm.card.types
         loy_abils = []
         if pw:
-            texts = pm.card.loyalty_texts or ()
-            for i, (cost, _eff) in enumerate(pm.card.loyalty_abilities or ()):
+            _la, texts = pm.loyalty_abils()
+            for i, (cost, _eff) in enumerate(_la):
                 loy_abils.append({"i": i, "cost": cost,
                                   "text": texts[i] if i < len(texts) else ""})
         return {
@@ -3565,6 +3589,9 @@ class Game:
             if "planeswalker" in target.card.types:
                 # el dano a un planeswalker le quita lealtad (P2.3)
                 target.counters["loyalty"] = target.counters.get("loyalty", 0) - amount
+                if src_perm and source.is_creature() and target.aura_flag("aura_pw_dmg_destroy"):
+                    self.log(f"{source.name} se destruye por hacerle daño a {target.name}")
+                    self.destroy(source, "Liliana's Talent")
                 if self.temp_triggers and src_perm and combat:
                     self.emit("tmp_cdmg_pw", source=source, planeswalker=target, amount=amount)
             elif src_perm and (source.has("infect") or source.has("wither")) or (
@@ -3632,6 +3659,22 @@ class Game:
         p.command.append(cmd)
         self.log(f"{cmd.name} vuelve a la zona de mando")
         return True
+
+    def aura_has_host(self, player, card) -> bool:
+        """¿Hay un permanente al que este Aura se pueda anexar? (para no lanzarla al vacío)."""
+        kinds = getattr(card, "aura_enchant_kinds", None)
+        if "aura" not in (card.tags or set()) or not kinds:
+            return True
+        own = getattr(card, "aura_enchant_own", False)
+        for pl in self.players:
+            if own and pl is not player:
+                continue
+            for pm in pl.battlefield:
+                if any((k == "creature" and pm.is_creature()) or (k in pm.card.types)
+                       or (k not in ("creature", "artifact", "land", "planeswalker", "enchantment")
+                           and pm.has_subtype(k.capitalize())) for k in kinds):
+                    return True
+        return False
 
     def sector_of(self, pm):
         """Sector (0 α, 1 β, 2 γ) de una criatura bajo Space Beleren; None si no tiene."""
@@ -4962,10 +5005,13 @@ class Game:
             perm.activated_this_turn = False
         if perm.activated_this_turn or "planeswalker" not in perm.card.types:
             return False
-        abilities = perm.card.loyalty_abilities
+        if perm.aura_flag("aura_no_activate"):
+            return False                     # "its activated abilities can't be activated" (Nahiri's Binding…)
+        abilities = perm.loyalty_abils()[0]
         if not abilities or not (0 <= index < len(abilities)):
             return False
         cost, eff = abilities[index]
+        perm._last_loy_eff = eff             # Rowan's Talent: "copy that ability"
         loy = perm.counters.get("loyalty", 0)
         if cost < 0 and loy + cost < 0:
             return False

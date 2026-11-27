@@ -5390,8 +5390,13 @@ def _wire_aura(card, oracle):
                          r"treefolk|bird)", t)
     if mset:
         card.aura_pt_set = (int(mset.group(1)), int(mset.group(2)))
+    # In Too Deep: "enchanted permanent is a colorless Clue artifact … and loses all other
+    # abilities (it's no longer a creature or planeswalker)": deja de ser criatura/planeswalker
+    if re.search(r"enchanted permanent is a colorless clue artifact", t):
+        card.aura_not_creature = True
+        ab_off = True
     # "is a land / isn't a creature": lo neutraliza (0/0 y sin habilidades)
-    if re.search(r"is a[n]? [\w ]*land\b", t) or "isn't a creature" in t or \
+    elif re.search(r"is a[n]? [\w ]*land\b", t) or "isn't a creature" in t or \
        "is no longer a creature" in t:
         card.aura_pt_set = card.aura_pt_set or (0, 0)
         ab_off = True
@@ -5435,7 +5440,7 @@ def _wire_aura(card, oracle):
         ab_off = ab_off or False
         bad = True
         card.tags = card.tags | {"removal"}
-    if ab_off or card.aura_pt_set:
+    if ab_off or card.aura_pt_set or getattr(card, "aura_not_creature", False):
         bad = True                     # es removal: se anexa a criatura rival
         card.tags = card.tags | {"removal"}   # la IA la valora y la juega como tal
 
@@ -5446,8 +5451,68 @@ def _wire_aura(card, oracle):
     _TK = r"(?:artifact|creature|land|planeswalker|enchantment)"
     _mk = re.search(r"enchant (" + _TK + r"(?:, " + _TK + r")*,? or " + _TK + r")\b", t)
     _kinds = tuple(re.findall(_TK, _mk.group(1))) if _mk else ()
+    # la línea "Enchant …" completa: "enchant planeswalker" sola (Talents), "creature,
+    # planeswalker, or Clue" (In Too Deep), "… you control" (Kaya's Ghostform)
+    _ml = re.search(r"(?m)^enchant ([a-z ,]+?)\s*$", (oracle or "").lower())
+    if _ml and not _kinds:
+        _line = _ml.group(1)
+        _kinds = tuple(k for k in re.findall(r"artifact|creature|land|planeswalker|enchantment|clue", _line))
+        if _kinds == ("creature",) or _kinds == ("land",) or _kinds == ("artifact",):
+            _kinds = ()                    # los casos simples ya los maneja el código de abajo
+    elif _ml and "clue" in _ml.group(1):
+        _kinds = tuple(_kinds) + ("clue",)
+    if _ml and _ml.group(1).endswith("you control"):
+        card.aura_enchant_own = True
     if _kinds:
         card.aura_enchant_kinds = _kinds   # "enchant creature, land, or planeswalker"
+
+    # Talents: "Enchanted planeswalker has "[+1]: …"" (habilidad de lealtad otorgada)
+    _grants = []
+    for _gl in (oracle or "").splitlines():
+        _mg = re.match(r'(?i)enchanted planeswalker has ["“]\[([+−\-]?\d+)\]: (.+?)["”]\s*$', _gl.strip())
+        if _mg:
+            _gt = _mg.group(2).replace("'", '"') if "emblem with '" in _mg.group(2) else _mg.group(2)
+            _grants.append((int(_mg.group(1).replace("−", "-")), _loyalty_effect(_gt, card.name), _mg.group(2)))
+    if _grants:
+        card.aura_grant_loyalty = _grants
+    # disparos de los Talents sobre el planeswalker encantado
+    _trs = dict(card.triggers or {})
+    _mt = re.search(r"whenever you activate a loyalty ability of enchanted planeswalker, (.+?)(?:\n|$)", t)
+    if _mt:
+        _body = _mt.group(1).strip()
+        if _body.startswith("copy that ability"):
+            def _tal_copy(g, perm, subject=None, **kw):
+                host = getattr(perm, "enchanting", None)
+                eff = getattr(host, "_last_loy_eff", None) if host is not None else None
+                if host is not None and subject is host and eff is not None:
+                    g.log(f"{perm.name} copia la habilidad de {host.name}")
+                    eff(g, host.controller, host)
+            _trs["loyalty_act"] = _tal_copy
+        else:
+            _te = _effect_any(_body)
+            if _te is not None:
+                def _tal_eff(g, perm, subject=None, _e=_te, **kw):
+                    host = getattr(perm, "enchanting", None)
+                    if host is not None and subject is host:
+                        _e(g, perm.controller, perm)
+                _trs["loyalty_act"] = _tal_eff
+    if re.search(r"whenever a creature deals damage to enchanted planeswalker, destroy that creature", t):
+        card.aura_pw_dmg_destroy = True
+    if re.search(r"whenever you draw a card, put a loyalty counter on enchanted planeswalker", t):
+        def _tal_draw(g, perm, **kw):
+            host = getattr(perm, "enchanting", None)
+            if host is not None and host in host.controller.battlefield:
+                g.add_counters(host, "loyalty", 1)
+        _trs["draw"] = _tal_draw
+    if re.search(r"whenever a nontoken creature you control enters, put a loyalty counter on enchanted planeswalker", t):
+        def _tal_enter(g, perm, entered=None, **kw):
+            host = getattr(perm, "enchanting", None)
+            if host is not None and entered is not None and not entered.is_token \
+                    and entered.controller is perm.controller and host in host.controller.battlefield:
+                g.add_counters(host, "loyalty", 1)
+        _trs["creature_enters"] = _tal_enter
+    if _trs:
+        card.triggers = _trs
 
     def _attach(game, ctrl, perm, _bad=bad, _ls=_land_sub, _then=None, _ea=_enc_art, _kd=_kinds):
         if _ls is not None:                       # aura de TIERRA (Wild Growth, Utopia Sprawl)
@@ -5489,7 +5554,8 @@ def _wire_aura(card, oracle):
             scope = ([x for o in game.opponents(ctrl) for x in o.battlefield] if _bad
                      else [x for x in ctrl.battlefield if x is not perm])
             extra = [pm for pm in scope if not pm.is_creature() and any(
-                k in pm.card.types for k in _kd if k != "creature") and (not _bad or game.can_target(ctrl, pm))]
+                (k in pm.card.types) or (k == "clue" and pm.has_subtype("Clue")) for k in _kd if k != "creature")
+                and (not _bad or game.can_target(ctrl, pm))]
             pool = (pool if "creature" in _kd else []) + extra
         if not pool:
             if _then is not None:
@@ -5507,6 +5573,8 @@ def _wire_aura(card, oracle):
             _perm.enchanting = host
             game.log(f"{ctrl.name}: {_perm.name} se anexa a {host.name}")
             _grant_to_host(game, _perm, host)
+            if getattr(_perm.card, "aura_not_creature", False):
+                game._any_aura_ntc = True          # In Too Deep: el huésped deja de ser criatura/PW
             if getattr(_perm.card, "aura_tap_etb", False):
                 host.tapped = True
             if getattr(_perm.card, "aura_control", False) and host.controller is not ctrl:
@@ -5522,7 +5590,8 @@ def _wire_aura(card, oracle):
                 _then()
         if ctrl is getattr(game, "interactive_human", None) and len(pool) > 1:
             perm._awaiting_host = True
-        _choose_tgt(game, ctrl, pool, f"{perm.name}: elegí a qué criatura anexarla", _host)
+        _what = "criatura" if not (_kd and set(_kd) - {"creature"}) else "permanente"
+        _choose_tgt(game, ctrl, pool, f"{perm.name}: elegí a qué {_what} anexarla", _host)
 
     # el ETB propio del Aura (scry, robar, incubate…) se ejecuta tras anexarse
     _aura_body, _ = _self_etb_body(oracle, card.name)
