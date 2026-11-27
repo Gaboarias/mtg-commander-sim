@@ -2030,11 +2030,15 @@ class InteractiveGame:
             "vs_pw": (getattr(a.attacking, "name", None)
                       if hasattr(a.attacking, "card") else None),
             "flying": a.has("flying"),   # solo bloqueable con volar/alcance
+            "sector": self.g.sector_of(a),
         } for a in incoming]
         blockers = [{
             "uid": pm.uid, "name": pm.name, "power": pm.power, "toughness": pm.toughness,
             "can_block_flyers": pm.has("flying") or pm.has("reach"),
-        } for pm in me.creatures() if not pm.tapped]
+            # a qué atacantes puede bloquear de verdad (vuelo, evasiones, sectores…)
+            "can_block": [a.uid for a in incoming if self.g.can_block_pair(a, pm)],
+            "sector": self.g.sector_of(pm),
+        } for pm in me.creatures() if pm.can_block_now()]
         responses = [{
             "i": i, "name": c.name, "cost": _cost_str(c),
             "target_spec": getattr(c, "target_spec", None),

@@ -82,14 +82,14 @@ type Inspect = {
 };
 type FaceUpOpt = { uid: number; name: string; cost: string; playable: boolean };
 type NinjaOpt = { i: number; zone: string; name: string; cost: string; attackers: { uid: number; name: string; power: number; toughness: number }[] };
-type CombatAtk = { uid: number; name: string; power: number; toughness: number; commander?: boolean; from: string; vs_pw?: string | null; flying?: boolean; blocked_by?: { uid: number; name: string; power: number; toughness: number }[] };
+type CombatAtk = { uid: number; name: string; power: number; toughness: number; commander?: boolean; from: string; vs_pw?: string | null; flying?: boolean; sector?: number | null; blocked_by?: { uid: number; name: string; power: number; toughness: number }[] };
 type Combat = {
   stage?: "declare" | "damage";
   attacking?: boolean;
   can_finish?: boolean;
   from: string; incoming_damage?: number;
   attackers: CombatAtk[];
-  blockers?: { uid: number; name: string; power: number; toughness: number; can_block_flyers?: boolean }[];
+  blockers?: { uid: number; name: string; power: number; toughness: number; can_block_flyers?: boolean; can_block?: number[]; sector?: number | null }[];
   responses: { i: number; name: string; cost: string; target_spec?: string | null; target_count?: number; targets?: TargetOpt[]; modes?: ModeOpt[]; mode_pick?: number }[];
   abilities?: { uid: number; name: string; index: number; label: string; cost: string; target_spec?: string | null }[];
   gy_abilities?: { i: number; index: number; name: string; label: string; cost: string }[];
@@ -982,7 +982,7 @@ export default function Play() {
                   <span className="act-label">Tus bloqueadores:</span>
                   {(state.combat.blockers ?? []).map((b) => (
                     <div key={b.uid} className="blk-row">
-                      <span>{b.name} <b>{b.power}/{b.toughness}</b>{b.can_block_flyers ? <span className="muted"> · puede bloquear voladores</span> : null}</span>
+                      <span>{b.sector != null ? <span className={`sector-chip s${b.sector}`} title="sector (Space Beleren)">{"αβγ"[b.sector]}</span> : null}{b.name} <b>{b.power}/{b.toughness}</b>{b.can_block_flyers ? <span className="muted"> · puede bloquear voladores</span> : null}{b.can_block && b.can_block.length === 0 ? <span className="muted"> · no puede bloquear a ninguno</span> : null}</span>
                       <select value={assign[b.uid] ?? ""}
                         onChange={(e) => setAssign((m) => {
                           const v = e.target.value;
@@ -993,9 +993,10 @@ export default function Play() {
                         style={{ background: "var(--panel-2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 8px" }}>
                         <option value="">No bloquea</option>
                         {state.combat!.attackers
-                          .filter((a) => b.can_block_flyers || !a.flying)   // sin volar/alcance no puede bloquear voladores
+                          // solo atacantes que puede bloquear de verdad (vuelo, evasiones, sectores…)
+                          .filter((a) => b.can_block ? b.can_block.includes(a.uid) : (b.can_block_flyers || !a.flying))
                           .map((a) => (
-                          <option key={a.uid} value={a.uid}>bloquea a {a.name} ({a.power}/{a.toughness}){a.flying ? " ✦vuela" : ""}</option>
+                          <option key={a.uid} value={a.uid}>bloquea a {a.name} ({a.power}/{a.toughness}){a.flying ? " ✦vuela" : ""}{a.sector != null ? ` · sector ${"αβγ"[a.sector]}` : ""}</option>
                         ))}
                       </select>
                     </div>

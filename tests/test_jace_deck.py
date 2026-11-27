@@ -782,3 +782,17 @@ def test_stream_of_life_bot_gains_itself():
     l0, o0 = me.life, ops[0].life
     sol.on_cast_resolve(g, me, None)
     assert me.life == l0 + 5 and ops[0].life == o0
+
+
+def test_space_beleren_block_only_same_sector():
+    from test_parser_corpus import new_game
+    g, me, ops = new_game()
+    g.active_index = 0
+    a = put(g, creature("Atk", "2", 3, 3), ops[0])
+    b1 = put(g, creature("Same", "2", 2, 2), me)
+    b2 = put(g, creature("Other", "2", 2, 2), me)
+    run(g)
+    a._sector, b1._sector, b2._sector = 1, 1, 2
+    assert g.can_block_pair(a, b1) and g.can_block_pair(a, b2)
+    g._sector_block_turn = g.turn
+    assert g.can_block_pair(a, b1) and not g.can_block_pair(a, b2)

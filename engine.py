@@ -483,6 +483,13 @@ class Permanent:
         return any(getattr(src, "enchanting", None) is self and getattr(src.card, "aura_moon", False)
                    for pl in g.players for src in pl.battlefield)
 
+    def can_block_now(self) -> bool:
+        """¿Puede bloquear este combate? (enderezada, criatura, sin 'can't block')."""
+        g = self.game
+        return (self.is_creature() and not self.tapped and not self.cant_block
+                and not (g is not None and getattr(self, "_no_block_turn", None) == g.turn)
+                and getattr(self, "_pacify_by", None) is None)
+
     def is_planeswalker(self) -> bool:
         """¿Es planeswalker AHORA? (In Too Deep lo convierte en una Clue: deja de serlo)."""
         return "planeswalker" in self.card.types and not self._clued()
@@ -3694,6 +3701,7 @@ class Game:
             if getattr(self, "_had_sectors", False):      # Space Beleren se fue: ya no hay sectores
                 self._had_sectors = False
                 for pl in self.players:
+                    pl.__dict__.pop("_sector_auto", None)
                     for pm in pl.battlefield:
                         pm._sector = None
                         pm._sector_pending = False
@@ -3703,19 +3711,33 @@ class Game:
         order = [pl for pl in self.players if pl is not owner and not pl.lost] + [owner]
         hu = getattr(self, "interactive_human", None)
         for pl in order:
+            if pl is hu and any(getattr(x, "_sector_pending", False) for x in pl.battlefield):
+                continue                         # de a una: ya hay una pregunta abierta
             for pm in pl.battlefield:
                 if not pm.is_creature() or getattr(pm, "_sector", None) is not None or getattr(pm, "_sector_pending", False):
                     continue
-                if pl is hu:
+                if pl is hu and any(getattr(x, "_sector_pending", False) for x in pl.battlefield):
+                    break
+                if pl is hu and not pl.__dict__.get("_sector_auto"):
                     pm._sector_pending = True
                     import cardsdb as _cdb
 
-                    def _ap(sec, _pm=pm):
-                        _pm._sector = sec
+                    def _ap(sec, _pm=pm, _pl=pl):
                         _pm._sector_pending = False
+                        if sec == "auto":            # "repartir parejo": esta y las que vengan
+                            _pl.__dict__["_sector_auto"] = True
+                            counts = [sum(1 for x in _pl.battlefield if getattr(x, "_sector", None) == k) for k in range(3)]
+                            sec = counts.index(min(counts))
+                        _pm._sector = sec
                         self.log(f"{_pm.name} va al sector {_cdb.SECTOR_NAMES[sec]}")
+                        self._assign_sectors()
+                    _opts = []
+                    for k, n in enumerate(_cdb.SECTOR_NAMES):
+                        here = [x.name for x in pl.battlefield if getattr(x, "_sector", None) == k]
+                        _opts.append((f"{n} — tuyas ahí: {', '.join(here) or 'ninguna'}", k))
+                    _opts.append(("Repartir parejo (esta y las que vengan)", "auto"))
                     _cdb._human_target_choice(self, pl, "sector", f"Space Beleren: ¿a qué sector va {pm.name}?",
-                                              [(n, k) for k, n in enumerate(_cdb.SECTOR_NAMES)], _ap)
+                                              _opts, _ap)
                 else:
                     counts = [sum(1 for x in pl.battlefield if getattr(x, "_sector", None) == k) for k in range(3)]
                     pm._sector = counts.index(min(counts))
@@ -7743,10 +7765,22 @@ class Game:
             return sum(1 for pl in self.players for x in pl.battlefield if x.attacking is not None)
         return getattr(perm.card, "bushido", 0) or 0
 
+    def can_block_pair(self, attacker, blocker) -> bool:
+        """¿`blocker` puede bloquear a `attacker`? (vuelo/alcance, imbloqueable,
+        evasiones, protección, sectores de Space Beleren)."""
+        if not blocker.can_block_now() or attacker.has("unblockable"):
+            return False
+        if attacker.has("flying") and not (blocker.has("flying") or blocker.has("reach")):
+            return False
+        return self._can_block_evasion(attacker, blocker)
+
     def _can_block_evasion(self, attacker, blocker) -> bool:
         """Reglas de evasión no-vuelo: fear, intimidate, shadow, horsemanship, skulk."""
         if prot_matches(attacker.protections(), blocker):
             return False             # protección (DEBT: bloqueo)
+        if getattr(self, "_sector_block_turn", None) == self.turn and \
+                self.sector_of(attacker) != self.sector_of(blocker):
+            return False             # Space Beleren +1: solo la bloquea alguien de su mismo sector
         if getattr(attacker, "_evade_haste_turn", None) == self.turn and not blocker.has("haste"):
             return False             # Gingerbrute: solo la bloquean criaturas con prisa
         b_art = "artifact" in blocker.card.types

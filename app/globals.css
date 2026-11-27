@@ -1630,3 +1630,6 @@ h3 svg { color: currentColor; }
 .cardmini .cm-badge.sector.s1 { background: #d9822b; }
 .cardmini .cm-badge.sector.s2 { background: #8e44ad; }
 .cardmini .cm-badge.sector { text-transform: none; letter-spacing: 0; }
+.sector-chip { display: inline-grid; place-items: center; width: 16px; height: 16px; margin-right: 5px; border-radius: 999px;
+  font-size: .68rem; font-weight: 800; color: #fff; vertical-align: middle; }
+.sector-chip.s0 { background: #2f7de1; } .sector-chip.s1 { background: #d9822b; } .sector-chip.s2 { background: #8e44ad; }
