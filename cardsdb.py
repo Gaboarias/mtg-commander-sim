@@ -23653,6 +23653,13 @@ def _build_card_from_data_impl(data: dict) -> Card:
             card.adventure = {"cost": adv_cost, "effect": aeff, "label": adv.get("name", "Aventura"),
                               "target_spec": aspec, "target_count": acount}
 
+    # Onakke Oathkeeper: "Creatures can't attack planeswalkers you control unless their
+    # controller pays {N} for each creature they control that's attacking a planeswalker you control"
+    _mpwt = re.search(r"creatures can't attack planeswalkers you control unless their controller pays "
+                      r"\{(\d+)\} for each", _lt)
+    if _mpwt:
+        card.attack_tax_pw = int(_mpwt.group(1))
+
     # Space sculptor (Space Beleren): mientras esté en juego, el campo se divide en sectores
     if re.search(r"\bspace sculptor\b", _lt):
         card.space_sculptor = True

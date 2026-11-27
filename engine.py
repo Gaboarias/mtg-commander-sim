@@ -7345,6 +7345,11 @@ class Game:
         for perm, defender in attackers:
             dpl = defender if isinstance(defender, Player) else getattr(defender, "controller", None)
             tax = self.attack_tax(dpl) if dpl is not None else 0
+            if dpl is not None and isinstance(defender, Permanent):
+                # Onakke Oathkeeper (y sus copias): {N} por criatura que ataca a un
+                # planeswalker de ese jugador; cada copia suma su propio impuesto
+                tax += sum(getattr(x.card, "attack_tax_pw", 0) or 0 for x in dpl.battlefield
+                           if not x.abilities_off())
             _lt = dpl.__dict__.get("_attack_life_tax", 0) if dpl is not None else 0
             if _lt:                                   # Sivitri +1: pagar 2 de vida por criatura
                 if p.life <= _lt:

@@ -696,3 +696,28 @@ def test_space_beleren_sectors_assigned_and_sweep():
     g.activate_loyalty(pb, 2)
     run(g)
     assert len(ops[0].creatures()) == 2
+
+
+def test_onakke_oathkeeper_tax_stacks_and_only_for_planeswalkers():
+    from engine import C
+    import cards as _cards
+    onk = {"name": "Onakke Oathkeeper", "mana_cost": "{1}{W}", "type_line": "Creature — Ogre Spirit", "power": "1",
+           "toughness": "1", "oracle_text": "Creatures can't attack planeswalkers you control unless their controller "
+           "pays {1} for each creature they control that's attacking a planeswalker you control."}
+
+    def scen(at_pw, lands):
+        g, me, ops = _g()
+        on = put(g, cardsdb.build_card_from_data(onk), ops[0])
+        run(g)
+        _cards.make_copy_token(g, ops[0], on.card)
+        pw = put(g, _mk("Elspeth, Sun's Champion"), ops[0])
+        run(g)
+        give_lands(g, me, lands, colors=(C,))
+        atk = [put(g, creature(f"A{i}", "1", 2, 2), me) for i in range(5)]
+        run(g)
+        for x in atk:
+            x.summoning_sick = False
+        return len(g._declare_attackers(me, [(x, pw if at_pw else ops[0]) for x in atk]))
+    assert scen(False, 0) == 5          # al jugador: Onakke no cobra nada
+    assert scen(True, 10) == 5          # al planeswalker: {2} por criatura (dos Onakke)
+    assert scen(True, 5) == 2           # con 5 maná solo pagan 2 criaturas
