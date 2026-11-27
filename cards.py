@@ -182,6 +182,8 @@ def make_resource_token(game, player, kind, _extra=True):
         produces=produces,
     )
     tok.activated_abilities = _resource_abilities(k)
+    if k in ("treasure", "gold"):
+        tok.sac_on_mana = True          # "{T}, Sacrifice this artifact: Add one mana…": se va al usarla
     last = None
     extra = sum(1 for pm in player.battlefield if k in (getattr(pm.card, "res_plus", None) or ())) if _extra else 0
     for _ in range(game.token_multiplier(player) + extra):     # dobladores de fichas (+ "an additional Treasure")

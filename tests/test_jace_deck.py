@@ -600,3 +600,53 @@ def test_loyalty_lock_until_next_turn_and_extra_turns():
     g.activate_loyalty(pt, 0)
     run(g)
     assert g.extra_turns == [me, me]
+
+
+def test_all_loyalty_abilities_have_effects_sample():
+    """Muestra de las habilidades de lealtad agregadas una por una."""
+    from engine import Cost
+    import cards as _cards
+    # Treasure / Black Lotus se sacrifican al dar maná; una fuente de 3 paga {R}{R}{R}
+    g, me, _ = _g()
+    _cards.make_resource_token(g, me, "treasure")
+    me.pay(Cost(1, ()))
+    assert not any(p.name == "Treasure" for p in me.battlefield)
+    lotus = cardsdb._mana_rock_token
+    g, me, _ = _g()
+    lotus(g, me, "Black Lotus", {c: 3 for c in "WUBRG"})
+    assert me.pay(Cost(0, ("R", "R", "R"))) and not any(p.name == "Black Lotus" for p in me.battlefield)
+    # Kaya −2 dobla fichas solo ese turno (antes las doblaba siempre)
+    kaya = cardsdb.build_card_from_data({
+        "name": "Kaya, Geist Hunter", "mana_cost": "{1}{W}{B}", "type_line": "Legendary Planeswalker — Kaya",
+        "loyalty": "3", "oracle_text": "+1: Creatures you control gain deathtouch until end of turn. Put a +1/+1 "
+        "counter on up to one target creature token you control.\n−2: Until end of turn, if one or more tokens would "
+        "be created under your control, twice that many of those tokens are created instead.\n−6: Exile all cards "
+        "from all graveyards, then create a 1/1 white Spirit creature token with flying for each card exiled this way."})
+    g, me, _ = _g()
+    pk = put(g, kaya, me)
+    run(g)
+    assert g.token_multiplier(me) == 1
+    g.activate_loyalty(pk, 1)
+    run(g)
+    assert g.token_multiplier(me) == 2
+    g.turn += 1
+    assert g.token_multiplier(me) == 1
+
+
+def test_jeska_triple_and_ral_skip_turns():
+    jeska = cardsdb.build_card_from_data({
+        "name": "Jeska, Thrice Reborn", "mana_cost": "{2}{R}", "type_line": "Legendary Planeswalker — Jeska",
+        "loyalty": "0", "oracle_text": "0: Choose target creature. Until your next turn, if that creature would deal "
+        "combat damage to one of your opponents, it deals triple that damage to that player instead."})
+    g, me, ops = _g()
+    big = put(g, creature("Big", "3", 4, 4), me)
+    pj = put(g, jeska, me)
+    run(g)
+    g.activate_loyalty(pj, 0)
+    run(g)
+    l0 = ops[0].life
+    g.deal_damage(big, ops[0], 4, combat=True)
+    assert l0 - ops[0].life == 12
+    g, me, ops = _g()
+    ops[0].__dict__["_skip_turns"] = 2
+    assert g.skip_turn_check(ops[0]) and g.skip_turn_check(ops[0]) and not g.skip_turn_check(ops[0])

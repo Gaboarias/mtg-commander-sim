@@ -504,6 +504,8 @@ class Permanent:
         s = sub.lower()
         if s in {x.lower() for x in self.card.subtypes}:
             return True
+        if getattr(self, "_changeling", False) and s not in _NON_CREATURE_SUBS:
+            return True                  # Oko, Lorwyn Liege: "gains all creature types"
         if self.game is not None and getattr(self.game, "_any_eq_sub", False) and any(
                 getattr(x, "enchanting", None) is self and getattr(x.card, "eq_subtype", None) == s
                 for x in self.controller.battlefield):
@@ -638,6 +640,10 @@ class Permanent:
 # --------------------------------------------------------------------------- #
 # Player
 # --------------------------------------------------------------------------- #
+
+_NON_CREATURE_SUBS = {"plains", "island", "swamp", "mountain", "forest", "equipment", "aura", "vehicle",
+                      "treasure", "clue", "food", "saga", "class", "shrine", "curse", "gate", "desert"}
+
 
 class _GYList(list):
     """Cementerio con reemplazos "if a card would be put into a graveyard from
@@ -1114,7 +1120,15 @@ class Player:
         # 1) simbolos de color: el mas restrictivo primero conceptualmente,
         #    resuelto con la fuente MENOS flexible que sirva.
         # los híbridos (más flexibles) después de los pips de un solo color
+        left = {}       # fuente ya usada -> (color, maná que le sobra): Black Lotus paga {R}{R}{R}
         for pip in sorted(cost.pips, key=lambda x: len(pip_colors(x)) if "/" in str(x) else 0):
+            _reuse = next((i for i, (col, amt) in left.items()
+                           if amt > 0 and self._pip_pay(pip, {col: amt})), None)
+            if _reuse is not None:
+                col, amt = left[_reuse]
+                left[_reuse] = (col, amt - 1)
+                generic_pool -= 1
+                continue
             best = None
             best_key = None
             for i, (p, opts) in enumerate(sources):
@@ -1132,6 +1146,8 @@ class Player:
             amt = opts[col]
             plan.append((p, col, amt))
             generic_pool += amt - 1  # 1 paga el pip, el resto va a generico
+            if amt > 1:
+                left[best] = (col, amt - 1)
 
         # 2) generico: primero el sobrante, luego las fuentes que mas produzcan.
         need = cost.generic - generic_pool
@@ -1199,8 +1215,11 @@ class Player:
                 or (self._channel[0] if getattr(self, "_channel", None) else None)
             if _gl is not None:
                 _gl.log(f"{self.name} paga {_life_paid} de vida como parte del coste de maná")
+        _sac_after = []
         for perm, _color, _amt in plan:
             perm.tapped = True
+            if getattr(perm.card, "sac_on_mana", False):
+                _sac_after.append(perm)
         self._last_plan_colors = [c for _p, c, a in plan for _ in range(max(1, a or 1))]
         _gx = next((getattr(p, "game", None) for p, _c, _a in plan if getattr(p, "game", None) is not None), None)
         if _gx is not None:
@@ -1233,6 +1252,10 @@ class Player:
                 if _ench or "becomes_tapped" in (perm.card.triggers or {}):
                     g._push_self_trigger(perm, "becomes_tapped", "se gira")
         self.mana_pool -= use
+        for perm in _sac_after:                 # Treasure / Black Lotus / Etherium Cell: se sacrifican al dar maná
+            _gs = getattr(perm, "game", None)
+            if _gs is not None and perm in self.battlefield:
+                _gs.to_graveyard(perm, "sacrificada por maná")
         return True
 
 
@@ -1362,6 +1385,9 @@ class Game:
         # guarda la carta real en `_real`; si sale del campo vuelve la real.
         self._proxies: list = []
         self.rebound: list = []          # (jugador, carta) a relanzar en su mantenimiento
+        # disparos TEMPORALES de habilidades de lealtad / hechizos ("until end of turn,
+        # whenever …", "until your next turn, whenever …"): dict(event, fn, owner, until)
+        self.temp_triggers: list = []
         self.epic: list = []             # (jugador, carta) épicas: se copian en su mantenimiento
         self.paradigm: list = []         # (jugador, carta) paradigma: copia gratis por turno
         self.phased: list = []           # (permanente, controlador) fuera de fase
@@ -1479,6 +1505,9 @@ class Game:
         de la mano donde está `card`."""
         for pl in self.players:
             if card in pl.hand:
+                _fg = pl.__dict__.get("_flash_grant")
+                if _fg and (card.types & _fg):
+                    return True              # Teferi / Arlinn: "until your next turn … as though they had flash"
                 for pm in pl.battlefield:
                     k = getattr(pm.card, "grant_flash", None)
                     if k and not pm.abilities_off() and (k == "all" or k in card.types):
@@ -1784,6 +1813,19 @@ class Game:
             out.extend(getattr(pl, "emblems", ()) or ())
         return out
 
+    def add_temp_trigger(self, event: str, fn, owner, until: str = "eot", label: str = ""):
+        """Disparo temporal: `fn(game, **kw)` cada vez que se emite `event`, hasta el
+        fin del turno (until='eot') o hasta el próximo turno de `owner` ('next_turn')."""
+        self.temp_triggers.append({"event": event, "fn": fn, "owner": owner, "until": until,
+                                   "turn": self.turn, "label": label})
+
+    def _expire_temp(self, kind: str, player=None):
+        if kind == "eot":
+            self.temp_triggers = [e for e in self.temp_triggers if e["until"] != "eot"]
+        else:
+            self.temp_triggers = [e for e in self.temp_triggers
+                                  if not (e["until"] == "next_turn" and e["owner"] is player)]
+
     def create_emblem(self, player, text: str, source_name: str = ""):
         """'You get an emblem with "<texto>"': crea el emblema en la zona de mando de
         `player`. Sus habilidades se arman con el mismo parser que las cartas."""
@@ -1983,6 +2025,11 @@ class Game:
         disparan permanentes de ese jugador.
         """
         who = kw.get("player")
+        for _e in list(getattr(self, "temp_triggers", ()) or ()):
+            if _e["event"] == event and not _e["owner"].lost:
+                self.stack.append(StackObject(
+                    _e["owner"], (lambda g, _f=_e["fn"], _k=dict(kw): _f(g, **_k)),
+                    source=None, label=f"temp:{_e['label'] or event}", kind="trigger"))
         if event == "death" and getattr(self, "_death_watch", None):
             # disparos retrasados "whenever a creature dies this turn" (Massacre Girl): duran el turno
             self._death_watch = [w for w in self._death_watch if w[0] == self.turn]
@@ -2154,6 +2201,8 @@ class Game:
         for pm in player.battlefield:
             if getattr(pm.card, "token_double", False):
                 mult *= 2
+        if getattr(player, "_tok_double_turn", None) == self.turn:
+            mult *= 2                        # Kaya, Geist Hunter −2 (hasta el fin del turno)
         return mult
 
     def damage_multiplier(self, source) -> int:
@@ -2637,6 +2686,8 @@ class Game:
             _dd = sum(1 for c in player.graveyard if getattr(c, "gy_human_bonus", False))
             if _dd and "human" in {x.lower() for x in card.subtypes}:
                 perm.counters["+1/+1"] = perm.counters.get("+1/+1", 0) + _dd
+            if player.__dict__.get("_enter_counter_until"):     # Arlinn +1: "until your next turn"
+                perm.counters["+1/+1"] = perm.counters.get("+1/+1", 0) + 1
         player.battlefield.append(perm)
         if getattr(card, "prevent_static", None):
             self._prev_static_on = True
@@ -3266,6 +3317,9 @@ class Game:
 
     # -- dano ------------------------------------------------------------- #
     def deal_damage(self, source, target, amount: int, combat: bool = False):
+        _tv = getattr(source, "_triple_vs", None) if combat else None
+        if _tv is not None and isinstance(target, Player) and target in self.opponents(_tv):
+            amount *= 3                              # Jeska, Thrice Reborn: el triple a los rivales
         if amount <= 0:
             return
         # protección (DEBT: daño): de un color/tipo/todo — se previene todo el daño de esa fuente
@@ -3474,6 +3528,8 @@ class Game:
                     o.life -= 3
                 self.log("El Anillo: cada rival pierde 3 vida")
             # disparo "cuando ~ hace daño de combate a un jugador"
+            if combat and src_perm and self.temp_triggers:
+                self.emit("tmp_cdmg_player", source=source, defender=target, amount=amount)
             if combat and src_perm:
                 cb = source.card.triggers.get("combat_damage_to_player")
                 if cb:
@@ -3508,6 +3564,8 @@ class Game:
             if "planeswalker" in target.card.types:
                 # el dano a un planeswalker le quita lealtad (P2.3)
                 target.counters["loyalty"] = target.counters.get("loyalty", 0) - amount
+                if self.temp_triggers and src_perm and combat:
+                    self.emit("tmp_cdmg_pw", source=source, planeswalker=target, amount=amount)
             elif src_perm and (source.has("infect") or source.has("wither")) or (
                     getattr(self, "_any_gwither", False) and any(
                         getattr(pm.card, "global_wither", False) and not pm.abilities_off()
@@ -3816,6 +3874,8 @@ class Game:
         cost = card.cost
         if cost is None:
             return None
+        if getattr(card, "_free_turn", None) == self.turn and getattr(card, "_free_for", None) is player:
+            return Cost(0, ())               # "you may cast it without paying its mana cost" (este turno)
         # surge / spectacle / prowl: coste alternativo si se cumple la condición
         # (solo sobre el coste impreso: no cuando ya se lanza por otro coste)
         card._alt_kind = None
@@ -4344,6 +4404,10 @@ class Game:
                     source=_ph, label=f"cmdr_cast_return:{_ph.name}"))
         else:
             card._cast_from_hand = card in player.hand
+            if card._cast_from_hand and getattr(player, "_rebound_next", None) == self.turn \
+                    and {"instant", "sorcery"} & set(card.types):
+                player._rebound_next = None
+                card._rebound_once = True            # Narset −2: este hechizo gana rebote
             if card in player.hand:
                 player.hand.remove(card)
 
@@ -4517,9 +4581,11 @@ class Game:
                 card._cleaved = False
                 # Rebound: lanzada desde la mano -> al exilio y en tu próximo
                 # mantenimiento se lanza gratis.
-                if (getattr(card, "rebound", False) and getattr(card, "_cast_from_hand", False)
+                if ((getattr(card, "rebound", False) or getattr(card, "_rebound_once", False))
+                        and getattr(card, "_cast_from_hand", False)
                         and not getattr(card, "_exile_after_cast", False)):
                     card._cast_from_hand = False
+                    card._rebound_once = False
                     player.exile.append(card)
                     g.rebound.append((player, card))
                     g.log(f"{card.name} se exilia (rebound): se relanza en el próximo mantenimiento")
@@ -4578,6 +4644,12 @@ class Game:
         # disparos "cuando lanzás un hechizo" DESPUÉS de apilar el hechizo: quedan
         # encima y resuelven antes que él (magecraft, "copiá ese hechizo"...).
         self.emit("cast", player=player, card=card)
+        if getattr(player, "_affinity_next_turn", None) == self.turn:
+            player._affinity_next_turn = None    # la afinidad era solo para el próximo hechizo
+        if getattr(player, "_copy_all_turn", None) == self.turn:     # Jace Reawakened −6
+            _ob2 = next((o for o in reversed(self.stack) if getattr(o, "source", None) is card), None)
+            if _ob2 is not None:
+                self.copy_spell_on_stack(_ob2, controller=player)
         _cn = getattr(player, "_copy_next", None)   # "copy the next instant or sorcery spell you cast this turn"
         if _cn and _cn[0] == self.turn and (not _cn[1] or (_cn[1] == "instant or sorcery" and {"instant", "sorcery"} & card.types)
                                             or _cn[1] in card.types):
@@ -4842,6 +4914,10 @@ class Game:
         """Activa una habilidad de lealtad (P2.3). Una por turno. `index`
         selecciona la habilidad en card.loyalty_abilities = ((coste, efecto),..)
         con coste +N (sube) o -N (baja, exige lealtad suficiente)."""
+        _xa = getattr(perm, "_extra_loy_acts", None)
+        if perm.activated_this_turn and _xa and _xa[0] == self.turn and _xa[1] > 0:
+            perm._extra_loy_acts = (_xa[0], _xa[1] - 1)      # Comet: "two more times this turn"
+            perm.activated_this_turn = False
         if perm.activated_this_turn or "planeswalker" not in perm.card.types:
             return False
         abilities = perm.card.loyalty_abilities
@@ -5364,6 +5440,9 @@ class Game:
         instant_sorcery/artifact."""
         types = getattr(card, "types", set())
         total = 0
+        if getattr(player, "_affinity_next_turn", None) == self.turn:
+            # Saheeli, the Gifted +1: el próximo hechizo tiene afinidad por artefactos
+            total += sum(1 for pm in player.battlefield if "artifact" in pm.card.types)
         for cz in getattr(player, "command", ()) or ():
             _ed = getattr(cz, "spell_discount", None) if getattr(cz, "eminence", False) else None
             if _ed and callable(_ed[1]) and cz is not card and _ed[1](card):
@@ -6952,8 +7031,18 @@ class Game:
     def _phase_step(self, p: "Player"):
         if p.__dict__.pop("_life_lock", None):
             self.log(f"{p.name} ya no tiene protección de todo (Teferi's Reproach)")
-        back = [(pm, c) for pm, c in self.phased if c is p]
-        self.phased = [(pm, c) for pm, c in self.phased if c is not p]
+        def _held(pm):
+            h = getattr(pm, "_phase_hold", None)
+            if not h:
+                return False
+            # "until the end of your next turn": sigue fuera mientras no haya terminado
+            # el siguiente turno de quien lo hizo
+            if getattr(h[0], "_turn_done_after", None) and h[0]._turn_done_after > h[1]:
+                pm._phase_hold = None
+                return False
+            return True
+        back = [(pm, c) for pm, c in self.phased if c is p and not _held(pm)]
+        self.phased = [(pm, c) for pm, c in self.phased if not (c is p and not _held(pm))]
         for pm, c in back:
             pm.controller.battlefield.append(pm)
             pm._phased_now = False
@@ -7184,6 +7273,19 @@ class Game:
         if sum(1 for pm, _d in attackers if pm.can_attack()) <= 1:
             attackers = [(pm, d) for pm, d in attackers
                          if not getattr(pm.card, "attack_not_alone", False)]
+        # Gideon Jura +2: "creatures that player controls attack Gideon if able"
+        _fp = p.__dict__.get("_must_attack_pw")
+        if _fp and _fp[0] in _fp[0].controller.battlefield:
+            attackers = [(pm, _fp[0]) for pm, _d in attackers]
+        # Teyo −2: solo se puede atacar al rival más cercano en la dirección elegida
+        _ad = getattr(self, "_attack_dir", None)
+        if _ad and not _ad[1].lost:
+            _alive = [x for x in self.players if not x.lost]
+            _i = _alive.index(p)
+            _near = _alive[(_i + (1 if _ad[0] == "left" else -1)) % len(_alive)]
+            attackers = [(pm, d) for pm, d in attackers
+                         if (d if isinstance(d, Player) else getattr(d, "controller", None)) is _near]
+
         # "creatures with flying / named X can't attack you" (Sandwurm Convergence, Rite of the
         # Raging Storm): el defensor tiene un permanente que prohíbe a ese atacante
         def _forbid(pm, d):
@@ -7201,6 +7303,13 @@ class Game:
         for perm, defender in attackers:
             dpl = defender if isinstance(defender, Player) else getattr(defender, "controller", None)
             tax = self.attack_tax(dpl) if dpl is not None else 0
+            _lt = dpl.__dict__.get("_attack_life_tax", 0) if dpl is not None else 0
+            if _lt:                                   # Sivitri +1: pagar 2 de vida por criatura
+                if p.life <= _lt:
+                    self.log(f"{p.name} no puede pagar {_lt} de vida para atacar a {dpl.name} con {perm.name}")
+                    continue
+                p.life -= _lt
+                self.log(f"{p.name} paga {_lt} de vida para atacar a {dpl.name} con {perm.name}")
             if tax and not p.pay(Cost(tax, ())):
                 self.log(f"{p.name} no puede pagar el impuesto para atacar con {perm.name}")
                 continue
@@ -7289,6 +7398,8 @@ class Game:
                     p, (lambda g, _cb=cb, _perm=perm, _d=defender:
                         g._run_trigger(_cb, _perm, {"defender": _d}, subject=_perm)),
                     source=perm, label=f"attacks:{perm.name}"))
+            if self.temp_triggers:
+                self.emit("tmp_attack", attacker=perm, defender=defender, attacker_ctrl=p)
             # disparos "whenever EQUIPPED creature attacks": viven en el equipo/aura
             # anexado al atacante, no en la criatura. Se disparan con el equipo.
             for src in self.all_permanents():
@@ -7502,6 +7613,10 @@ class Game:
                 continue
             if getattr(blocker, "_no_block_turn", None) == self.turn or getattr(blocker, "_pacify_by", None) is not None:
                 continue                 # "can't block this turn" (Stoneshock Giant)
+            if getattr(self, "_sector_block_turn", None) == self.turn and \
+                    (getattr(attacker, "_sector", None) if getattr(attacker, "_sector", None) is not None else attacker.uid % 3) != \
+                    (getattr(blocker, "_sector", None) if getattr(blocker, "_sector", None) is not None else blocker.uid % 3):
+                continue                 # Space Beleren +1: solo bloquea alguien del mismo sector
             if len(blocker.blocking) >= 1 + (getattr(blocker.card, "extra_blocks", 0) or 0):
                 continue                 # ya bloquea todo lo que puede
             if blocker.cant_block:              # "can't block" (propia o este turno)
@@ -7809,7 +7924,7 @@ class Game:
                 if not a.blocked_by or a.has("trample"):
                     self.deal_damage(a, a.attacking, self.combat_power(a), combat=True)
                 continue
-            if getattr(a.card, "unblocked_damage", False) and isinstance(a.attacking, Player):
+            if (getattr(a.card, "unblocked_damage", False) or a.has("assign_unblocked")) and isinstance(a.attacking, Player):
                 self.deal_damage(a, a.attacking, self.combat_power(a), combat=True)
                 continue                 # Thorn Elemental: asigna como si no la bloquearan
             dt = a.has("deathtouch")
@@ -7872,6 +7987,25 @@ class Game:
             for _pm in _pl.battlefield:
                 if getattr(_pm, "_pacify_by", None) is p:
                     _pm._pacify_by = None
+                if getattr(_pm, "_until_next", None) is p:
+                    _rv = getattr(_pm, "_until_next_revert", None)
+                    _pm._until_next = None
+                    if _rv:
+                        _pm._until_next_revert = None
+                        _rv(self, _pm)
+        self._expire_temp("next_turn", p)
+        p.__dict__.pop("_flash_grant", None)
+        p.__dict__.pop("_enter_counter_until", None)
+        p.__dict__.pop("_attack_life_tax", None)
+        if getattr(self, "_attack_dir", None) and self._attack_dir[1] is p:
+            self._attack_dir = None
+        if p.__dict__.pop("_force_attack_next", None):          # Rowan Kenrith +2
+            for _pm in p.battlefield:
+                if _pm.is_creature():
+                    _pm.must_attack = True
+        for _pm in p.battlefield:                                # Nahiri +1: "attacks each combat"
+            if getattr(_pm, "_must_attack_until", None) is not None:
+                _pm.must_attack = True
         # UNTAP (antes: phasing — lo que estaba fuera de fase entra, y lo que
         # tiene phasing sale)
         self._phase_step(p)
@@ -8068,6 +8202,9 @@ class Game:
         # TODOS los permanentes a la vez (antes el daño solo del jugador activo: un
         # bloqueador rival seguía dañado en el turno siguiente, y uno potenciado
         # moría en la limpieza al perder el +X/+X con el daño todavía encima).
+        self._expire_temp("eot")
+        p._turn_done_after = self.turn
+        p.__dict__.pop("_must_attack_pw", None)
         for pl in self.players:
             for perm in pl.battlefield:
                 perm.damage = 0
@@ -8075,6 +8212,10 @@ class Game:
                 perm.temp_keywords = set()
                 perm.regen_shields = 0           # los escudos de regeneración duran el turno
                 perm.temp_creature = False       # el vehículo/tierra deja de ser criatura
+                _er = getattr(perm, "_eot_revert", None)
+                if _er:
+                    perm._eot_revert = None
+                    _er(self, perm)
                 perm.temp_subtypes = set()       # subtipos temporales (tierras animadas)
         # el goad/obligación de atacar del jugador activo se agota tras su combate
         for perm in p.battlefield:
@@ -8174,10 +8315,72 @@ class Game:
             self.resolve_stack()
             self.sba()
 
+    def restart_game(self, ctrl):
+        """Karn Liberated −14: reinicia la partida. Todo vuelve a las bibliotecas,
+        los comandantes a la zona de mando, vidas a 40, manos nuevas de 7; los
+        permanentes no-Aura exiliados con Karn quedan afuera y entran bajo tu control."""
+        kept = []
+        for pl in self.players:
+            for c in list(pl.exile):
+                if getattr(c, "_exiled_by_karn", None) is not None and not c.is_land() and \
+                        "aura" not in {x.lower() for x in c.subtypes} and \
+                        set(c.types) & {"creature", "artifact", "enchantment", "planeswalker", "land", "battle"}:
+                    pl.exile.remove(c)
+                    kept.append(c)
+        for pl in self.players:
+            if pl.lost:
+                continue
+            pool = []
+            for pm in list(pl.battlefield):
+                if not pm.is_token:
+                    pool.append(getattr(pm.card, "_real", None) or pm.card)
+            pl.battlefield = []
+            pool += list(pl.hand) + list(pl.graveyard) + list(pl.exile) + list(pl.impulse) + list(pl.exile_play)
+            pl.hand, pl.exile, pl.impulse, pl.exile_play = [], [], [], []
+            pl.graveyard = []
+            cmds = [c for c in pool if pl.is_commander(c)]
+            pool = [c for c in pool if not pl.is_commander(c)]
+            pl.command = list({id(c): c for c in list(pl.command) + cmds}.values())
+            pl.library = list(pl.library) + pool
+            self.rng.shuffle(pl.library)
+            pl.life = 40
+            pl.poison = 0
+            pl.cmdr_damage = {}
+            pl.cmdr_taxes = [0] * len(getattr(pl, "commanders", []) or [])
+            pl.emblems = []
+            pl.draw(7, self)
+        self.stack.clear()
+        self.temp_triggers = []
+        self.extra_turns = []
+        for c in kept:
+            self.move_to_battlefield(c, ctrl)
+        self.log(f"{ctrl.name} reinicia la partida (Karn Liberated): conserva {len(kept)} permanente(s) exiliados")
+
+    def skip_turn_check(self, p) -> bool:
+        """Ral Zarek −7: 'skips their next X turns'. True si este turno se salta."""
+        n = p.__dict__.get("_skip_turns", 0)
+        if n > 0:
+            p.__dict__["_skip_turns"] = n - 1
+            self.log(f"{p.name} se salta este turno")
+            return True
+        return False
+
+    def mindslaved_turn(self, p) -> bool:
+        """Sorin Markov −7: otro jugador controla este turno; quien lo controla no le
+        hace jugar nada útil (no juega tierras, no lanza, no ataca)."""
+        by = p.__dict__.pop("_mindslaved_by", None)
+        if by is None:
+            return False
+        self.log(f"{by.name} controla el turno de {p.name}: no hace jugadas")
+        return True
+
     def run_turn(self):
         p = self.ap()
         self.begin_turn(p)
         if p.lost:
+            return
+        if self.mindslaved_turn(p):
+            self.end_turn(p)
             return
 
         # MAIN 1
@@ -8220,6 +8423,8 @@ class Game:
             self.turn += 1
             self.active_index = (self.turn - 1) % len(self.players)
             if self.ap().lost:
+                continue
+            if self.skip_turn_check(self.ap()):
                 continue
             self.run_turn()
             self.sba()

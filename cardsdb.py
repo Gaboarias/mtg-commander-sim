@@ -7361,11 +7361,1243 @@ def _pw_extra_effect(text: str, name: str = ""):
     return None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Habilidades de lealtad "una por una" (las que no siguen un patrón común).
+# Cada entrada: texto normalizado (minúsculas, sin punto final, el nombre propio
+# como "~") -> fábrica que devuelve eff(game, ctrl, perm).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _tok_from_text(game, ctrl, name, type_line, oracle="", power=None, toughness=None, n=1,
+                   colors=(), extra=None):
+    """Crea N fichas a partir de un texto de oráculo (las arma el mismo parser)."""
+    import copy as _cp
+    d = {"name": name, "type_line": type_line, "oracle_text": oracle, "mana_cost": ""}
+    if power is not None:
+        d["power"], d["toughness"] = str(power), str(toughness)
+    base = build_card_from_data(d)
+    base.cost = None
+    if colors:
+        base.colors = set(colors)
+        base.color_id = set(colors)
+    if extra:
+        extra(base)
+    out = []
+    for _ in range(max(1, n) * game.token_multiplier(ctrl)):
+        out.append(game.move_to_battlefield(_cp.deepcopy(base), ctrl, is_token=True))
+    game.log(f"{ctrl.name} crea {len(out)} ficha(s) {name}")
+    return out
+
+
+def _mana_rock_token(game, ctrl, name, opts, sac=True):
+    import copy as _cp
+    tok = Card(name=name, types={"artifact"}, cost=None, tags={"token"},
+                     produces=(lambda perm, pl, _o=dict(opts): dict(_o)))
+    tok.sac_on_mana = sac
+    for _ in range(game.token_multiplier(ctrl)):
+        game.move_to_battlefield(_cp.deepcopy(tok), ctrl, is_token=True)
+    game.log(f"{ctrl.name} crea una ficha {name}")
+
+
+def _to_impulse(game, ctrl, cardlist, free=False):
+    """'You may cast/play those cards this turn' (opcionalmente gratis)."""
+    for c in cardlist:
+        if free:
+            c._free_turn, c._free_for = game.turn, ctrl
+        ctrl.impulse.append(c)
+
+
+def _choose_dir(game, ctrl, apply):
+    """'Choose left or right': el humano elige; el bot, la que más le conviene (apply
+    recibe 'left' o 'right')."""
+    if ctrl is getattr(game, "interactive_human", None):
+        _human_target_choice(game, ctrl, "mode", "Elegí la dirección",
+                             [("Izquierda", "left"), ("Derecha", "right")], apply)
+    else:
+        apply("left")
+
+
+def _next_player(game, pl, d):
+    alive = [x for x in game.players if not x.lost]
+    i = alive.index(pl)
+    return alive[(i + (1 if d == "left" else -1)) % len(alive)]
+
+
+def _until_next(perm, owner, revert):
+    """Efecto sobre un permanente que dura hasta el próximo turno de `owner`."""
+    prev = getattr(perm, "_until_next_revert", None)
+
+    def _rv(g, pm, _a=prev, _b=revert):
+        if _a:
+            _a(g, pm)
+        _b(g, pm)
+    perm._until_next = owner
+    perm._until_next_revert = _rv
+
+
+def _animate(perm, p, t, kws=(), subtypes=(), until=None, game=None, owner=None):
+    """Convierte un permanente en criatura P/T (permanente o hasta tu próximo turno)."""
+    old = (getattr(perm, "animated", False), perm.set_base_pt, set(perm.perma_keywords),
+           set(getattr(perm, "added_subtypes", set()) or set()))
+    perm.animated = True
+    perm.set_base_pt = (p, t)
+    perm.perma_keywords |= set(kws)
+    if subtypes:
+        perm.added_subtypes = set(perm.added_subtypes) | set(subtypes)
+    if until == "next_turn":
+        def _rv(g, pm, _o=old):
+            pm.animated, pm.set_base_pt, pm.perma_keywords, pm.added_subtypes = _o[0], _o[1], _o[2], _o[3]
+        _until_next(perm, owner, _rv)
+
+
+def _eot_animate(game, perm, p, t, kws=(), subtypes=()):
+    perm.temp_creature = True
+    perm._temp_base = (game.turn, (p, t))
+    perm.temp_keywords |= set(kws)
+    if subtypes:
+        perm.temp_subtypes = set(getattr(perm, "temp_subtypes", set()) or set()) | set(subtypes)
+
+
+def _pick_perm(game, ctrl, pool, key, prompt, apply):
+    """Objetivo permanente: el humano lo elige (modal); el bot toma el mejor según key."""
+    pool = [x for x in pool if x is not None]
+    if not pool:
+        return
+    _pw_pick(game, ctrl, "etb_target", prompt, pool, apply, key=key)
+
+
+def _opp_creatures(game, ctrl, pred=None):
+    return [pm for o in game.opponents(ctrl) for pm in o.battlefield
+            if pm.is_creature() and game.can_target(ctrl, pm) and (pred is None or pred(pm))]
+
+
+def _opp_best_creature(game, ctrl, pred=None):
+    pool = [pm for o in game.opponents(ctrl) for pm in o.battlefield
+            if pm.is_creature() and game.can_target(ctrl, pm) and (pred is None or pred(pm))]
+    return max(pool, key=_pw_val) if pool else None
+
+
+def _pw_named_table():
+    T = {}
+
+    # Ajani Goldmane −6: Avatar con P/T = tu vida
+    def f(game, ctrl, perm):
+        def ex(c):
+            c.cda_pt = lambda g, p: (p.life, p.life)
+        _tok_from_text(game, ctrl, "Avatar", "Token Creature — Avatar", "", 0, 0, colors=("W",), extra=ex)
+    T['create a white avatar creature token. it has "this token\'s power and toughness are each equal to your life total."'] = f
+
+    # Ajani, Outland Chaperone −8
+    def f(game, ctrl, perm):
+        n = max(0, ctrl.life)
+        top = list(reversed(ctrl.library[-n:])) if n else []
+        put = [c for c in top if not c.is_land() and (set(c.types) & {"creature", "artifact", "enchantment", "planeswalker", "battle"})
+               and (c.cost.cmc if c.cost else 0) <= 3]
+        for c in put:
+            ctrl.library.remove(c)
+            game.move_to_battlefield(c, ctrl)
+        game.rng.shuffle(ctrl.library)
+        game.log(f"{ctrl.name} pone en el campo {len(put)} permanente(s) de VM 3 o menos")
+    T["look at the top x cards of your library, where x is your life total. you may put any number of nonland permanent cards with mana value 3 or less from among them onto the battlefield. then shuffle"] = f
+
+    # Ajani, Strength of the Pride 0
+    def f(game, ctrl, perm):
+        start = getattr(ctrl, "starting_life", None) or getattr(game, "starting_life", 40) or 40
+        if ctrl.life < start + 15:
+            game.log(f"{ctrl.name}: no tiene 15 vidas más que al empezar ({ctrl.life})")
+            return
+        if perm in ctrl.battlefield:
+            game.exile_permanent(perm, "su propia habilidad")
+        for o in game.opponents(ctrl):
+            for pm in list(o.battlefield):
+                if pm.is_creature() or "artifact" in pm.card.types:
+                    game.exile_permanent(pm, "Ajani")
+    T["if you have at least 15 life more than your starting life total, exile ~ and each artifact and creature your opponents control"] = f
+
+    # Ajani, Valiant Protector −11
+    def f(game, ctrl, perm):
+        def ap(tg):
+            game.add_counters(tg, "+1/+1", max(0, ctrl.life))
+            tg.temp_keywords.add("trample")
+        _pick_perm(game, ctrl, ctrl.creatures(), _pw_val, f"Elegí la criatura (+{ctrl.life} contadores)", ap)
+    T["put x +1/+1 counters on target creature, where x is your life total. that creature gains trample until end of turn"] = f
+
+    # Aminatou −6
+    def f(game, ctrl, perm):
+        def ap(d):
+            alive = [x for x in game.players if not x.lost]
+            moves = {}
+            for pl in alive:
+                src = _next_player(game, pl, d)
+                moves[id(pl)] = [pm for pm in src.battlefield if not pm.card.is_land() and pm is not perm]
+            for pl in alive:
+                for pm in moves[id(pl)]:
+                    if pm in pm.controller.battlefield:
+                        pm.controller.battlefield.remove(pm)
+                        pm.controller = pl
+                        pl.battlefield.append(pm)
+            game.log(f"Cada jugador gana el control de los permanentes no-tierra del siguiente ({d})")
+        _choose_dir(game, ctrl, ap)
+    T["choose left or right. each player gains control of all nonland permanents other than ~ controlled by the next player in the chosen direction"] = f
+
+    # Arlinn +1
+    def f(game, ctrl, perm):
+        ctrl.__dict__["_flash_grant"] = set(ctrl.__dict__.get("_flash_grant") or ()) | {"creature"}
+        ctrl.__dict__["_enter_counter_until"] = True
+        game.log(f"{ctrl.name}: criaturas con destello y +1/+1 extra hasta su próximo turno")
+    T["until your next turn, you may cast creature spells as though they had flash, and each creature you control enters with an additional +1/+1 counter on it"] = f
+
+    # Arzakon −3: Black Lotus
+    T["create a black lotus token"] = lambda game, ctrl, perm: _mana_rock_token(
+        game, ctrl, "Black Lotus", {c: 3 for c in "WUBRG"})
+
+    # Ashiok, Nightmare Muse −7
+    def f(game, ctrl, perm):
+        pool = [(o, c) for o in game.opponents(ctrl) for c in o.exile if not c.is_land()]
+        pool.sort(key=lambda oc: oc[1].cost.cmc if oc[1].cost else 0, reverse=True)
+        for o, c in pool[:3]:
+            o.exile.remove(c)
+            _to_impulse(game, ctrl, [c], free=True)
+        game.log(f"{ctrl.name} puede lanzar gratis este turno: {', '.join(c.name for _o, c in pool[:3]) or 'nada'}")
+    T["you may cast up to three spells from among face-up cards your opponents own from exile without paying their mana costs"] = f
+
+    # Ashiok, Wicked Manipulator −7
+    def f(game, ctrl, perm):
+        x = sum((c.cost.cmc if getattr(c, "cost", None) else 0) for c in ctrl.exile)
+
+        def ap(o):
+            k = min(x, len(o.library))
+            for _ in range(k):
+                o.exile.append(o.library.pop())
+            game.log(f"{o.name} exilia {k} cartas de su biblioteca")
+        opps = game.targetable_opponents(ctrl)
+        if opps:
+            _pw_pick(game, ctrl, "player_target", "Elegí a qué rival", opps, ap, key=lambda o: -len(o.library))
+    T["target player exiles the top x cards of their library, where x is the total mana value of cards you own in exile"] = f
+
+    # Basri −1
+    def f(game, ctrl, perm):
+        game.add_temp_trigger("tmp_attack", lambda g, attacker=None, **k: (
+            attacker in attacker.controller.battlefield and g.add_counters(attacker, "+1/+1", 1)) if attacker else None,
+            ctrl, "eot", "Basri")
+    T["whenever a creature attacks this turn, put a +1/+1 counter on it"] = f
+
+    # Chandra Ablaze −7
+    def f(game, ctrl, perm):
+        pool = [c for c in list(ctrl.graveyard) if {"instant", "sorcery"} & set(c.types)
+                and "R" in {x for p_ in (c.cost.pips if c.cost else ()) for x in str(p_).split("/")}]
+        for c in pool:
+            ctrl.graveyard.remove(c)
+        _to_impulse(game, ctrl, pool, free=True)
+        game.log(f"{ctrl.name} puede lanzar gratis este turno {len(pool)} instantáneo(s)/conjuro(s) rojos de su cementerio")
+    T["cast any number of red instant and/or sorcery cards from your graveyard without paying their mana costs"] = f
+
+    def _is_red(c):
+        return "R" in {x for p_ in (c.cost.pips if getattr(c, "cost", None) else ()) for x in str(p_).split("/")}
+
+    # Chandra, Dressed to Kill +1
+    def f(game, ctrl, perm):
+        if not ctrl.library:
+            return
+        c = ctrl.library.pop()
+        if _is_red(c):
+            _to_impulse(game, ctrl, [c])
+            game.log(f"{ctrl.name} exilia {c.name} (roja): puede lanzarla este turno")
+        else:
+            ctrl.exile.append(c)
+            game.log(f"{ctrl.name} exilia {c.name}")
+    T["exile the top card of your library. if it's red, you may cast it this turn"] = f
+
+    # Chandra, Flame's Catalyst −2
+    def f(game, ctrl, perm):
+        pool = [c for c in ctrl.graveyard if {"instant", "sorcery"} & set(c.types) and _is_red(c)]
+        if not pool:
+            return
+
+        def ap(c):
+            if c in ctrl.graveyard:
+                ctrl.graveyard.remove(c)
+                c._exile_after_cast = True
+                _to_impulse(game, ctrl, [c])
+                game.log(f"{ctrl.name} puede lanzar {c.name} desde el cementerio este turno (luego se exilia)")
+        if ctrl is getattr(game, "interactive_human", None):
+            _human_target_choice(game, ctrl, "reanimate", "Elegí qué hechizo lanzar", [(c.name, c) for c in pool], ap)
+        else:
+            ap(max(pool, key=lambda c: c.cost.cmc if c.cost else 0))
+    T["you may cast target red instant or sorcery card from your graveyard. if that spell would be put into your graveyard, exile it instead"] = f
+
+    # Chandra, Heart of Fire −9
+    def f(game, ctrl, perm):
+        pool = [c for c in list(ctrl.graveyard) + list(ctrl.library) if {"instant", "sorcery"} & set(c.types) and _is_red(c)]
+        for c in pool:
+            (ctrl.graveyard if c in ctrl.graveyard else ctrl.library).remove(c)
+        game.rng.shuffle(ctrl.library)
+        _to_impulse(game, ctrl, pool)
+        ctrl.mana_pool += 6
+        game.log(f"{ctrl.name} exilia {len(pool)} hechizos rojos (jugables este turno) y agrega RRRRRR")
+    T["search your graveyard and library for any number of red instant and/or sorcery cards, exile them, then shuffle. you may cast them this turn. add six {r}"] = f
+
+    # Chandra, Legacy of Fire 0
+    def f(game, ctrl, perm):
+        n = 0
+        for pm in ctrl.battlefield:
+            if pm.counters.get("loyalty", 0) > 1:
+                pm.counters["loyalty"] -= 1
+                n += 1
+        k = min(n, len(ctrl.library))
+        got = [ctrl.library.pop() for _ in range(k)]
+        _to_impulse(game, ctrl, got)
+        game.log(f"{ctrl.name} quita {n} contadores de lealtad y exilia {k} cartas (jugables este turno)")
+    T["remove a loyalty counter from each of any number of permanents you control. exile that many cards from the top of your library. you may play them this turn"] = f
+
+    # Comet, Stellar Pup 0 (tabla del dado)
+    def f(game, ctrl, perm):
+        r = game.rng.randint(1, 6)
+        game.log(f"{ctrl.name}: Comet tira un dado: {r}")
+        if r <= 2:
+            game.add_counters(perm, "loyalty", 2)
+            for t in _tok_from_text(game, ctrl, "Squirrel", "Token Creature — Squirrel", "", 1, 1, n=2, colors=("G",)):
+                t.temp_keywords.add("haste")
+        elif r == 3:
+            perm.counters["loyalty"] = perm.counters.get("loyalty", 0) - 1
+            pool = [c for c in ctrl.graveyard if (c.cost.cmc if c.cost else 0) <= 2]
+            if pool:
+                c = max(pool, key=lambda c: (not c.is_land(), c.cost.cmc if c.cost else 0))
+                ctrl.graveyard.remove(c)
+                ctrl.hand.append(c)
+                game.log(f"{ctrl.name} devuelve {c.name} a su mano")
+        elif r <= 5:
+            dmg = perm.counters.get("loyalty", 0)
+            tg = _opp_best_creature(game, ctrl, lambda pm: pm.toughness - pm.damage <= dmg)
+            if tg is None:
+                opps = game.targetable_opponents(ctrl)
+                tg = min(opps, key=lambda o: o.life) if opps else None
+            if tg is not None:
+                game.deal_damage(perm, tg, dmg)
+            perm.counters["loyalty"] = perm.counters.get("loyalty", 0) - 2
+        else:
+            game.add_counters(perm, "loyalty", 1)
+            perm._extra_loy_acts = (game.turn, 2)
+        game.sba()
+    T["roll a six-sided die"] = f
+
+    # Dovin, Architect of Law −9
+    def f(game, ctrl, perm):
+        def ap(o):
+            for pm in o.battlefield:
+                pm.tapped = True
+                pm.frozen = True
+            game.log(f"{o.name}: todo se gira y se salta su próximo enderezar")
+        opps = game.targetable_opponents(ctrl)
+        if opps:
+            _pw_pick(game, ctrl, "player_target", "Elegí a qué rival", opps, ap, key=lambda o: len(o.battlefield))
+    T["tap all permanents target opponent controls. that player skips their next untap step"] = f
+
+    # Dovin, Grand Arbiter +1
+    def f(game, ctrl, perm):
+        game.add_temp_trigger("tmp_cdmg_player", lambda g, source=None, **k: (
+            g.add_counters(perm, "loyalty", 1) if source is not None and source.controller is ctrl
+            and perm in ctrl.battlefield else None), ctrl, "eot", "Dovin")
+    T["until end of turn, whenever a creature you control deals combat damage to a player, put a loyalty counter on ~"] = f
+
+    # Estrid −1: Mask (aura ficha con umbra armor)
+    def f(game, ctrl, perm):
+        pool = [pm for pm in ctrl.battlefield if pm is not perm and not pm.card.is_land()]
+        _pick_perm(game, ctrl, pool, _pw_val, "Elegí dónde va la Mask", lambda host: _estrid_mask(game, ctrl, host))
+
+    def _estrid_mask(game, ctrl, host):
+        import copy as _cp
+        mask = Card(name="Mask", types={"enchantment"}, cost=None, subtypes={"Aura"}, tags={"token"})
+        mask.umbra_armor = True
+        mask.colors = {"W"}
+        tok = game.move_to_battlefield(_cp.deepcopy(mask), ctrl, is_token=True)
+        tok.enchanting = host
+        game.log(f"{ctrl.name} crea una Mask (umbra armor) sobre {host.name}")
+    T["create a white aura enchantment token named mask attached to another target permanent. the token has enchant permanent and umbra armor"] = f
+
+    # Feroz −7
+    T["create a feroz's ban token"] = lambda game, ctrl, perm: _tok_from_text(
+        game, ctrl, "Feroz's Ban", "Token Artifact", "Creature spells cost {2} more to cast.")
+
+    # Garruk, Curse Breaker −4
+    def f(game, ctrl, perm):
+        def tr(g, attacker=None, defender=None, **k):
+            dpl = defender if not hasattr(defender, "card") else getattr(defender, "controller", None)
+            if attacker is not None and dpl is not None and dpl in g.opponents(ctrl):
+                attacker.temp_pt[0] += 2
+                attacker.temp_pt[1] += 2
+                attacker.temp_keywords.add("trample")
+        game.add_temp_trigger("tmp_attack", tr, ctrl, "next_turn", "Garruk")
+    T["until your next turn, whenever one or more creatures attack one of your opponents, those creatures get +2/+2 and gain trample until end of turn"] = f
+
+    # Garruk, Savage Herald −7
+    def f(game, ctrl, perm):
+        for pm in ctrl.creatures():
+            pm.temp_keywords.add("assign_unblocked")
+        game.log(f"Las criaturas de {ctrl.name} pueden asignar su daño como si no estuvieran bloqueadas")
+    T['until end of turn, creatures you control gain "you may have this creature assign its combat damage as though it weren\'t blocked."'] = f
+
+    # Geyadrone −7
+    def f(game, ctrl, perm):
+        for o in game.opponents(ctrl):
+            for pm in list(o.battlefield):
+                if pm.counters.get("corruption", 0) > 0:
+                    o.battlefield.remove(pm)
+                    pm.controller = ctrl
+                    ctrl.battlefield.append(pm)
+                    game.log(f"{ctrl.name} gana el control de {pm.name}")
+    T["gain control of each permanent with a corruption counter on it"] = f
+
+    # Gideon Jura +2
+    def f(game, ctrl, perm):
+        def ap(o):
+            o.__dict__["_must_attack_pw"] = (perm, ctrl)
+            game.log(f"Las criaturas de {o.name} deben atacar a {perm.name} en su próximo turno")
+        opps = game.targetable_opponents(ctrl)
+        if opps:
+            _pw_pick(game, ctrl, "player_target", "Elegí a qué rival", opps, ap,
+                     key=lambda o: sum(pm.power for pm in o.creatures()))
+    T["during target opponent's next turn, creatures that player controls attack ~ if able"] = f
+
+    # Greensleeves +2
+    T["create a giant badger token"] = lambda game, ctrl, perm: _tok_from_text(
+        game, ctrl, "Giant Badger", "Token Creature — Badger",
+        "Whenever this creature blocks, it gets +2/+2 until end of turn.", 2, 2, colors=("G",))
+    # Greensleeves −8
+    # (cubierta por el patrón "until end of turn, creatures you control have base power and toughness…")
+
+    # Jace Reawakened +1: plot
+    def f(game, ctrl, perm):
+        pool = [c for c in ctrl.hand if not c.is_land() and (c.cost.cmc if c.cost else 0) <= 3]
+        if not pool:
+            return
+
+        def ap(c):
+            if c in ctrl.hand:
+                ctrl.hand.remove(c)
+                c._plot_turn = game.turn
+                c._play_cost = Cost(0, ())
+                ctrl.exile_play.append(c)
+                game.log(f"{ctrl.name} planea (plot) {c.name}: la puede lanzar gratis en un turno posterior")
+        if ctrl is getattr(game, "interactive_human", None):
+            _human_target_choice(game, ctrl, "exile_pick", "Elegí qué carta planear (plot)",
+                                 [(c.name, c) for c in pool], ap, allow_none=True)
+        else:
+            ap(max(pool, key=lambda c: c.cost.cmc if c.cost else 0))
+    T["you may exile a nonland card with mana value 3 or less from your hand. if you do, it becomes plotted"] = f
+
+    # Jace Reawakened −6
+    def f(game, ctrl, perm):
+        ctrl._copy_all_turn = game.turn
+        game.log(f"{ctrl.name}: este turno copia cada hechizo que lance")
+    T["until end of turn, whenever you cast a spell, copy it. you may choose new targets for the copy"] = f
+
+    # Jace, Architect of Thought −8
+    def f(game, ctrl, perm):
+        got = []
+        for pl in game.players:
+            if pl.lost:
+                continue
+            pool = [c for c in pl.library if not c.is_land()]
+            if pool:
+                c = max(pool, key=lambda c: c.cost.cmc if c.cost else 0)
+                pl.library.remove(c)
+                game.rng.shuffle(pl.library)
+                c._play_cost = Cost(0, ())
+                ctrl.exile_play.append(c)
+                got.append(c.name)
+        game.log(f"{ctrl.name} exilia {', '.join(got)}: los puede lanzar gratis")
+    T["for each player, search that player's library for a nonland card and exile it, then that player shuffles. you may cast those cards without paying their mana costs"] = f
+
+    # Jace, Reality Sculptor +1 / 0
+    def f(game, ctrl, perm):
+        x = sum(1 for pm in ctrl.battlefield if pm.has_subtype("Island"))
+        if x:
+            game.add_counters(perm, "loyalty", x)
+        game.log(f"{ctrl.name}: Jace se potencia {x}")
+    T["empower ~ x, where x is the number of islands you control"] = f
+
+    def f(game, ctrl, perm):
+        tot = sum(pm.counters.get("loyalty", 0) for pm in ctrl.battlefield if pm.has_subtype("Jace"))
+        if tot < 25:
+            game.log(f"{ctrl.name}: hacen falta 25 contadores de lealtad entre sus Jaces ({tot})")
+            return
+        for o in game.opponents(ctrl):
+            keep = o.library[:1]
+            o.exile.extend(o.library[1:])
+            o.library = keep
+        game.log(f"{ctrl.name} exilia todas las bibliotecas rivales menos la última carta")
+    T["exile all but the bottom card of each opponent's library. activate only if there are twenty-five or more loyalty counters among jaces you control"] = f
+
+    # Jared −3
+    def f(game, ctrl, perm):
+        def ncol(pm):
+            return len({x for p_ in (pm.card.cost.pips if pm.card.cost else ()) for x in str(p_).split("/") if x in "WUBRG"})
+        pool = sorted(ctrl.creatures(), key=lambda pm: (ncol(pm), _pw_val(pm)), reverse=True)[:2]
+        for pm in pool:
+            if ncol(pm):
+                game.add_counters(pm, "+1/+1", ncol(pm))
+    T["choose up to two target creatures. for each of them, put a number of +1/+1 counters on it equal to the number of colors it is"] = f
+
+    # Jaya, Fiery Negotiator −2
+    def f(game, ctrl, perm):
+        def ap(tg):
+            game.log(f"{ctrl.name} elige {tg.name}: cada vez que ataque este turno, Jaya le hará daño")
+
+            def tr(g, player=None, **k):
+                if player is ctrl and tg in tg.controller.battlefield:
+                    n = len(getattr(g, "_last_declared", None) or [])
+                    if n:
+                        g.deal_damage(perm, tg, n)
+                        g.sba()
+            game.add_temp_trigger("you_attack", tr, ctrl, "eot", "Jaya")
+        _pick_perm(game, ctrl, _opp_creatures(game, ctrl), _pw_val, "Elegí la criatura rival", ap)
+    T["choose target creature an opponent controls. whenever you attack this turn, ~ deals damage equal to the number of attacking creatures to that creature"] = f
+
+    # Jeska 0
+    def f(game, ctrl, perm):
+        def ap(tg):
+            tg._triple_vs = ctrl
+            _until_next(tg, ctrl, lambda g, pm: setattr(pm, "_triple_vs", None))
+            game.log(f"{tg.name} hará el triple de daño de combate a los rivales hasta el próximo turno de {ctrl.name}")
+        _pick_perm(game, ctrl, ctrl.creatures(), lambda pm: (pm.power, pm.can_attack()), "Elegí la criatura", ap)
+    T["choose target creature. until your next turn, if that creature would deal combat damage to one of your opponents, it deals triple that damage to that player instead"] = f
+
+    # Karn Liberated −14: reiniciar la partida
+    def f(game, ctrl, perm):
+        game.restart_game(ctrl)
+    T["restart the game, leaving in exile all non-aura permanent cards exiled with ~. then put those cards onto the battlefield under your control"] = f
+
+    # Karn, Living Legacy −1
+    def f(game, ctrl, perm):
+        maxx = min(ctrl.available_mana(), len(ctrl.library))
+
+        def go(x):
+            if x <= 0 or not ctrl.pay(Cost(x, ())):
+                return
+            look = [ctrl.library.pop() for _ in range(min(x, len(ctrl.library)))]
+            if not look:
+                return
+            best = max(look, key=lambda c: (not c.is_land(), c.cost.cmc if c.cost else 0))
+            look.remove(best)
+            ctrl.hand.append(best)
+            game.rng.shuffle(look)
+            for c in look:
+                ctrl.library.insert(0, c)
+            game.log(f"{ctrl.name} paga {x}, mira {x + 0} cartas y se lleva una")
+        if ctrl is getattr(game, "interactive_human", None) and maxx > 0:
+            _human_target_choice(game, ctrl, "x", "¿Cuánto maná pagás?", [(f"X = {v}", v) for v in range(maxx + 1)], go)
+        else:
+            go(maxx)
+    T["pay any amount of mana. look at that many cards from the top of your library, then put one of those cards into your hand and the rest on the bottom of your library in a random order"] = f
+
+    # Karn, the Great Creator +1 / −2
+    def f(game, ctrl, perm):
+        pool = [pm for pm in ctrl.battlefield if "artifact" in pm.card.types and not pm.is_creature()
+                and (pm.card.cost.cmc if pm.card.cost else 0) >= 2]
+        def ap(tg):
+            mv = tg.card.cost.cmc if tg.card.cost else 0
+            _animate(tg, mv, mv, until="next_turn", game=game, owner=ctrl)
+            game.log(f"{tg.name} es una criatura artefacto {mv}/{mv} hasta el próximo turno de {ctrl.name}")
+        _pick_perm(game, ctrl, pool, lambda pm: pm.card.cost.cmc if pm.card.cost else 0, "Elegí el artefacto", ap)
+    T["until your next turn, up to one target noncreature artifact becomes an artifact creature with power and toughness each equal to its mana value"] = f
+
+    def f(game, ctrl, perm):
+        pool = [c for c in ctrl.exile if "artifact" in c.types]
+        if not pool:
+            game.log(f"{ctrl.name}: no hay artefactos tuyos en el exilio (en Commander no hay cartas fuera del juego)")
+            return
+
+        def ap(c):
+            if c in ctrl.exile:
+                ctrl.exile.remove(c)
+                ctrl.hand.append(c)
+                game.log(f"{ctrl.name} pone {c.name} en su mano desde el exilio")
+        if ctrl is getattr(game, "interactive_human", None):
+            _human_target_choice(game, ctrl, "exile_pick", "Elegí un artefacto de tu exilio", [(c.name, c) for c in pool], ap)
+        else:
+            ap(max(pool, key=lambda c: c.cost.cmc if c.cost else 0))
+    T["you may reveal an artifact card you own from outside the game or choose a face-up artifact card you own in exile. put that card into your hand"] = f
+
+    # Kaya, Geist Hunter −2
+    def f(game, ctrl, perm):
+        ctrl._tok_double_turn = game.turn
+        game.log(f"{ctrl.name}: este turno crea el doble de fichas")
+    T["until end of turn, if one or more tokens would be created under your control, twice that many of those tokens are created instead"] = f
+
+    # Koth +1
+    def f(game, ctrl, perm):
+        def ap(tg):
+            tg.tapped = False
+            _eot_animate(game, tg, 4, 4, subtypes=("Elemental",))
+            game.log(f"{tg.name} se endereza y es un Elemental 4/4 hasta el fin del turno")
+        _pick_perm(game, ctrl, [pm for pm in ctrl.battlefield if pm.has_subtype("Mountain")],
+                   lambda pm: (pm.tapped, not pm.is_creature()), "Elegí la Montaña", ap)
+    T["untap target mountain. it becomes a 4/4 red elemental creature until end of turn. it's still a land"] = f
+
+    # Liliana of the Veil −6
+    def f(game, ctrl, perm):
+        def ap(o):
+            perms = sorted(o.battlefield, key=lambda pm: (pm.card.cost.cmc if pm.card.cost else 0, _pw_val(pm)), reverse=True)
+            a, b = [], []
+            for pm in perms:                   # reparto alternado por valor
+                (a if sum(_pw_val(x)[1] for x in a) <= sum(_pw_val(x)[1] for x in b) else b).append(pm)
+
+            def sac(pile):
+                for pm in pile:
+                    if pm in pm.controller.battlefield:
+                        game.to_graveyard(pm, "sacrificio (Liliana)")
+                game.log(f"{o.name} sacrifica {len(pile)} permanente(s)")
+            if o is getattr(game, "interactive_human", None):
+                _human_target_choice(game, o, "sacrifice", "Liliana: elegí qué pila sacrificás",
+                                     [("Pila A: " + ", ".join(x.name for x in a), a),
+                                      ("Pila B: " + ", ".join(x.name for x in b), b)], sac)
+            else:
+                sac(min((a, b), key=lambda pl: sum(_pw_val(x)[1] + _pw_val(x)[0] for x in pl)))
+        opps = game.targetable_opponents(ctrl)
+        if opps:
+            _pw_pick(game, ctrl, "player_target", "Elegí a qué rival", opps, ap, key=lambda o: len(o.battlefield))
+    T["separate all permanents target player controls into two piles. that player sacrifices all permanents in the pile of their choice"] = f
+
+    # Liliana, Dreadhorde General −9
+    def f(game, ctrl, perm):
+        types = ("artifact", "creature", "enchantment", "land", "planeswalker", "battle")
+        for o in game.opponents(ctrl):
+            keep = set()
+            for t_ in types:
+                pool = [pm for pm in o.battlefield if t_ in pm.card.types or (t_ == "creature" and pm.is_creature())]
+                if pool:
+                    keep.add(id(max(pool, key=lambda pm: (_pw_val(pm)[1], _pw_val(pm)[0]))))
+            for pm in list(o.battlefield):
+                if id(pm) not in keep:
+                    game.to_graveyard(pm, "sacrificio (Liliana)")
+            game.log(f"{o.name} conserva un permanente de cada tipo y sacrifica el resto")
+    T["each opponent chooses a permanent they control of each permanent type and sacrifices the rest"] = f
+
+    # Liliana, Untouched by Death −3
+    def f(game, ctrl, perm):
+        n = 0
+        for c in ctrl.graveyard:
+            if "zombie" in {s.lower() for s in c.subtypes}:
+                c._gy_cast_turn, c._gy_cast_by = game.turn, ctrl
+                n += 1
+        game.log(f"{ctrl.name} puede lanzar este turno {n} Zombie(s) desde su cementerio")
+    T["you may cast zombie spells from your graveyard this turn"] = f
+
+    # Luxior −2
+    def f(game, ctrl, perm):
+        host = getattr(perm, "enchanting", None)
+        if host is not None and host in host.controller.battlefield:
+            host.temp_pt[0] += 2
+            host.temp_pt[1] += 2
+            host.temp_keywords.add("double_strike")
+    T["equipped creature gets +2/+2 and gains double strike until end of turn"] = f
+
+    # Mordenkainen −2
+    def f(game, ctrl, perm):
+        def ex(c):
+            c.cda_pt = lambda g, p: (2 * len(p.hand), 2 * len(p.hand))
+        _tok_from_text(game, ctrl, "Dog Illusion", "Token Creature — Dog Illusion", "", 0, 0, colors=("U",), extra=ex)
+    T['create a blue dog illusion creature token with "this token\'s power and toughness are each equal to twice the number of cards in your hand."'] = f
+
+    # Nahiri −10: Stoneforged Blade
+    T['create a colorless equipment artifact token named stoneforged blade. it has indestructible, "equipped creature gets +5/+5 and has double strike," and equip {0}'] = \
+        lambda game, ctrl, perm: _tok_from_text(game, ctrl, "Stoneforged Blade", "Token Artifact — Equipment",
+                                                "Indestructible\nEquipped creature gets +5/+5 and has double strike.\nEquip {0}")
+
+    # Nahiri, the Unforgiving +1
+    def f(game, ctrl, perm):
+        def ap(tg):
+            tg._must_attack_until = ctrl
+            _until_next(tg, ctrl, lambda g, pm: setattr(pm, "_must_attack_until", None))
+            game.log(f"{tg.name} debe atacar cada combate hasta el próximo turno de {ctrl.name}")
+        _pick_perm(game, ctrl, _opp_creatures(game, ctrl), _pw_val, "Elegí la criatura que debe atacar", ap)
+    T["until your next turn, up to one target creature attacks a player each combat if able"] = f
+
+    # Narset −2
+    def f(game, ctrl, perm):
+        ctrl._rebound_next = game.turn
+        game.log(f"{ctrl.name}: su próximo instantáneo o conjuro de la mano tendrá rebote")
+    T["when you next cast an instant or sorcery spell from your hand this turn, it gains rebound"] = f
+
+    # Niko Aris +1
+    def f(game, ctrl, perm):
+        def ap(tg):
+            tg.temp_keywords.add("unblockable")
+
+            def tr(g, source=None, **k):
+                if source is tg and tg in tg.controller.battlefield:
+                    from cardsdb import _bounce_pm as _b
+                    _b(g, tg, "Niko Aris")
+            game.add_temp_trigger("tmp_cdmg_player", tr, ctrl, "eot", "Niko")
+        pool = [pm for pm in ctrl.creatures() if pm.can_attack()] or ctrl.creatures()
+        _pick_perm(game, ctrl, pool, lambda pm: pm.power, "Elegí la criatura (imbloqueable)", ap)
+    T["up to one target creature you control can't be blocked this turn. whenever that creature deals damage this turn, return it to its owner's hand"] = f
+
+    # Nissa of Shadowed Boughs −5
+    def f(game, ctrl, perm):
+        lands = sum(1 for pm in ctrl.battlefield if pm.card.is_land())
+        pool = [c for c in list(ctrl.hand) + list(ctrl.graveyard) if c.is_creature() and (c.cost.cmc if c.cost else 0) <= lands]
+        if not pool:
+            return
+
+        def ap(c):
+            (ctrl.hand if c in ctrl.hand else ctrl.graveyard).remove(c)
+            pm = game.move_to_battlefield(c, ctrl)
+            if pm is not None:
+                game.add_counters(pm, "+1/+1", 2)
+            game.log(f"{ctrl.name} pone {c.name} en el campo con dos contadores +1/+1")
+        if ctrl is getattr(game, "interactive_human", None):
+            _human_target_choice(game, ctrl, "reanimate", "Elegí qué criatura poner", [(c.name, c) for c in pool], ap, allow_none=True)
+        else:
+            ap(max(pool, key=lambda c: c.cost.cmc if c.cost else 0))
+    T["you may put a creature card with mana value less than or equal to the number of lands you control onto the battlefield from your hand or graveyard with two +1/+1 counters on it"] = f
+
+    # Nissa, Who Shakes the World +1
+    def f(game, ctrl, perm):
+        def ap(tg):
+            game.add_counters(tg, "+1/+1", 3)
+            tg.tapped = False
+            _animate(tg, 0, 0, kws=("vigilance", "haste"), subtypes=("Elemental",))
+            game.log(f"{tg.name} es ahora una criatura Elemental 0/0 (con tres +1/+1)")
+        _pick_perm(game, ctrl, [pm for pm in ctrl.battlefield if pm.card.is_land() and not pm.is_creature()],
+                   lambda pm: pm.tapped, "Elegí la tierra", ap)
+    T["put three +1/+1 counters on up to one target noncreature land you control. untap it. it becomes a 0/0 elemental creature with vigilance and haste that's still a land"] = f
+
+    # Nissa, Worldwaker −7
+    def f(game, ctrl, perm):
+        basics = [c for c in ctrl.library if c.is_land() and "basic" in (c.supertypes or set())]
+        for c in basics:
+            ctrl.library.remove(c)
+            pm = game.move_to_battlefield(c, ctrl)
+            if pm is not None:
+                _animate(pm, 4, 4, kws=("trample",), subtypes=("Elemental",))
+        game.rng.shuffle(ctrl.library)
+        game.log(f"{ctrl.name} pone {len(basics)} tierras básicas: son Elementales 4/4 con arrollar")
+    T["search your library for any number of basic land cards, put them onto the battlefield, then shuffle. those lands become 4/4 elemental creatures with trample. they're still lands"] = f
+
+    # Oko, Lorwyn Liege +2
+    def f(game, ctrl, perm):
+        pool = ctrl.creatures()
+        if pool:
+            tg = max(pool, key=_pw_val)
+            tg._changeling = True
+            game.log(f"{tg.name} tiene todos los tipos de criatura")
+    T["up to one target creature gains all creature types"] = f
+
+    # Oko, Thief of Crowns +1 / −5
+    def f(game, ctrl, perm):
+        def ap(tg):
+            tg._abil_off_perm = True
+            _animate(tg, 3, 3, subtypes=("Elk",))
+            tg.perma_keywords = set()
+            game.log(f"{tg.name} pierde sus habilidades y es un Alce 3/3")
+        if ctrl is getattr(game, "interactive_human", None):
+            pool = [pm for pl in game.players for pm in pl.battlefield
+                    if (pm.is_creature() or "artifact" in pm.card.types) and game.can_target(ctrl, pm)]
+            _pick_perm(game, ctrl, pool, _pw_val, "Elegí qué se convierte en Alce 3/3", ap)
+            return
+        tg = _opp_best_creature(game, ctrl, lambda pm: pm.power + pm.toughness > 6 or pm.card.tags & {"engine"})
+        if tg is None:
+            own = [pm for pm in ctrl.battlefield if ("artifact" in pm.card.types and not pm.is_creature())]
+            tg = max(own, key=lambda pm: pm.card.cost.cmc if pm.card.cost else 0) if own else None
+        if tg is not None:
+            ap(tg)
+    T["target artifact or creature loses all abilities and becomes a green elk creature with base power and toughness 3/3"] = f
+
+    def f(game, ctrl, perm):
+        theirs = _opp_best_creature(game, ctrl, lambda pm: pm.power <= 3)
+        mine = [pm for pm in ctrl.battlefield if (pm.is_creature() or "artifact" in pm.card.types) and pm is not perm]
+        if theirs is None or not mine:
+            return
+        give = min(mine, key=lambda pm: (_pw_val(pm)[0] + _pw_val(pm)[1]))
+        o = theirs.controller
+        o.battlefield.remove(theirs)
+        ctrl.battlefield.remove(give)
+        theirs.controller, give.controller = ctrl, o
+        ctrl.battlefield.append(theirs)
+        o.battlefield.append(give)
+        game.log(f"{ctrl.name} intercambia {give.name} por {theirs.name}")
+    T["exchange control of target artifact or creature you control and target creature an opponent controls with power 3 or less"] = f
+
+    # Professor Onyx −8
+    def f(game, ctrl, perm):
+        for o in game.opponents(ctrl):
+            for _ in range(7):
+                if o.lost:
+                    break
+                if o.hand and (o is not getattr(game, "interactive_human", None)) and (o.life <= 12 or len(o.hand) >= 1):
+                    c = min(o.hand, key=lambda c: (not c.is_land(), c.cost.cmc if c.cost else 0))
+                    o.hand.remove(c)
+                    game.discard_card(o, c)
+                elif o.hand and o is getattr(game, "interactive_human", None):
+                    c = min(o.hand, key=lambda c: (not c.is_land(), c.cost.cmc if c.cost else 0))
+                    o.hand.remove(c)
+                    game.discard_card(o, c)
+                else:
+                    o.life -= 3
+            game.log(f"{o.name} descarta o pierde 3 de vida, siete veces")
+        game.sba()
+    T["each opponent may discard a card. if they don't, they lose 3 life. repeat this process six more times"] = f
+
+    # Quintorius Kand −6
+    def f(game, ctrl, perm):
+        pool = list(ctrl.graveyard)
+        for c in pool:
+            ctrl.graveyard.remove(c)
+        _to_impulse(game, ctrl, pool)
+        ctrl.mana_pool += len(pool)
+        game.log(f"{ctrl.name} exilia {len(pool)} cartas de su cementerio (jugables este turno) y agrega {len(pool)} R")
+    T["exile any number of target cards from your graveyard. add {r} for each card exiled this way. you may play those cards this turn"] = f
+
+    # Ral Zarek, Guest Lecturer −1 / −7
+    def f(game, ctrl, perm):
+        for o in game.opponents(ctrl):
+            if o.hand:
+                _human_or_auto_discard(game, o, 1)
+    T["any number of target players each discard a card"] = f
+
+    def f(game, ctrl, perm):
+        heads = sum(1 for _ in range(5) if game.rng.random() < 0.5)
+
+        def ap(o):
+            o.__dict__["_skip_turns"] = o.__dict__.get("_skip_turns", 0) + heads
+            game.log(f"{ctrl.name} tira 5 monedas: {heads} caras. {o.name} se salta sus próximos {heads} turnos")
+        opps = game.targetable_opponents(ctrl)
+        if opps:
+            _pw_pick(game, ctrl, "player_target", "Elegí a qué rival", opps, ap, key=lambda o: o.life)
+    T["flip five coins. target opponent skips their next x turns, where x is the number of coins that came up heads"] = f
+
+    # Rowan Kenrith +2
+    def f(game, ctrl, perm):
+        def ap(o):
+            o.__dict__["_force_attack_next"] = True
+            game.log(f"Las criaturas de {o.name} deben atacar en su próximo turno")
+        opps = game.targetable_opponents(ctrl)
+        if opps:
+            _pw_pick(game, ctrl, "player_target", "Elegí a qué jugador", opps, ap, key=lambda o: -sum(pm.power for pm in o.creatures()))
+    T["during target player's next turn, each creature that player controls attacks if able"] = f
+
+    # Saheeli, Sublime Artificer −2
+    def f(game, ctrl, perm):
+        arts = [pm for pm in ctrl.battlefield if "artifact" in pm.card.types]
+        others = [pm for pm in ctrl.battlefield if (pm.is_creature() or "artifact" in pm.card.types)]
+        if not arts or len(others) < 2:
+            return
+        src = max(others, key=_pw_val)
+        tg = min((a for a in arts if a is not src), key=_pw_val, default=None)
+        if tg is None:
+            return
+        import copy as _cp
+        orig = tg.card
+        nc = _cp.copy(src.card)
+        nc.types = set(src.card.types) | {"artifact"}
+        tg.card = nc
+        tg._eot_revert = (lambda g, pm, _o=orig: setattr(pm, "card", _o))
+        game.log(f"{tg.name} es una copia de {src.name} hasta el fin del turno")
+    T["target artifact you control becomes a copy of another target artifact or creature you control until end of turn, except it's an artifact in addition to its other types"] = f
+
+    # Saheeli, the Gifted +1
+    def f(game, ctrl, perm):
+        ctrl._affinity_next_turn = game.turn
+        game.log(f"{ctrl.name}: su próximo hechizo de este turno tiene afinidad por artefactos")
+    T["the next spell you cast this turn has affinity for artifacts"] = f
+
+    # Sarkhan the Masterless +1 / Sarkhan, the Dragonspeaker +1
+    def f(game, ctrl, perm):
+        for pm in ctrl.battlefield:
+            if "planeswalker" in pm.card.types:
+                _eot_animate(game, pm, 4, 4, kws=("flying",), subtypes=("Dragon",))
+                pm.summoning_sick = False
+    T["until end of turn, each planeswalker you control becomes a 4/4 red dragon creature and gains flying"] = f
+
+    def f(game, ctrl, perm):
+        _eot_animate(game, perm, 4, 4, kws=("flying", "indestructible", "haste"), subtypes=("Dragon",))
+        game.log(f"{perm.name} es un Dragón 4/4 con vuelo, indestructible y prisa hasta el fin del turno")
+    T["until end of turn, ~ becomes a legendary 4/4 red dragon creature with flying, indestructible, and haste"] = f
+
+    # Sifa Grent −6
+    def f(game, ctrl, perm):
+        for o in game.opponents(ctrl):
+            got = [o.library.pop() for _ in range(min(2, len(o.library)))]
+            _to_impulse(game, ctrl, got, free=True)
+            game.log(f"{o.name} exilia {', '.join(c.name for c in got)}: {ctrl.name} puede jugarlas gratis este turno")
+    T["each opponent exiles the top two cards of their library. until end of turn, you may play those cards without paying their mana costs"] = f
+
+    # Sivitri +1
+    def f(game, ctrl, perm):
+        ctrl.__dict__["_attack_life_tax"] = 2
+        game.log(f"Hasta su próximo turno, atacar a {ctrl.name} o a sus planeswalkers cuesta 2 vidas por criatura")
+    T["until your next turn, creatures can't attack you or planeswalkers you control unless their controller pays 2 life for each of those creatures"] = f
+
+    # Sorin Markov −7 (controlar el próximo turno del rival)
+    def f(game, ctrl, perm):
+        def ap(o):
+            o.__dict__["_mindslaved_by"] = ctrl
+            game.log(f"{ctrl.name} controlará el próximo turno de {o.name}")
+        opps = game.targetable_opponents(ctrl)
+        if opps:
+            _pw_pick(game, ctrl, "player_target", "Elegí a qué rival", opps, ap, key=lambda o: len(o.hand) + len(o.battlefield))
+    T["you control target player during that player's next turn"] = f
+
+    # Space Beleren +1 / −5 (sectores)
+    def _sector(pm):
+        if getattr(pm, "_sector", None) is None:
+            pm._sector = pm.uid % 3
+        return pm._sector
+
+    def f(game, ctrl, perm):
+        game._sector_block_turn = game.turn
+        game.log("Este turno las criaturas solo pueden ser bloqueadas por criaturas de su mismo sector")
+    T["creatures in each sector can be blocked this turn only by creatures in the same sector"] = f
+
+    def f(game, ctrl, perm):
+        allc = [pm for pl in game.players for pm in pl.battlefield if pm.is_creature()]
+        if not allc:
+            return
+
+        def score(s):
+            return sum((1 if pm.controller is not ctrl else -1) * (_pw_val(pm)[0] + 1) for pm in allc if _sector(pm) == s)
+        best = max(range(3), key=score)
+        for pm in allc:
+            if _sector(pm) == best:
+                game.destroy(pm, "Space Beleren")
+        game.log(f"Se destruyen todas las criaturas del sector {'αβγ'[best]}")
+        game.sba()
+    T["destroy all creatures in the sector of your choice"] = f
+
+    # Tasha −3
+    def f(game, ctrl, perm):
+        pool = [(pl, c) for pl in game.players for c in pl.exile if getattr(c, "_page", 0) > 0 and not c.is_land()]
+        if not pool:
+            game.log(f"{ctrl.name}: no hay cartas exiliadas con contadores de página")
+            return
+        pl, c = max(pool, key=lambda pc: pc[1].cost.cmc if pc[1].cost else 0)
+        pl.exile.remove(c)
+        _to_impulse(game, ctrl, [c], free=True)
+        game.log(f"{ctrl.name} puede lanzar gratis {c.name} este turno")
+    T["you may cast a spell from among cards in exile with page counters on them without paying its mana cost"] = f
+
+    # Tasha +1: robar y exiliar con contador de página
+    def f(game, ctrl, perm):
+        ctrl.draw(1, game)
+        for o in game.opponents(ctrl):
+            pool = [c for c in o.graveyard if {"instant", "sorcery"} & set(c.types)]
+            if pool:
+                c = max(pool, key=lambda c: c.cost.cmc if c.cost else 0)
+                o.graveyard.remove(c)
+                o.exile.append(c)
+                c._page = getattr(c, "_page", 0) + 1
+                game.log(f"{ctrl.name} exilia {c.name} del cementerio de {o.name} con un contador de página")
+    T["draw a card. for each opponent, exile up to one target instant or sorcery card from that player's graveyard and put a page counter on it"] = f
+
+    # Teferi, Temporal Pilgrim −12
+    def f(game, ctrl, perm):
+        def ap(o):
+            nl = [pm for pm in o.battlefield if not pm.card.is_land()]
+            if nl:
+                keep = max(nl, key=lambda pm: (pm.card.cost.cmc if pm.card.cost else 0))
+                from cardsdb import _bounce_pm as _b
+                _b(game, keep, "Teferi")
+            for pm in [x for x in o.battlefield if not x.card.is_land()]:
+                o.battlefield.remove(pm)
+                if not pm.is_token:
+                    o.library.append(getattr(pm.card, "_real", None) or pm.card)
+            game.rng.shuffle(o.library)
+            game.log(f"{o.name} baraja sus permanentes no-tierra en su biblioteca")
+        opps = game.targetable_opponents(ctrl)
+        if opps:
+            _pw_pick(game, ctrl, "player_target", "Elegí a qué rival", opps, ap, key=lambda o: len(o.battlefield))
+    T["target opponent chooses a permanent they control and returns it to its owner's hand. then they shuffle each nonland permanent they control into its owner's library"] = f
+
+    # Teferi, Time Raveler +1
+    def f(game, ctrl, perm):
+        ctrl.__dict__["_flash_grant"] = set(ctrl.__dict__.get("_flash_grant") or ()) | {"sorcery"}
+        game.log(f"{ctrl.name} puede lanzar conjuros como si tuvieran destello hasta su próximo turno")
+    T["until your next turn, you may cast sorcery spells as though they had flash"] = f
+
+    # Teferi, Timeless Voyager −8
+    def f(game, ctrl, perm):
+        def ap(o):
+            for pm in [x for x in o.battlefield if x.is_creature()]:
+                game.phase_out(pm)
+                pm._phase_hold = (ctrl, game.turn)
+        opps = game.targetable_opponents(ctrl)
+        if opps:
+            _pw_pick(game, ctrl, "player_target", "Elegí a qué rival", opps, ap, key=lambda o: len(o.creatures()))
+    T["each creature target opponent controls phases out. until the end of your next turn, they can't phase in"] = f
+
+    # Tevesh Szat −10
+    def f(game, ctrl, perm):
+        for pl in game.players:
+            for pm in list(pl.battlefield):
+                if pl.is_commander(pm.card) and pl is not ctrl:
+                    pl.battlefield.remove(pm)
+                    pm.controller = ctrl
+                    ctrl.battlefield.append(pm)
+            for c in list(pl.command):
+                if pl is not ctrl or True:
+                    pl.command.remove(c)
+                    game.move_to_battlefield(c, ctrl)
+        game.log(f"{ctrl.name} gana el control de todos los comandantes")
+    T["gain control of all commanders. put all commanders from the command zone onto the battlefield under your control"] = f
+
+    # Teyo −2
+    def f(game, ctrl, perm):
+        def ap(d):
+            game._attack_dir = (d, ctrl)
+            game.log(f"Hasta el próximo turno de {ctrl.name}, cada jugador solo puede atacar al rival más cercano ({d})")
+        _choose_dir(game, ctrl, ap)
+    T["choose left or right. until your next turn, each player may attack only the nearest opponent in the last chosen direction and planeswalkers controlled by that opponent"] = f
+
+    # Tezzeret the Schemer +1: Etherium Cell
+    T['create a colorless artifact token named etherium cell with "{t}, sacrifice this token: add one mana of any color."'] = \
+        lambda game, ctrl, perm: _mana_rock_token(game, ctrl, "Etherium Cell", {c: 1 for c in "WUBRG"})
+
+    # Tezzeret, Cruel Captain 0
+    def f(game, ctrl, perm):
+        pool = [pm for pm in ctrl.battlefield if pm.tapped and (pm.is_creature() or "artifact" in pm.card.types) and pm is not perm]
+        if not pool:
+            pool = [pm for pm in ctrl.battlefield if pm.is_creature() and "artifact" in pm.card.types]
+        if not pool:
+            return
+        tg = max(pool, key=lambda pm: ("artifact" in pm.card.types and pm.is_creature(), _pw_val(pm)))
+        tg.tapped = False
+        if "artifact" in tg.card.types and tg.is_creature():
+            game.add_counters(tg, "+1/+1", 1)
+    T["untap target artifact or creature. if it's an artifact creature, put a +1/+1 counter on it"] = f
+
+    # Tezzeret, Cruel Machinist 0 / −7
+    def f(game, ctrl, perm):
+        pool = [pm for pm in ctrl.battlefield if "artifact" in pm.card.types and not pm.is_creature()]
+        if not pool:
+            return
+        tg = max(pool, key=lambda pm: pm.card.cost.cmc if pm.card.cost else 0)
+        _animate(tg, 5, 5, until="next_turn", game=game, owner=ctrl)
+        game.log(f"{tg.name} es una criatura 5/5 hasta el próximo turno de {ctrl.name}")
+    T["until your next turn, target artifact you control becomes a 5/5 creature in addition to its other types"] = f
+
+    def f(game, ctrl, perm):
+        n = 0
+        for c in list(ctrl.hand):
+            ctrl.hand.remove(c)
+            px = game._face_down_proxy(c, ctrl, "manifest")
+            px.power, px.toughness = 5, 5
+            px.types = {"artifact", "creature"}
+            game.move_to_battlefield(px, ctrl)
+            n += 1
+        game.log(f"{ctrl.name} pone {n} cartas boca abajo: son criaturas artefacto 5/5")
+    T["put any number of cards from your hand onto the battlefield face down. they're 5/5 artifact creatures"] = f
+
+    # The Eternal Wanderer −4
+    def f(game, ctrl, perm):
+        for pl in game.players:
+            cr = pl.creatures()
+            if len(cr) <= 1:
+                continue
+            keep = max(cr, key=_pw_val) if pl is ctrl else min(cr, key=_pw_val)
+            for pm in cr:
+                if pm is not keep:
+                    game.to_graveyard(pm, "sacrificio (The Eternal Wanderer)")
+        game.log("Cada jugador conserva una criatura elegida y sacrifica el resto")
+    T["for each player, choose a creature that player controls. each player sacrifices all creatures they control not chosen this way"] = f
+
+    # The Theorist −2
+    def f(game, ctrl, perm):
+        from cardsdb import _bounce_pm as _b
+        for o in game.opponents(ctrl):
+            pool = [pm for pm in o.battlefield if (pm.is_creature() or "artifact" in pm.card.types) and game.can_target(ctrl, pm)]
+            if pool:
+                _b(game, max(pool, key=lambda pm: (pm.card.cost.cmc if pm.card.cost else 0, _pw_val(pm))), "Jace")
+    T["for each opponent, return up to one target artifact or creature that player controls to its owner's hand"] = f
+
+    # The Unluckiest Planeswalker −3
+    def f(game, ctrl, perm):
+        for c in list(ctrl.hand):
+            ctrl.hand.remove(c)
+            game.discard_card(ctrl, c)
+        n = 2 * sum(1 for pm in ctrl.battlefield if "aura" in {s.lower() for s in pm.card.subtypes})
+        ctrl.draw(n, game)
+        game.log(f"{ctrl.name} descarta su mano y roba {n}")
+    T["discard your hand, then draw cards equal to twice the number of auras you control. for each aura attached to you, attach it to an opponent of your choice"] = f
+
+    # Thomil −5: Lord of the Pit
+    T["create a lord of the pit token"] = lambda game, ctrl, perm: _tok_from_text(
+        game, ctrl, "Lord of the Pit", "Token Creature — Demon",
+        "Flying, trample\nAt the beginning of your upkeep, sacrifice a creature other than this creature. "
+        "If you can't, it deals 7 damage to you.", 7, 7, colors=("B",))
+
+    # Ugin, Eye of the Storms −11
+    def f(game, ctrl, perm):
+        pool = [c for c in ctrl.library if not c.is_land() and not {x for p_ in (c.cost.pips if c.cost else ())
+                                                                     for x in str(p_).split("/") if x in "WUBRG"}]
+        for c in pool:
+            ctrl.library.remove(c)
+        game.rng.shuffle(ctrl.library)
+        _to_impulse(game, ctrl, pool, free=True)
+        game.log(f"{ctrl.name} exilia {len(pool)} cartas incoloras: las puede lanzar gratis este turno")
+    T["search your library for any number of colorless nonland cards, exile them, then shuffle. until end of turn, you may cast those cards without paying their mana costs"] = f
+
+    # Venser, Visionary Traveler +1
+    def f(game, ctrl, perm):
+        pool = [pm for pm in ctrl.battlefield if pm is not perm and not pm.is_token]
+        if ctrl is not getattr(game, "interactive_human", None):
+            pool = [pm for pm in pool if pm.card.on_etb]
+        _pick_perm(game, ctrl, pool, lambda pm: pm.card.cost.cmc if pm.card.cost else 0,
+                   "Elegí qué exiliar (vuelve al final del turno)", lambda tg: _venser_blink(game, ctrl, tg))
+
+    def _venser_blink(game, ctrl, tg):
+        card = tg.card
+        owner = tg.controller
+        ctrl.battlefield.remove(tg)
+        owner.exile.append(card)
+        game.log(f"{ctrl.name} exilia {card.name}: vuelve al final del turno")
+
+        def back(g, **k):
+            if card in owner.exile:
+                owner.exile.remove(card)
+                g.move_to_battlefield(card, owner)
+        game.add_temp_trigger("end_step", back, ctrl, "eot", "Venser")
+    T["exile up to one other target permanent you control. at the beginning of the next end step, return that card to the battlefield under its owner's control"] = f
+
+    # Vivien, Arkbow Ranger −5
+    T["you may reveal a creature card you own from outside the game and put it into your hand"] = \
+        lambda game, ctrl, perm: game.log(f"{ctrl.name}: en Commander no hay cartas fuera del juego (sin efecto)")
+
+    # Vraska the Unseen +1
+    def f(game, ctrl, perm):
+        def tr(g, source=None, planeswalker=None, **k):
+            if planeswalker is perm and source is not None and source in source.controller.battlefield:
+                g.destroy(source, "Vraska")
+        game.add_temp_trigger("tmp_cdmg_pw", tr, ctrl, "next_turn", "Vraska")
+    T["until your next turn, whenever a creature deals combat damage to ~, destroy that creature"] = f
+
+    # Vraska, Betrayal's Sting −2
+    def f(game, ctrl, perm):
+        _pick_perm(game, ctrl, _opp_creatures(game, ctrl), _pw_val, "Elegí la criatura que se vuelve Treasure",
+                   lambda tg: _vraska_treasure(game, tg))
+
+    def _vraska_treasure(game, tg):
+        tre = Card(name=tg.card.name, types={"artifact"}, cost=None, subtypes={"Treasure"}, tags={"treasure"},
+                         produces=(lambda p_, pl: {c: 1 for c in "WUBRG"}))
+        tre.sac_on_mana = True
+        tg.card = tre
+        tg.animated = False
+        tg.perma_keywords = set()
+        game.log(f"{tre.name} se convierte en un Treasure")
+    T['target creature becomes a treasure artifact with "{t}, sacrifice this artifact: add one mana of any color" and loses all other card types and abilities'] = f
+
+    # Vraska, Scheming Gorgon −10
+    def f(game, ctrl, perm):
+        for pm in ctrl.creatures():
+            pm.temp_keywords.add("deathtouch")
+
+        def tr(g, source=None, defender=None, **k):
+            if source is not None and source.controller is ctrl and defender in g.opponents(ctrl):
+                defender.lost = True
+                g.log(f"{defender.name} pierde la partida (Vraska)")
+        game.add_temp_trigger("tmp_cdmg_player", tr, ctrl, "eot", "Vraska")
+    T['until end of turn, creatures you control gain deathtouch and "whenever this creature deals damage to an opponent, that player loses the game."'] = f
+
+    # Vronos +1 / −7
+    def f(game, ctrl, perm):
+        pws = [pm for pm in ctrl.battlefield if "planeswalker" in pm.card.types and pm is not perm][:2]
+        if not pws:
+            return
+
+        def back(g, **k):
+            for pm in pws:
+                if pm in ctrl.battlefield:
+                    g.phase_out(pm)
+        game.add_temp_trigger("end_step", back, ctrl, "eot", "Vronos")
+    T["up to two other target planeswalkers you control phase out at the beginning of the next end step"] = f
+
+    def f(game, ctrl, perm):
+        pool = [pm for pm in ctrl.battlefield if "artifact" in pm.card.types and pm is not perm]
+        if not pool:
+            return
+        tg = max(pool, key=lambda pm: pm.card.cost.cmc if pm.card.cost else 0)
+        _animate(tg, 9, 9, kws=("vigilance", "indestructible", "unblockable"), subtypes=("Construct",))
+        game.log(f"{tg.name} es un Construct 9/9 con vigilancia, indestructible e imbloqueable")
+    T['target artifact you control becomes a 9/9 construct artifact creature and gains vigilance, indestructible, and "this creature can\'t be blocked."'] = f
+
+    # Will Kenrith +2
+    def f(game, ctrl, perm):
+        pool = sorted((pm for o in game.opponents(ctrl) for pm in o.battlefield
+                       if pm.is_creature() and game.can_target(ctrl, pm)), key=_pw_val, reverse=True)[:2]
+        for tg in pool:
+            old = (tg.set_base_pt, getattr(tg, "_abil_off_perm", False))
+            tg.set_base_pt = (0, 3)
+            tg._abil_off_perm = True
+            _until_next(tg, ctrl, lambda g, pm, _o=old: (setattr(pm, "set_base_pt", _o[0]), setattr(pm, "_abil_off_perm", _o[1])))
+        if pool:
+            game.log(f"{', '.join(p.name for p in pool)}: 0/3 sin habilidades hasta el próximo turno de {ctrl.name}")
+    T["until your next turn, up to two target creatures each have base power and toughness 0/3 and lose all abilities"] = f
+
+    # Worzel −8
+    T["create ten scryb sprites tokens"] = lambda game, ctrl, perm: _tok_from_text(
+        game, ctrl, "Scryb Sprites", "Token Creature — Faerie", "Flying", 1, 1, n=10, colors=("G",))
+
+    # Wrenn and One +1
+    def f(game, ctrl, perm):
+        import copy as _cp
+        orig = perm.card
+        nc = _cp.copy(orig)
+        nc.produces = (lambda p_, pl: {"G": 1})
+        perm.card = nc
+        _until_next(perm, ctrl, lambda g, pm, _o=orig: setattr(pm, "card", _o))
+    T['~ gains "{t}: add {g}" until your next turn'] = f
+
+    # Wrenn and Realmbreaker +1
+    def f(game, ctrl, perm):
+        pool = [pm for pm in ctrl.battlefield if pm.card.is_land() and not pm.is_creature()]
+        if not pool:
+            return
+        tg = min(pool, key=lambda pm: (pm.tapped, pm.card.cost is not None))
+        _animate(tg, 3, 3, kws=("vigilance", "hexproof", "haste"), subtypes=("Elemental",), until="next_turn", game=game, owner=ctrl)
+        game.log(f"{tg.name} es un Elemental 3/3 con vigilancia, antimaleficio y prisa hasta el próximo turno")
+    T["up to one target land you control becomes a 3/3 elemental creature with vigilance, hexproof, and haste until your next turn. it's still a land"] = f
+
+    # Wrenn and Seven −3
+    def f(game, ctrl, perm):
+        def ex(c):
+            c.cda_pt = lambda g, p: (sum(1 for pm in p.battlefield if pm.card.is_land()),) * 2
+        _tok_from_text(game, ctrl, "Treefolk", "Token Creature — Treefolk", "Reach", 0, 0, colors=("G",), extra=ex)
+    T['create a green treefolk creature token with reach and "this token\'s power and toughness are each equal to the number of lands you control."'] = f
+
+    return T
+
+
+_PW_NAMED = None
+
+
+def _pw_named_effect(text: str, name: str = ""):
+    global _PW_NAMED
+    if _PW_NAMED is None:
+        _PW_NAMED = _pw_named_table()
+    raw = re.sub(r"\s+", " ", (text or "")).strip().lower().replace("’", "'").replace("−", "-")
+    raw = raw.rstrip(".")
+    full = (name or "").split(" // ")[0].strip().lower()
+    names = set(_self_names(full)) | {full.split(",")[0].strip(), full.split(" ")[0].strip()}
+    t = raw
+    for nm in sorted(names - {""}, key=len, reverse=True):
+        t = re.sub(r"(?<![a-z~])" + re.escape(nm) + r"(?![a-z])", "~", t)
+    fn = _PW_NAMED.get(t) or _PW_NAMED.get(raw)
+    if fn is None:
+        return None
+
+    def eff(game, ctrl, perm, _f=fn):
+        _f(game, ctrl, perm)
+    return eff
+
+
 def _loyalty_effect(text: str, name: str = ""):
     """Efecto APROXIMADO de una habilidad de lealtad, deducido de su texto.
     Cubre los patrones comunes (daño, robo, vida, ficha). Si no reconoce nada,
     devuelve None: la habilidad solo cambia la lealtad (mejor que no existir)."""
     t = re.sub(r"\s+", " ", (text or "").lower())
+    _pn = _pw_named_effect(text, name)
+    if _pn is not None:
+        return _pn
     _px = _pw_extra_effect(text, name)
     if _px is not None:
         return _px
@@ -7618,6 +8850,17 @@ def _auto_loyalty_targets(game, ctrl, spec, n):
     return []
 
 
+def _karn_tag(eff):
+    def wrapped(game, ctrl, perm, _e=eff):
+        before = {pl.name: {id(c) for c in pl.exile} for pl in game.players}
+        _e(game, ctrl, perm)
+        for pl in game.players:
+            for c in pl.exile:
+                if id(c) not in before.get(pl.name, set()):
+                    c._exiled_by_karn = ctrl
+    return wrapped
+
+
 def _planeswalker_abilities(oracle: str, name: str = ""):
     """Parsea las habilidades de lealtad del texto de Scryfall.
     Devuelve (abilities, texts) con abilities = ((coste, efecto), ...)."""
@@ -7632,7 +8875,10 @@ def _planeswalker_abilities(oracle: str, name: str = ""):
         except ValueError:
             continue
         text = m.group(2).strip()
-        abilities.append((cost, _loyalty_effect(text, name)))
+        _le = _loyalty_effect(text, name)
+        if _le is not None and (name or "").lower().startswith("karn liberated") and "exile" in text.lower():
+            _le = _karn_tag(_le)          # recordar qué exilió Karn (para su −14)
+        abilities.append((cost, _le))
         texts.append(text)
     return tuple(abilities), tuple(texts)
 
@@ -24614,7 +25860,11 @@ def _build_card_from_data_impl(data: dict) -> Card:
             card.cost_reduction = int(mr.group(1))
 
     # efectos de REEMPLAZO estáticos (dobladores / muerte->exilio)
-    _rt = re.sub(r"\s+", " ", (data.get("oracle_text", "") or "").lower())
+    # (sin las habilidades de lealtad ni lo que dura "hasta el fin del turno": Kaya,
+    # Geist Hunter −2 dobla fichas solo ese turno, no para siempre)
+    _rt = re.sub(r"\s+", " ", "\n".join(
+        l for l in (data.get("oracle_text", "") or "").lower().splitlines()
+        if not _LOY_LINE.match(l) and "until end of turn" not in l))
     if re.search(r"twice that many (?:of those )?tokens", _rt) or \
             "create twice as many" in _rt:
         card.token_double = True

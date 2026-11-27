@@ -227,10 +227,15 @@ class InteractiveGame:
             p = self.g.ap()
             if p.lost:
                 continue
+            if self.g.skip_turn_check(p):
+                continue
             if self.g.active_index == self.human_index:
                 self.g.begin_turn(p)
                 self.g.sba()
                 if p.lost:
+                    continue
+                if self.g.mindslaved_turn(p):      # Sorin Markov −7: tu turno lo controla otro
+                    self.g.end_turn(p)
                     continue
                 self.phase = "main"
                 self.attacked = False
@@ -321,6 +326,9 @@ class InteractiveGame:
         self.g.begin_turn(p)
         self.g.sba()
         if p.lost:
+            return False
+        if self.g.mindslaved_turn(p):
+            self.g.end_turn(p)
             return False
         # ledger de habilidades usadas este turno: persiste a través de una
         # ReactionPause para que el bot no re-active lo mismo al reanudar.
