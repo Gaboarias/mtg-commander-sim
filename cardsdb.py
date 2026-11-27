@@ -637,6 +637,20 @@ def _pump_spell_effect(oracle: str):
     return None
 
 
+def _target_player_gains(game, ctrl, n):
+    """'Target player gains N life': el humano elige a qué jugador (vos primero);
+    el bot se lo da a sí mismo."""
+    def ap(pl):
+        game.gain_life(pl, n)
+        game.log(f"{pl.name} gana {n} de vida")
+    players = [ctrl] + [o for o in game.players if o is not ctrl and not o.lost and not o.has_hexproof()]
+    if ctrl is getattr(game, "interactive_human", None) and len(players) > 1:
+        _human_target_choice(game, ctrl, "player_target", f"¿Quién gana {n} de vida?",
+                             [(("Vos" if pl is ctrl else pl.name) + f" ({pl.life} de vida)", pl) for pl in players], ap)
+    else:
+        ap(ctrl)
+
+
 def _prepared_special(text: str):
     """Hechizos de cartas 'prepared' que el parser genérico no cubre. Devuelve
     (effect(g, ctrl, targets), target_spec, count) o (None, None, 1). Si el texto
@@ -672,8 +686,7 @@ def _prepared_special(text: str):
         def eff_sol(g, ctrl, targets=None):
             x = int(getattr(g, "_ability_x", 0) or 0)
             if x > 0:
-                g.gain_life(ctrl, x)
-                g.log(f"{ctrl.name} gana {x} de vida")
+                _target_player_gains(g, ctrl, x)
         return eff_sol, None, 1
     # Exsanguinate: "Each opponent loses X life. You gain life equal to the life lost this way."
     if re.fullmatch(r"each opponent loses x life\. you gain life equal to the life lost this way\.", tl):
@@ -22295,6 +22308,15 @@ def build_card_from_data(data: dict) -> Card:
         if any(ab.get("from_hand") for ab in abs_):
             c.hand_abilities = tuple(ab for ab in abs_ if ab.get("from_hand"))
             c.activated_abilities = tuple(ab for ab in abs_ if not ab.get("from_hand"))
+        # "Target player gains X/N life." (Stream of Life y similares): elegís a qué
+        # jugador (la capa genérica lo dejaba siempre para vos)
+        _mtg = re.fullmatch(r"target player gains (x|\d+) life\.?", (data.get("oracle_text", "") or "").strip().lower())
+        if _mtg and {"instant", "sorcery"} & set(c.types):
+            def _tpg(game, ctrl, targets=None, _n=_mtg.group(1)):
+                n = (getattr(game, "spell_x", 0) or 0) if _n == "x" else int(_n)
+                if n > 0:
+                    _target_player_gains(game, ctrl, n)
+            c.on_cast_resolve = _tpg
         return c
     except RecursionError:
         return _vanilla_from_data(data)

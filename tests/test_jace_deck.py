@@ -772,3 +772,13 @@ def test_in_too_deep_on_planeswalker_stops_being_one():
     g.sba()
     assert pw in ops[0].battlefield                      # sin lealtad no muere: no es planeswalker
     assert not g._perm_state(pw)["is_planeswalker"]
+
+
+def test_stream_of_life_bot_gains_itself():
+    sol = cardsdb.build_card_from_data({"name": "Stream of Life", "mana_cost": "{X}{G}", "type_line": "Sorcery",
+                                        "oracle_text": "Target player gains X life."})
+    g, me, ops = _g()
+    g.spell_x = 5
+    l0, o0 = me.life, ops[0].life
+    sol.on_cast_resolve(g, me, None)
+    assert me.life == l0 + 5 and ops[0].life == o0
