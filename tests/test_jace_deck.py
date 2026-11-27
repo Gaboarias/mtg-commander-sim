@@ -544,3 +544,59 @@ def test_any_graveyard_removal_counts_as_leaving():
     g.emit = spy
     g.sba()
     assert len(seen) == 1 and len(seen[0]) == 2 and me.gy_left_turn == g.turn
+
+
+def test_emblems_static_trigger_and_for_opponents():
+    """Emblemas: anthem (Elspeth −7), disparo en el mantenimiento rival (Chandra +2)
+    y que no son permanentes (no se destruyen ni cuentan como encantamiento)."""
+    el = _mk("Elspeth, Sun's Champion")
+    g, me, ops = _g()
+    pm = put(g, el, me)
+    run(g)
+    pm.counters["loyalty"] = 8
+    bear = put(g, creature("Bear", "1G", 2, 2), me)
+    run(g)
+    g.activate_loyalty(pm, 2)
+    run(g)
+    assert len(me.emblems) == 1 and bear.power == 4 and bear.toughness == 4 and bear.has("flying")
+    assert all(e not in me.battlefield for e in me.emblems) and "enchantment" not in me.emblems[0].card.types
+    ch = cardsdb.build_card_from_data({
+        "name": "Chandra, Awakened Inferno", "mana_cost": "{4}{R}{R}", "type_line": "Legendary Planeswalker — Chandra",
+        "loyalty": "6", "oracle_text": "This spell can't be countered.\n+2: Each opponent gets an emblem with \"At the "
+        "beginning of your upkeep, this emblem deals 1 damage to you.\"\n−3: Chandra, Awakened Inferno deals 3 damage "
+        "to each non-Elemental creature.\n−X: Chandra, Awakened Inferno deals X damage to target creature or "
+        "planeswalker. If a permanent dealt damage this way would die this turn, exile it instead."})
+    g, me, ops = _g()
+    pc = put(g, ch, me)
+    run(g)
+    g.activate_loyalty(pc, 0)
+    run(g)
+    assert len(ops[0].emblems) == 1 and not me.emblems
+    l0 = ops[0].life
+    g.emit("upkeep", player=ops[0])
+    run(g)
+    assert ops[0].life == l0 - 1
+
+
+def test_loyalty_lock_until_next_turn_and_extra_turns():
+    kaito = cardsdb.build_card_from_data({
+        "name": "Kaito, Dancing Shadow", "mana_cost": "{2}{U}{B}", "type_line": "Legendary Planeswalker — Kaito",
+        "loyalty": "3", "oracle_text": "+1: Up to one target creature can't attack or block until your next turn."})
+    g, me, ops = _g()
+    pk = put(g, kaito, me)
+    ob = put(g, creature("OBear", "1G", 3, 3), ops[0])
+    run(g)
+    ob.summoning_sick = False
+    g.activate_loyalty(pk, 0)
+    run(g)
+    assert not ob.can_attack()
+    tef = cardsdb.build_card_from_data({
+        "name": "Teferi, Master of Time", "mana_cost": "{2}{U}{U}", "type_line": "Legendary Planeswalker — Teferi",
+        "loyalty": "3", "oracle_text": "−10: Take two extra turns after this one."})
+    g, me, ops = _g()
+    pt = put(g, tef, me)
+    run(g)
+    pt.counters["loyalty"] = 10
+    g.activate_loyalty(pt, 0)
+    run(g)
+    assert g.extra_turns == [me, me]

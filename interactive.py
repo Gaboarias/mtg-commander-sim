@@ -660,7 +660,7 @@ class InteractiveGame:
         return self.phase == "main" and self.g.active_index == self.human_index
 
     def _find_perm(self, uid):
-        for pm in self.human().battlefield:
+        for pm in list(self.human().battlefield) + list(getattr(self.human(), "emblems", ()) or ()):
             if pm.uid == uid:
                 return pm
         return None
@@ -1701,7 +1701,7 @@ class InteractiveGame:
                     })
         # habilidades activadas con maná (creaturas/permanentes/tierras)
         abilities = []
-        for pm in p.battlefield:
+        for pm in list(p.battlefield) + list(getattr(p, "emblems", ()) or ()):   # emblemas con habilidad (Karn…)
             abs_ = getattr(pm.card, "activated_abilities", ()) or ()
             usable = []
             for i, ab in enumerate(abs_):

@@ -609,6 +609,8 @@ class Permanent:
             return False                 # "can't attack unless defending player is poisoned / the monarch"
         if self.game is not None and getattr(self, "_no_attack_turn", None) == self.game.turn:
             return False                 # "target creature can't attack this turn"
+        if getattr(self, "_pacify_by", None) is not None:
+            return False                 # "can't attack or block until your next turn"
         _cai = getattr(self.card, "cant_attack_if", None)
         if _cai is not None and self.game is not None and _cai(self):
             return False                 # "can't attack unless/if <condición>"
@@ -766,6 +768,8 @@ class Player:
         self.exile_play: list = []           # jugables desde el exilio de forma persistente
         #   (predichas por foretell, etc.); cada carta lleva ._play_cost (Cost)
         self.command: list = list(self.commanders)
+        # emblemas (zona de mando): objetos con habilidades que no se pueden destruir
+        self.emblems: list = []
         # companion: fuera del juego; {3} a velocidad de conjuro lo pone en la mano
         self.companion = getattr(commander, "_companion", None)
         self.speed = 0                       # velocidad (Start your engines!)
@@ -1681,6 +1685,9 @@ class Game:
             "graveyard": [c.name for c in p.graveyard],
             "exile": [c.name for c in p.exile],
             "commanders": [self._cmdr_state(p, i, c) for i, c in enumerate(p.commanders)],
+            # emblemas en la zona de mando (texto completo para la UI)
+            "emblems": [{"name": e.name, "text": getattr(e.card, "emblem_text", "") or ""}
+                        for e in (getattr(p, "emblems", ()) or ())],
             "battlefield": [self._perm_state(pm) for pm in p.battlefield],
             **({"revealed": [c.name for c in p.hand]} if self._hand_revealed(p) else {}),
         }
@@ -1769,10 +1776,34 @@ class Game:
         return [o for o in self.players if o is not p and not o.lost]
 
     def all_permanents(self) -> list:
+        """Fuentes de efectos continuos: permanentes en juego + emblemas (los
+        emblemas no son permanentes, pero sus estáticos aplican igual)."""
         out = []
         for pl in self.players:
             out.extend(pl.battlefield)
+            out.extend(getattr(pl, "emblems", ()) or ())
         return out
+
+    def create_emblem(self, player, text: str, source_name: str = ""):
+        """'You get an emblem with "<texto>"': crea el emblema en la zona de mando de
+        `player`. Sus habilidades se arman con el mismo parser que las cartas."""
+        import cardsdb as _cdb
+        nm = f"Emblema de {source_name.split(' // ')[0].split(',')[0]}" if source_name else "Emblema"
+        txt = re.sub(r"\bthis emblem\b", nm, text or "", flags=re.I)
+        # los efectos estáticos se cablean para tipos de permanente: se lee como
+        # encantamiento y después se le quita el tipo (no es un permanente)
+        card = _cdb.build_card_from_data({"name": nm, "type_line": "Enchantment — Emblem",
+                                          "oracle_text": txt, "mana_cost": ""})
+        card.types = {"emblem"}
+        card.subtypes = set()
+        card.emblem_text = text
+        perm = Permanent(card, player)
+        perm.game = self
+        perm.summoning_sick = False
+        player.emblems.append(perm)
+        self.log(f"{player.name} obtiene un emblema: «{text}»")
+        self.table_event("ability", player.name, source_name or nm, text=f"emblema: {text}")
+        return perm
 
     def mode_pick_for(self, player, card) -> int:
         """Cuántos modos puede elegir `player` para `card` ("if you control a commander as
@@ -1986,7 +2017,7 @@ class Game:
                 continue
             # además del disparo principal, cada carta puede tener disparos EXTRA
             # para el mismo evento ("__x_<evento>") sin pisar al principal
-            for perm, cb in [(p_, c_) for p_ in list(pl.battlefield)
+            for perm, cb in [(p_, c_) for p_ in list(pl.battlefield) + list(getattr(pl, "emblems", ()) or ())
                              for c_ in (p_.card.triggers.get(event),
                                         p_.card.triggers.get("__x_" + event)) if c_ is not None]:
                 # El callback recibe (game, perm, **kw): `perm` es el permanente que
@@ -2837,7 +2868,7 @@ class Game:
     def max_hand_size(self, p: "Player") -> int:
         """Tamaño máximo de mano: 7 ± modificadores ('your maximum hand size is
         reduced by N', 'each opponent's …', 'no maximum hand size')."""
-        if any(getattr(pm.card, "no_max_hand", False) for pm in p.battlefield) or any(
+        if any(getattr(pm.card, "no_max_hand", False) for pm in list(p.battlefield) + list(p.emblems)) or any(
                 getattr(pm.card, "no_max_hand_all", False) for pl in self.players for pm in pl.battlefield):
             return 10 ** 6
         n, fixed = 7, None
@@ -5337,7 +5368,7 @@ class Game:
             _ed = getattr(cz, "spell_discount", None) if getattr(cz, "eminence", False) else None
             if _ed and callable(_ed[1]) and cz is not card and _ed[1](card):
                 total += _ed[0]          # eminence: también desde la zona de mando (The Ur-Sphinx)
-        for pm in player.battlefield:
+        for pm in list(player.battlefield) + list(getattr(player, "emblems", ()) or ()):
             disc = getattr(pm.card, "spell_discount", None)
             if not disc:
                 continue
@@ -7469,7 +7500,7 @@ class Game:
                 continue
             if blocker.tapped or not blocker.is_creature() or blocker.attacking:
                 continue
-            if getattr(blocker, "_no_block_turn", None) == self.turn:
+            if getattr(blocker, "_no_block_turn", None) == self.turn or getattr(blocker, "_pacify_by", None) is not None:
                 continue                 # "can't block this turn" (Stoneshock Giant)
             if len(blocker.blocking) >= 1 + (getattr(blocker.card, "extra_blocks", 0) or 0):
                 continue                 # ya bloquea todo lo que puede
@@ -7837,6 +7868,10 @@ class Game:
         self.turns_played += 1
         # encabezado de turno: separa visualmente los turnos en el registro
         self.log(f"‹turno› {p.name}")
+        for _pl in self.players:                 # "until your next turn": se termina al empezar el turno de quien lo hizo
+            for _pm in _pl.battlefield:
+                if getattr(_pm, "_pacify_by", None) is p:
+                    _pm._pacify_by = None
         # UNTAP (antes: phasing — lo que estaba fuera de fase entra, y lo que
         # tiene phasing sale)
         self._phase_step(p)

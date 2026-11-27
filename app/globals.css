@@ -1607,3 +1607,15 @@ h3 svg { color: currentColor; }
 .prep-type { font-size: .76rem; margin-top: 2px; }
 .prep-text { margin: 6px 0 4px; font-size: .88rem; white-space: pre-wrap; }
 .prep-note { font-size: .74rem; margin: 0; }
+/* emblemas: chips violetas junto al jugador (texto completo al pasar/tocar) */
+.emblem-row { display: flex; flex-wrap: wrap; gap: 5px; flex: 1 1 100%; margin: 2px 0; }
+.emblem-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  padding: 2px 8px; border-radius: 999px; font-size: .68rem;
+  background: linear-gradient(90deg, rgba(110, 80, 220, .55), rgba(60, 40, 140, .55));
+  border: 1px solid rgba(170, 150, 255, .7); color: #f1ecff;
+}
+.emblem-chip .emblem-txt { opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 26ch; }
+.emblem-chip:hover .emblem-txt, .emblem-chip:focus .emblem-txt { white-space: normal; max-width: 60ch; }
+.opp-focus .emblem-chip { font-size: .8rem; }
+.opp-focus .emblem-chip .emblem-txt { white-space: normal; max-width: none; }

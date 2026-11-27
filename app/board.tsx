@@ -40,6 +40,7 @@ export type PlayerState = {
   poison?: number; experience?: number; energy?: number;
   graveyard: string[]; exile?: string[]; battlefield: Perm[]; revealed?: string[];
   hand_cards?: { i: number; name: string; is_land: boolean; cost: string }[];
+  emblems?: { name: string; text: string }[];           // emblemas (zona de mando)
 };
 
 export function CardMini({
@@ -355,6 +356,16 @@ export function Seat({
           </span>
         )) : <span title="comandante"><Icon name="crown" size={13} /> {p.commander.join(", ") || "—"}</span>)}
       </div>
+      {(p.emblems?.length || 0) > 0 && (
+        <div className="emblem-row" aria-label="Emblemas">
+          {p.emblems!.map((e, k) => (
+            <span key={k} className="emblem-chip" title={`${e.name}: ${e.text}`} tabIndex={0}>
+              <Icon name="sparkles" size={11} /> <b>{e.name.replace(/^Emblema de /, "")}</b>
+              <span className="emblem-txt">{e.text}</span>
+            </span>
+          ))}
+        </div>
+      )}
       {variant === "opp" && !compact && (
         <div className="seat-piles">
           <ZonePile kind="graveyard" names={p.graveyard} art={art} compact

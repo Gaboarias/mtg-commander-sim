@@ -932,12 +932,50 @@ class Policy:
             abils = perm.card.loyalty_abilities
             if not abils:
                 continue
-            loy = perm.counters.get("loyalty", 0)
-            idx = 0
-            for i, (cost, _eff) in enumerate(abils):
-                if cost < 0 and loy + cost >= 0 and loy >= 7:
-                    idx = i
-            game.activate_loyalty(perm, idx)
+            idx = self._pick_loyalty(game, me, perm)
+            if idx is not None:
+                game.activate_loyalty(perm, idx)
+
+    def _pick_loyalty(self, game, me, perm):
+        """Qué habilidad de lealtad usar: la definitiva si llega; remoción/barrida si
+        hay una amenaza que la justifique; si el planeswalker está en peligro, la de
+        +; si no, la + con efecto. Nunca una habilidad que el motor no simula (salvo
+        que sea la única forma de subir lealtad)."""
+        abils = perm.card.loyalty_abilities
+        texts = list(getattr(perm.card, "loyalty_texts", ()) or ())
+        loy = perm.counters.get("loyalty", 0)
+        opps = [o for o in game.opponents(me) if not o.lost]
+        threats = [pm for o in opps for pm in o.battlefield
+                   if (pm.is_creature() and pm.power >= 3) or "planeswalker" in pm.card.types]
+        danger = sum(pm.power for o in opps for pm in o.battlefield if pm.is_creature() and not pm.tapped)
+        cand = []
+        for i, (cost, eff) in enumerate(abils):
+            if loy + cost < 0:
+                continue
+            txt = (texts[i] if i < len(texts) else "").lower()
+            score = 0.0
+            if eff is None:
+                score -= 50 if cost < 0 else 5      # no la simulamos: no gastar lealtad en nada
+            if cost <= -6:
+                score += 100                        # la definitiva: casi siempre gana
+            elif cost < 0:
+                removal = any(w in txt for w in ("destroy", "exile", "damage", "sacrifice", "return target"))
+                if removal and threats:
+                    score += 30 + 3 * len(threats)
+                elif removal:
+                    score -= 20                     # remoción sin blanco que valga la pena
+                if loy + cost <= 0:
+                    score -= 25                     # el planeswalker muere
+                score += 4                          # otras − (fichas, robo…) valen algo
+            else:
+                score += 10 + 2 * cost
+                if danger >= loy:
+                    score += 15                     # en peligro: subir lealtad
+            cand.append((score, -i, i))
+        if not cand:
+            return None
+        best = max(cand)
+        return best[2]
 
     # -- respuesta con instantaneos --------------------------------------- #
     def respond(self, game, me, top):
