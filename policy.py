@@ -1581,3 +1581,41 @@ class Policy:
                 cmdr[k] = cmdr.get(k, me.cmdr_damage.get(k, 0)) + p
         return (dmg >= me.life or poison >= 10
                 or any(v >= 21 for v in cmdr.values()))
+
+
+class ControlledPolicy:
+    """Sorin Markov −7 / Mindslaver: un bot controla el turno de otro jugador.
+    Juega ESE turno a favor de quien controla: no le hace bajar tierras ni lanzar
+    nada útil, solo una barrida si le duele más a la víctima que al controlador,
+    y ataca con todo a OTRO rival (si hay) dejando a la víctima descubierta."""
+
+    def __init__(self, base, controller):
+        self.base = base
+        self.controller = controller
+
+    def __getattr__(self, k):
+        return getattr(self.base, k)
+
+    def main_phase(self, game, me, second: bool = False):
+        if second:
+            return
+
+        def val(pl):
+            return sum(pm.power + pm.toughness for pm in pl.creatures())
+        if val(me) <= val(self.controller):
+            return
+        for c in list(me.hand):
+            if "wipe" in (c.tags or set()) and c.cost is not None and me.can_pay(game.effective_cost(me, c)):
+                game.log(f"{self.controller.name} le hace lanzar {c.name} a {me.name}")
+                game.cast(me, c)
+                return
+
+    def declare_attackers(self, game, me):
+        others = [o for o in game.opponents(me) if o is not self.controller and not o.lost]
+        if not others:
+            return []
+        tgt = max(others, key=lambda o: sum(pm.power for pm in o.creatures() if not pm.tapped))
+        return [(pm, tgt) for pm in me.creatures() if pm.can_attack()]
+
+    def choose_blockers(self, game, me, *a, **k):
+        return []

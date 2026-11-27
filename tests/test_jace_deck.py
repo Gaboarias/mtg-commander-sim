@@ -650,3 +650,49 @@ def test_jeska_triple_and_ral_skip_turns():
     g, me, ops = _g()
     ops[0].__dict__["_skip_turns"] = 2
     assert g.skip_turn_check(ops[0]) and g.skip_turn_check(ops[0]) and not g.skip_turn_check(ops[0])
+
+
+def test_sorin_control_and_controlled_policy():
+    """Sorin Markov −7: un bot que controla el turno de otro no le hace jugar a su
+    favor; el turno controlado por el humano cambia quién es 'el humano' y vuelve."""
+    import interactive
+    import decks
+    defs = [("Yo",) + decks.build("lorehold"), ("Bot1",) + decks.build("strixhaven"), ("Bot2",) + decks.build("kang")]
+    ig = interactive.InteractiveGame(defs, human_index=0, seed=4)
+    ig.keep([])
+    me, b1 = ig.human(), ig.g.players[1]
+    b1.__dict__["_mindslaved_by"] = me
+    st = ig.end_turn()
+    k = 0
+    while st["phase"] == "choose" and k < 20:
+        st = ig.resolve_choice(0)
+        k += 1
+    assert st["controlling"] == {"player": "Bot1", "by": "Yo"} and st["human_index"] == 1
+    st = ig.end_turn()
+    while st["phase"] == "choose" and k < 40:
+        st = ig.resolve_choice(0)
+        k += 1
+    assert st["controlling"] is None and st["human_index"] == 0
+
+
+def test_space_beleren_sectors_assigned_and_sweep():
+    from test_parser_corpus import new_game
+    g, me, ops = new_game()
+    g.active_index = 0
+    for i in range(3):
+        put(g, creature(f"B{i}", "2", 2, 2), ops[0])
+    sb = cardsdb.build_card_from_data({
+        "name": "Space Beleren", "mana_cost": "{2}{U}{U}", "type_line": "Legendary Planeswalker — Beleren",
+        "loyalty": "4", "oracle_text": "Space sculptor (Space Beleren divides the battlefield into alpha, beta, and "
+        "gamma sectors. If a creature isn't assigned to a sector, its controller assigns it to one. Opponents assign "
+        "first.)\n+1: Creatures in each sector can be blocked this turn only by creatures in the same sector.\n−1: Put "
+        "a +1/+1 counter on each creature in the sector of your choice.\n−5: Destroy all creatures in the sector of "
+        "your choice."})
+    pb = put(g, sb, me)
+    run(g)
+    g.sba()
+    assert sorted(g.sector_of(pm) for pm in ops[0].creatures()) == [0, 1, 2]
+    pb.counters["loyalty"] = 10
+    g.activate_loyalty(pb, 2)
+    run(g)
+    assert len(ops[0].creatures()) == 2

@@ -1619,3 +1619,14 @@ h3 svg { color: currentColor; }
 .emblem-chip:hover .emblem-txt, .emblem-chip:focus .emblem-txt { white-space: normal; max-width: 60ch; }
 .opp-focus .emblem-chip { font-size: .8rem; }
 .opp-focus .emblem-chip .emblem-txt { white-space: normal; max-width: none; }
+.ctrl-banner { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 6px; padding: 6px 12px;
+  border-radius: 10px; background: linear-gradient(90deg, rgba(120, 40, 40, .7), rgba(70, 20, 60, .7));
+  border: 1px solid rgba(255, 140, 140, .6); color: #fff; font-size: .85rem; }
+/* Space Beleren: sector de cada criatura */
+.cardmini .cm-badge.sector { position: absolute; right: 1px; bottom: calc(var(--cw, 84px) * .3); z-index: 2;
+  width: 16px; height: 16px; border-radius: 999px; display: grid; place-items: center; font-size: .68rem; font-weight: 800;
+  color: #fff; box-shadow: 0 0 0 1px rgba(255,255,255,.5); }
+.cardmini .cm-badge.sector.s0 { background: #2f7de1; }
+.cardmini .cm-badge.sector.s1 { background: #d9822b; }
+.cardmini .cm-badge.sector.s2 { background: #8e44ad; }
+.cardmini .cm-badge.sector { text-transform: none; letter-spacing: 0; }

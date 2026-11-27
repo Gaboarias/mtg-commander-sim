@@ -1662,6 +1662,7 @@ class Game:
                             and pm.enchanting in pm.enchanting.controller.battlefield else None),
             "attached_name": (pm.enchanting.name if isinstance(getattr(pm, "enchanting", None), Permanent)
                               and pm.enchanting in pm.enchanting.controller.battlefield else None),
+            "sector": getattr(pm, "_sector", None) if pm.is_creature() else None,
             # prepared: el hechizo que la criatura puede copiar y si está preparada ahora
             "prepared": (dict(pm.card.prepared_spell, ready=bool(getattr(pm, "_prepared", False)))
                          if getattr(pm.card, "prepared_spell", None) else None),
@@ -3632,6 +3633,46 @@ class Game:
         self.log(f"{cmd.name} vuelve a la zona de mando")
         return True
 
+    def sector_of(self, pm):
+        """Sector (0 α, 1 β, 2 γ) de una criatura bajo Space Beleren; None si no tiene."""
+        return getattr(pm, "_sector", None)
+
+    def _assign_sectors(self):
+        """Space sculptor: toda criatura sin sector la asigna su controlador (primero
+        los rivales de quien controla a Space Beleren). El bot reparte parejo; el
+        humano elige."""
+        sculptors = [pm for pl in self.players for pm in pl.battlefield
+                     if getattr(pm.card, "space_sculptor", False) and not pm.abilities_off()]
+        if not sculptors:
+            if getattr(self, "_had_sectors", False):      # Space Beleren se fue: ya no hay sectores
+                self._had_sectors = False
+                for pl in self.players:
+                    for pm in pl.battlefield:
+                        pm._sector = None
+                        pm._sector_pending = False
+            return
+        self._had_sectors = True
+        owner = sculptors[0].controller
+        order = [pl for pl in self.players if pl is not owner and not pl.lost] + [owner]
+        hu = getattr(self, "interactive_human", None)
+        for pl in order:
+            for pm in pl.battlefield:
+                if not pm.is_creature() or getattr(pm, "_sector", None) is not None or getattr(pm, "_sector_pending", False):
+                    continue
+                if pl is hu:
+                    pm._sector_pending = True
+                    import cardsdb as _cdb
+
+                    def _ap(sec, _pm=pm):
+                        _pm._sector = sec
+                        _pm._sector_pending = False
+                        self.log(f"{_pm.name} va al sector {_cdb.SECTOR_NAMES[sec]}")
+                    _cdb._human_target_choice(self, pl, "sector", f"Space Beleren: ¿a qué sector va {pm.name}?",
+                                              [(n, k) for k, n in enumerate(_cdb.SECTOR_NAMES)], _ap)
+                else:
+                    counts = [sum(1 for x in pl.battlefield if getattr(x, "_sector", None) == k) for k in range(3)]
+                    pm._sector = counts.index(min(counts))
+
     def _flush_gy_left(self):
         """Emite 'leaves_graveyard' por cada jugador con salidas del cementerio que
         ningún efecto avisó (una vez por tanda: 'one or more cards')."""
@@ -3644,6 +3685,7 @@ class Game:
 
     def sba(self):
         self._flush_gy_left()
+        self._assign_sectors()
         # "when this artifact has twenty or more charge counters on it, you win the game" (Darksteel Reactor)
         for _pl in self.players:
             if _pl.lost:
@@ -7614,8 +7656,7 @@ class Game:
             if getattr(blocker, "_no_block_turn", None) == self.turn or getattr(blocker, "_pacify_by", None) is not None:
                 continue                 # "can't block this turn" (Stoneshock Giant)
             if getattr(self, "_sector_block_turn", None) == self.turn and \
-                    (getattr(attacker, "_sector", None) if getattr(attacker, "_sector", None) is not None else attacker.uid % 3) != \
-                    (getattr(blocker, "_sector", None) if getattr(blocker, "_sector", None) is not None else blocker.uid % 3):
+                    self.sector_of(attacker) != self.sector_of(blocker):
                 continue                 # Space Beleren +1: solo bloquea alguien del mismo sector
             if len(blocker.blocking) >= 1 + (getattr(blocker.card, "extra_blocks", 0) or 0):
                 continue                 # ya bloquea todo lo que puede
@@ -8365,23 +8406,33 @@ class Game:
             return True
         return False
 
-    def mindslaved_turn(self, p) -> bool:
-        """Sorin Markov −7: otro jugador controla este turno; quien lo controla no le
-        hace jugar nada útil (no juega tierras, no lanza, no ataca)."""
-        by = p.__dict__.pop("_mindslaved_by", None)
-        if by is None:
-            return False
-        self.log(f"{by.name} controla el turno de {p.name}: no hace jugadas")
-        return True
+    def take_control_policy(self, p):
+        """Sorin Markov −7: si un BOT controla el turno de `p`, cambia la política de
+        `p` por la del controlador durante este turno. Devuelve la política original
+        (para restaurarla) o None si nadie lo controla."""
+        by = p.__dict__.get("_mindslaved_by")
+        if by is None or by is getattr(self, "interactive_human", None):
+            return None
+        p.__dict__.pop("_mindslaved_by", None)
+        import policy as _pol
+        orig = p.policy
+        p.policy = _pol.ControlledPolicy(orig, by)
+        self.log(f"{by.name} controla el turno de {p.name}")
+        return orig
 
     def run_turn(self):
         p = self.ap()
         self.begin_turn(p)
         if p.lost:
             return
-        if self.mindslaved_turn(p):
-            self.end_turn(p)
-            return
+        _orig = self.take_control_policy(p)
+        try:
+            self._run_turn_body(p)
+        finally:
+            if _orig is not None:
+                p.policy = _orig
+
+    def _run_turn_body(self, p):
 
         # MAIN 1
         if p.policy:

@@ -234,8 +234,17 @@ class InteractiveGame:
                 self.g.sba()
                 if p.lost:
                     continue
-                if self.g.mindslaved_turn(p):      # Sorin Markov −7: tu turno lo controla otro
-                    self.g.end_turn(p)
+                if p.__dict__.get("_mindslaved_by") is not None:   # Sorin Markov −7: tu turno lo juega un bot
+                    n0 = len(self.g.log_lines)
+                    _orig = self.g.take_control_policy(p)
+                    try:
+                        paused = self._ai_steps(p, "main1")
+                    finally:
+                        if _orig is not None:
+                            p.policy = _orig
+                    self._record_opp_turn(p, n0)
+                    if paused:
+                        return
                     continue
                 self.phase = "main"
                 self.attacked = False
@@ -244,6 +253,20 @@ class InteractiveGame:
                 # mi turno, sin marcar _draining (ya es mi turno), para que no
                 # afloren a mitad de una jugada ni terminen el turno.
                 self._surface_queued_choice()
+                return
+            if p.__dict__.get("_mindslaved_by") is self.human():
+                # Sorin Markov −7 del humano: VOS jugás el turno de este rival
+                p.__dict__.pop("_mindslaved_by", None)
+                self.g.begin_turn(p)
+                self.g.sba()
+                if p.lost:
+                    continue
+                self._ctrl_restore = self.human_index
+                self.human_index = self.players.index(p)
+                self.g.interactive_human = p
+                self.g.log(f"{self.players[self._ctrl_restore].name} controla el turno de {p.name}")
+                self.phase = "main"
+                self.attacked = False
                 return
             n0 = len(self.g.log_lines)
             paused = self._ai_turn(p)     # pausó porque me atacan
@@ -327,9 +350,13 @@ class InteractiveGame:
         self.g.sba()
         if p.lost:
             return False
-        if self.g.mindslaved_turn(p):
-            self.g.end_turn(p)
-            return False
+        _orig = self.g.take_control_policy(p)      # Sorin Markov −7 de otro bot
+        if _orig is not None:
+            try:
+                p._abil_perms_used = set()
+                return self._ai_steps(p, "main1")
+            finally:
+                p.policy = _orig
         # ledger de habilidades usadas este turno: persiste a través de una
         # ReactionPause para que el bot no re-active lo mismo al reanudar.
         p._abil_perms_used = set()
@@ -1435,6 +1462,11 @@ class InteractiveGame:
         self.opp_turns = []             # empezar a capturar los turnos rivales de nuevo
         self.g.end_turn(p)
         self.g.sba()
+        if getattr(self, "_ctrl_restore", None) is not None:
+            # terminó el turno rival que controlabas (Sorin Markov −7): volvés a ser vos
+            self.human_index = self._ctrl_restore
+            self._ctrl_restore = None
+            self.g.interactive_human = self.human()
         self._advance_to_human()
 
     # -- deshacer jugada (fase principal del humano) --------------------- #
@@ -2212,6 +2244,9 @@ class InteractiveGame:
             "turn": self.g.turn,
             "active": self.g.active_index,
             "human_index": self.human_index,
+            # Sorin Markov −7: estás jugando el turno de otro jugador
+            "controlling": ({"player": self.human().name, "by": self.players[self._ctrl_restore].name}
+                            if getattr(self, "_ctrl_restore", None) is not None else None),
             "phase": "choose" if pending else self.phase,
             "attacked": self.attacked,
             "winner": self.winner,

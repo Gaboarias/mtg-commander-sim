@@ -108,6 +108,7 @@ type ReactState = {
 };
 type GameState = {
   turn: number; active: number; human_index: number; phase: string; attacked: boolean;
+  controlling?: { player: string; by: string } | null;   // Sorin Markov −7: jugás el turno de otro
   winner: string | null; players: PlayerState[]; legal: Legal; combat: Combat | null;
   react?: ReactState | null;
   choice: Choice | null; mulligan: Mulligan | null; log: string[];
@@ -628,7 +629,7 @@ export default function Play() {
           cascade_target: "Cascada: elegí el objetivo",
           gy_shuffle: "Barajar cartas del cementerio",
           mode_choice: "Elegí un modo", mode: "Elegí un modo", mode_target: "Elegí un objetivo",
-          mana: "Elegí el maná", life: "Pagar vida",
+          mana: "Elegí el maná", life: "Pagar vida", pile: "Separá en dos pilas", sector: "Elegí un sector",
           sacrifice: "Sacrificar", keep: "Elegí qué conservar",
           opt_cost: "Coste opcional",
           player_target: "Elegí un jugador", amount: "¿Cuánto?", color: "Elegí un color",
@@ -658,12 +659,15 @@ export default function Play() {
           keep: "Lo que no conserves se sacrifica.",
           opt_cost: "Pagarlo es opcional; si no lo pagás, pasa lo que dice la otra opción.",
           player_target: "El efecto apunta a un jugador: elegí a quién.",
+          pile: "Elegí de a uno lo que va a la pila A. El rival después elige qué pila sacrifica.",
+          sector: "Space Beleren divide el campo en tres sectores: α, β y γ.",
           amount: "Repartí el total entre los objetivos que elijas.",
           color: "El permanente recuerda el color elegido para sus habilidades.",
         };
         const title = titles[ch.kind] || "Elegí una carta";
         const hint = hints[ch.kind];
         const noneLabel = ch.kind === "etb_target" ? "No elegir ninguno"
+          : ch.kind === "pile" ? "Listo: el resto va a la pila B"
           : ch.kind === "gy_shuffle" ? "Ninguna más"
           : "No llevarme ninguna";
         return (
@@ -842,6 +846,12 @@ export default function Play() {
 
       {state && (
         <div className="table-page">
+          {state.controlling && (
+            <div className="ctrl-banner" role="status">
+              <Icon name="crown" size={14} /> Estás controlando el turno de <b>{state.controlling.player}</b>:
+              ves su mano y jugás por él. Al terminar el turno volvés a ser {state.controlling.by}.
+            </div>
+          )}
           <div className="table-bar">
             <span className="tb-title"><Icon name="gamepad" size={16} /> Mesa</span>
             <span className="tb-lives">
@@ -1247,7 +1257,7 @@ export default function Play() {
                   </div>
                 </div>
                 <FitBox className="my-fit" dep={`${state.players[meIdx].battlefield.length}:${state.players[meIdx].battlefield.filter((x) => x.tapped).length}:${state.players[meIdx].battlefield.filter((x) => x.attached_to != null).length}:${showSide}:${!!(state.combat || state.react || state.mulligan || choicePanel)}`}>
-                <Seat
+                <Seat key={`me-${meIdx}`}
                   p={state.players[meIdx]} active={state.active === meIdx} art={art} reduce={reduce} variant="me"
                   selectableUids={myTurn && !state.attacked ? attackableUids : undefined}
                   selectedUids={picked}

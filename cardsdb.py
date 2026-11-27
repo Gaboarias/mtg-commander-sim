@@ -7476,6 +7476,28 @@ def _opp_best_creature(game, ctrl, pred=None):
     return max(pool, key=_pw_val) if pool else None
 
 
+SECTOR_NAMES = ("α (alfa)", "β (beta)", "γ (gamma)")
+
+
+def _pick_sector(game, ctrl, apply, mine_good):
+    """Elegir un sector: el humano por modal (con cuántas criaturas de cada lado hay);
+    el bot, el que más le conviene (más propias si es bueno, más rivales si es malo)."""
+    def tally(sec):
+        own = sum(_pw_val(pm)[0] + 1 for pm in ctrl.creatures() if game.sector_of(pm) == sec)
+        opp = sum(_pw_val(pm)[0] + 1 for o in game.opponents(ctrl) for pm in o.creatures() if game.sector_of(pm) == sec)
+        return own, opp
+    if ctrl is getattr(game, "interactive_human", None):
+        opts = []
+        for sec in range(3):
+            mine = [pm.name for pm in ctrl.creatures() if game.sector_of(pm) == sec]
+            theirs = [pm.name for o in game.opponents(ctrl) for pm in o.creatures() if game.sector_of(pm) == sec]
+            opts.append((f"{SECTOR_NAMES[sec]} — tuyas: {', '.join(mine) or 'ninguna'} · rivales: {', '.join(theirs) or 'ninguna'}", sec))
+        _human_target_choice(game, ctrl, "sector", "Elegí el sector", opts, apply)
+        return
+    best = max(range(3), key=lambda sec: (tally(sec)[0] - tally(sec)[1]) if mine_good else (tally(sec)[1] - tally(sec)[0]))
+    apply(best)
+
+
 def _pw_named_table():
     T = {}
 
@@ -7938,24 +7960,48 @@ def _pw_named_table():
     def f(game, ctrl, perm):
         def ap(o):
             perms = sorted(o.battlefield, key=lambda pm: (pm.card.cost.cmc if pm.card.cost else 0, _pw_val(pm)), reverse=True)
+            if ctrl is getattr(game, "interactive_human", None) and o is not ctrl and perms:
+                _lili_human_split(game, ctrl, o, perms)
+                return
             a, b = [], []
-            for pm in perms:                   # reparto alternado por valor
+            for pm in perms:                   # reparto por valor: pilas parejas
                 (a if sum(_pw_val(x)[1] for x in a) <= sum(_pw_val(x)[1] for x in b) else b).append(pm)
+            _lili_victim_picks(game, o, a, b)
+        opps = game.targetable_opponents(ctrl)
+        if opps:
+            _pw_pick(game, ctrl, "player_target", "Elegí a qué rival", opps, ap, key=lambda o: len(o.battlefield))
 
+    def _lili_human_split(game, ctrl, o, perms, pile_a=None):
+        """El humano arma la pila A eligiendo de a uno; 'Listo' manda el resto a la B."""
+        pile_a = pile_a if pile_a is not None else []
+        rest = [pm for pm in perms if pm not in pile_a]
+        if not rest:
+            _lili_victim_picks(game, o, pile_a, [])
+            return
+        names_a = ", ".join(x.name for x in pile_a) or "vacía"
+        _human_target_choice(
+            game, ctrl, "pile",
+            f"Liliana: armá la pila A con permanentes de {o.name} (ahora: {names_a}). «Listo» manda el resto a la pila B.",
+            [(pm.name + (f" {pm.power}/{pm.toughness}" if pm.is_creature() else ""), pm) for pm in rest],
+            lambda pm: _lili_human_split(game, ctrl, o, perms, pile_a + [pm]),
+            allow_none=True,
+            on_none=lambda: _lili_victim_picks(game, o, pile_a, [pm for pm in perms if pm not in pile_a]))
+
+    def _lili_victim_picks(game, o, a, b):
+        """El jugador afectado elige qué pila sacrifica."""
+        if True:
             def sac(pile):
                 for pm in pile:
                     if pm in pm.controller.battlefield:
                         game.to_graveyard(pm, "sacrificio (Liliana)")
                 game.log(f"{o.name} sacrifica {len(pile)} permanente(s)")
+            game.log(f"Pila A: {', '.join(x.name for x in a) or 'vacía'} · Pila B: {', '.join(x.name for x in b) or 'vacía'}")
             if o is getattr(game, "interactive_human", None):
                 _human_target_choice(game, o, "sacrifice", "Liliana: elegí qué pila sacrificás",
-                                     [("Pila A: " + ", ".join(x.name for x in a), a),
-                                      ("Pila B: " + ", ".join(x.name for x in b), b)], sac)
+                                     [("Pila A: " + (", ".join(x.name for x in a) or "vacía"), a),
+                                      ("Pila B: " + (", ".join(x.name for x in b) or "vacía"), b)], sac)
             else:
                 sac(min((a, b), key=lambda pl: sum(_pw_val(x)[1] + _pw_val(x)[0] for x in pl)))
-        opps = game.targetable_opponents(ctrl)
-        if opps:
-            _pw_pick(game, ctrl, "player_target", "Elegí a qué rival", opps, ap, key=lambda o: len(o.battlefield))
     T["separate all permanents target player controls into two piles. that player sacrifices all permanents in the pile of their choice"] = f
 
     # Liliana, Dreadhorde General −9
@@ -8239,43 +8285,34 @@ def _pw_named_table():
             _pw_pick(game, ctrl, "player_target", "Elegí a qué rival", opps, ap, key=lambda o: len(o.hand) + len(o.battlefield))
     T["you control target player during that player's next turn"] = f
 
-    # Space Beleren +1 / −5 (sectores)
-    def _sector(pm):
-        if getattr(pm, "_sector", None) is None:
-            pm._sector = pm.uid % 3
-        return pm._sector
-
+    # Space Beleren (sectores α/β/γ): +1 bloqueo por sector, −1 contadores, −5 barrida
     def f(game, ctrl, perm):
         game._sector_block_turn = game.turn
         game.log("Este turno las criaturas solo pueden ser bloqueadas por criaturas de su mismo sector")
     T["creatures in each sector can be blocked this turn only by creatures in the same sector"] = f
 
     def f(game, ctrl, perm):
-        allc = [pm for pl in game.players for pm in pl.battlefield if pm.is_creature()]
-        if not allc:
-            return
+        def ap(sec):
+            n = 0
+            for pl in game.players:
+                for pm in pl.creatures():
+                    if game.sector_of(pm) == sec:
+                        game.add_counters(pm, "+1/+1", 1)
+                        n += 1
+            game.log(f"{n} criatura(s) del sector {SECTOR_NAMES[sec]} reciben un contador +1/+1")
+        _pick_sector(game, ctrl, ap, mine_good=True)
+    T["put a +1/+1 counter on each creature in the sector of your choice"] = f
 
-        def score(s):
-            return sum((1 if pm.controller is not ctrl else -1) * (_pw_val(pm)[0] + 1) for pm in allc if _sector(pm) == s)
-        best = max(range(3), key=score)
-        for pm in allc:
-            if _sector(pm) == best:
-                game.destroy(pm, "Space Beleren")
-        game.log(f"Se destruyen todas las criaturas del sector {'αβγ'[best]}")
-        game.sba()
-    T["destroy all creatures in the sector of your choice"] = f
-
-    # Tasha −3
     def f(game, ctrl, perm):
-        pool = [(pl, c) for pl in game.players for c in pl.exile if getattr(c, "_page", 0) > 0 and not c.is_land()]
-        if not pool:
-            game.log(f"{ctrl.name}: no hay cartas exiliadas con contadores de página")
-            return
-        pl, c = max(pool, key=lambda pc: pc[1].cost.cmc if pc[1].cost else 0)
-        pl.exile.remove(c)
-        _to_impulse(game, ctrl, [c], free=True)
-        game.log(f"{ctrl.name} puede lanzar gratis {c.name} este turno")
-    T["you may cast a spell from among cards in exile with page counters on them without paying its mana cost"] = f
+        def ap(sec):
+            for pl in game.players:
+                for pm in list(pl.creatures()):
+                    if game.sector_of(pm) == sec:
+                        game.destroy(pm, "Space Beleren")
+            game.log(f"Se destruyen todas las criaturas del sector {SECTOR_NAMES[sec]}")
+            game.sba()
+        _pick_sector(game, ctrl, ap, mine_good=False)
+    T["destroy all creatures in the sector of your choice"] = f
 
     # Tasha +1: robar y exiliar con contador de página
     def f(game, ctrl, perm):
@@ -23615,6 +23652,10 @@ def _build_card_from_data_impl(data: dict) -> Card:
         if aeff is not None:
             card.adventure = {"cost": adv_cost, "effect": aeff, "label": adv.get("name", "Aventura"),
                               "target_spec": aspec, "target_count": acount}
+
+    # Space sculptor (Space Beleren): mientras esté en juego, el campo se divide en sectores
+    if re.search(r"\bspace sculptor\b", _lt):
+        card.space_sculptor = True
 
     # Prepared (set FRA): la criatura entra "preparada" y, mientras lo esté, podés
     # lanzar UNA copia de su hechizo (cara card_faces[1]). Hacerlo la desprepara.

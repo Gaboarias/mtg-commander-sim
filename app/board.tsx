@@ -16,6 +16,7 @@ export type Perm = {
   station?: { charge: number; tiers: number[]; creature_at: number | null; next: number | null } | null;
   // prepared: hechizo que la criatura puede copiar; ready = está preparada ahora
   prepared?: { name: string; cost: string; type: string; text: string; ready: boolean } | null;
+  sector?: number | null;        // Space Beleren: 0 α, 1 β, 2 γ
 };
 // salida del campo registrada por el motor (destruida, exiliada, devuelta…)
 export type Departure = {
@@ -140,6 +141,11 @@ export function CardMini({
         <span className={`cm-badge prep ${perm.prepared.ready ? "on" : "off"}`}
           title={`${perm.prepared.ready ? "Preparada" : "Sin preparar"}: ${perm.prepared.name} ${perm.prepared.cost} — ${perm.prepared.text}`}>
           <Icon name="book" size={9} /> {perm.prepared.ready ? "lista" : "—"}
+        </span>
+      )}
+      {perm.sector != null && !leaving && (
+        <span className={`cm-badge sector s${perm.sector}`} title={`Sector ${["alfa", "beta", "gamma"][perm.sector]} (Space Beleren)`}>
+          {"αβγ"[perm.sector]}
         </span>
       )}
       {perm.is_token && <span className="cm-badge tok" title="ficha">ficha</span>}
