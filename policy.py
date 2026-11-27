@@ -709,7 +709,7 @@ class Policy:
         "any_artifact": lambda pm: "artifact" in pm.card.types,
         "any_enchantment": lambda pm: "enchantment" in pm.card.types,
         "any_art_ench": lambda pm: bool({"artifact", "enchantment"} & pm.card.types),
-        "any_planeswalker": lambda pm: "planeswalker" in pm.card.types,
+        "any_planeswalker": lambda pm: pm.is_planeswalker(),
         "any_nonland": lambda pm: not pm.card.is_land(),
         "any_perm": lambda pm: True,
         "any_acel": lambda pm: pm.is_creature() or bool({"artifact", "enchantment", "land"} & set(pm.card.types)),
@@ -722,7 +722,7 @@ class Policy:
         cmc = pm.card.cost.cmc if pm.card.cost else 0
         if pm.is_creature():
             return self._threat_value(pm) + cmc          # cuerpo + keywords + comandante
-        if "planeswalker" in pm.card.types:
+        if pm.is_planeswalker():
             loy = getattr(pm, "loyalty", 0) or 0
             return 12 + loy + cmc                         # los PW son amenazas serias
         return cmc * 2                                    # motores caros (artef./ench.)
@@ -927,7 +927,7 @@ class Policy:
 
     def _activate_planeswalkers(self, game, me):
         for perm in list(me.battlefield):
-            if "planeswalker" not in perm.card.types or perm.activated_this_turn:
+            if not perm.is_planeswalker() or perm.activated_this_turn:
                 continue
             abils = perm.loyalty_abils()[0]
             if not abils or perm.aura_flag("aura_no_activate"):
@@ -946,7 +946,7 @@ class Policy:
         loy = perm.counters.get("loyalty", 0)
         opps = [o for o in game.opponents(me) if not o.lost]
         threats = [pm for o in opps for pm in o.battlefield
-                   if (pm.is_creature() and pm.power >= 3) or "planeswalker" in pm.card.types]
+                   if (pm.is_creature() and pm.power >= 3) or pm.is_planeswalker()]
         danger = sum(pm.power for o in opps for pm in o.battlefield if pm.is_creature() and not pm.tapped)
         cand = []
         for i, (cost, eff) in enumerate(abils):
@@ -1183,7 +1183,7 @@ class Policy:
             if p.lost:
                 return -60.0
             board = sum(max(0, c.power) + max(0, c.toughness) for c in p.creatures())
-            pws = sum(pm.counters.get("loyalty", 0) for pm in p.battlefield if "planeswalker" in pm.card.types)
+            pws = sum(pm.counters.get("loyalty", 0) for pm in p.battlefield if pm.is_planeswalker())
             lands = sum(1 for pm in p.battlefield if pm.card.is_land())
             return min(p.life, 60) + 0.6 * board + 1.5 * len(p.hand) + 0.8 * lands + 1.0 * pws - 2 * p.poison
         opps = [o for o in g2.players if o is not me2]
@@ -1293,7 +1293,7 @@ class Policy:
         atk_power = sum(a.power for a in attackers)
         target = self._attack_target(me, opps, atk_power)
         pws = [perm for o in opps for perm in o.battlefield
-               if "planeswalker" in perm.card.types]
+               if perm.is_planeswalker()]
 
         keep = 0
         if self.level != "novato":
@@ -1366,7 +1366,7 @@ class Policy:
         local = {}                      # índice de atacantes por rival, para alternar
         for atk in sending:
             o = assign.get(atk.uid, target)
-            o_pws = [perm for perm in o.battlefield if "planeswalker" in perm.card.types]
+            o_pws = [perm for perm in o.battlefield if perm.is_planeswalker()]
             k = local.get(id(o), 0)
             local[id(o)] = k + 1
             # planeswalker rival PELIGROSO (lealtad alta, cerca de su definitiva):

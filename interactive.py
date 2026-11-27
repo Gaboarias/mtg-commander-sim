@@ -714,7 +714,7 @@ class InteractiveGame:
         "any_artifact": lambda pm: "artifact" in pm.card.types,
         "any_enchantment": lambda pm: "enchantment" in pm.card.types,
         "any_art_ench": lambda pm: bool({"artifact", "enchantment"} & pm.card.types),
-        "any_planeswalker": lambda pm: "planeswalker" in pm.card.types,
+        "any_planeswalker": lambda pm: pm.is_planeswalker(),
         "any_nonland": lambda pm: not pm.card.is_land(),
         "any_perm": lambda pm: True,
         "any_creature": lambda pm: pm.is_creature(),
@@ -1355,7 +1355,7 @@ class InteractiveGame:
             # un planeswalker rival tiene prioridad si se indicó su uid
             if pw_uid is not None:
                 pm = self._find_any_perm(pw_uid)
-                if (pm is not None and "planeswalker" in pm.card.types
+                if (pm is not None and pm.is_planeswalker()
                         and pm.controller in foes):
                     return pm
             return _foe(idx)
@@ -1732,7 +1732,7 @@ class InteractiveGame:
                                           "power": pm.power, "toughness": pm.toughness,
                                           "keywords": sorted(pm.keywords)})
             for pm in p.battlefield:
-                _la, texts = pm.loyalty_abils() if "planeswalker" in pm.card.types else ((), ())
+                _la, texts = pm.loyalty_abils() if pm.is_planeswalker() else ((), ())
                 if (_la and not pm.activated_this_turn and not pm.aura_flag("aura_no_activate")):
                     activatables.append({
                         "uid": pm.uid, "name": pm.name,
@@ -1801,7 +1801,7 @@ class InteractiveGame:
                                     "name": f.name, "life": f.life})
                 # planeswalkers del rival: también son objetivo de ataque
                 for pm in f.battlefield:
-                    if "planeswalker" in pm.card.types:
+                    if pm.is_planeswalker():
                         atk_targets.append({
                             "index": self.players.index(f), "pw_uid": pm.uid,
                             "name": f"{pm.name} (PW de {f.name})",

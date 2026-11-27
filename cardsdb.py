@@ -5983,7 +5983,7 @@ def _saga_candidates(game, ctrl, spec):
         "any_artifact": lambda p: "artifact" in p.card.types,
         "any_enchantment": lambda p: "enchantment" in p.card.types,
         "any_art_ench": lambda p: bool(p.card.types & {"artifact", "enchantment"}),
-        "any_planeswalker": lambda p: "planeswalker" in p.card.types,
+        "any_planeswalker": lambda p: p.is_planeswalker(),
         "any_nonland": lambda p: not p.card.is_land(),
         "any_perm": lambda p: True,
     }
@@ -7173,7 +7173,7 @@ def _pw_extra_effect(text: str, name: str = ""):
     if t == "each opponent who doesn't control a legendary creature or planeswalker loses the game":
         def eff(game, ctrl, perm):
             for o in game.opponents(ctrl):
-                if not any(("legendary" in pm.card.supertypes and pm.is_creature()) or "planeswalker" in pm.card.types
+                if not any(("legendary" in pm.card.supertypes and pm.is_creature()) or pm.is_planeswalker()
                            for pm in o.battlefield):
                     o.lost = True
                     game.log(f"{o.name} pierde la partida ({getattr(perm, 'name', '')})")
@@ -8320,7 +8320,7 @@ def _pw_named_table():
     # Sarkhan the Masterless +1 / Sarkhan, the Dragonspeaker +1
     def f(game, ctrl, perm):
         for pm in ctrl.battlefield:
-            if "planeswalker" in pm.card.types:
+            if pm.is_planeswalker():
                 _eot_animate(game, pm, 4, 4, kws=("flying",), subtypes=("Dragon",))
                 pm.summoning_sick = False
     T["until end of turn, each planeswalker you control becomes a 4/4 red dragon creature and gains flying"] = f
@@ -8606,7 +8606,7 @@ def _pw_named_table():
 
     # Vronos +1 / −7
     def f(game, ctrl, perm):
-        pws = [pm for pm in ctrl.battlefield if "planeswalker" in pm.card.types and pm is not perm][:2]
+        pws = [pm for pm in ctrl.battlefield if pm.is_planeswalker() and pm is not perm][:2]
         if not pws:
             return
 
@@ -8787,7 +8787,7 @@ def _loyalty_effect(text: str, name: str = ""):
                 if "any target" in _t or "creature or player" in _t or "or planeswalker" in _t:
                     objs = [o for o in opps if not o.lost and not o.has_hexproof()] + sorted(
                         [pm for pl in game.players for pm in pl.battlefield
-                         if (pm.is_creature() or "planeswalker" in pm.card.types) and game.can_target(ctrl, pm)],
+                         if (pm.is_creature() or pm.is_planeswalker()) and game.can_target(ctrl, pm)],
                         key=lambda pm: pm.controller is ctrl)
                     opts = [(f"{o.name} (jugador, {o.life} de vida)" if not hasattr(o, "card") else _tgt_label(game, o), o)
                             for o in objs]
@@ -10287,7 +10287,7 @@ def _atomic_effect(text):
 
         def eff_jace_poly(game, ctrl, *a, _another=bool(m.group(1)), _pw=_pw, _pw2=_pw2, **kw):
             src = _src_perm(game, a)
-            cands = [pm for pm in ctrl.battlefield if (pm.is_creature() or (_pw and "planeswalker" in pm.card.types))
+            cands = [pm for pm in ctrl.battlefield if (pm.is_creature() or (_pw and pm.is_planeswalker()))
                      and not (_another and pm is src)]
             if not cands:
                 return
@@ -10958,7 +10958,7 @@ def _atomic_effect(text):
     m = re.fullmatch(r"empower jace (\w+)", t)
     if m and (n := _count_word(m.group(1))):
         def eff_empower(game, ctrl, *a, _n=n, **kw):
-            jt = next((pm for pm in ctrl.battlefield if pm.is_token and "planeswalker" in pm.card.types
+            jt = next((pm for pm in ctrl.battlefield if pm.is_token and pm.is_planeswalker()
                        and pm.has_subtype("jace")), None)
             if jt is None:
                 tok = build_card_from_data({"name": "Jace", "type_line": "Legendary Planeswalker — Jace",
@@ -13229,7 +13229,7 @@ def _atomic_effect(text):
                     game.deal_damage(src, pl, n)
                 if _pl == "planeswalker":
                     for pm in list(pl.battlefield):
-                        if "planeswalker" in pm.card.types:
+                        if pm.is_planeswalker():
                             game.deal_damage(src, pm, n)
             game.sba()
         return eff_sweep
@@ -14661,7 +14661,7 @@ def _atomic_effect(text):
                 return False
             if "with flying" in _w and "without" not in _w and not pm.has("flying"):
                 return False
-            return pm.is_creature() or ("planeswalker" in _w and "planeswalker" in pm.card.types)
+            return pm.is_creature() or ("planeswalker" in _w and pm.is_planeswalker())
 
         def eff_divided(game, ctrl, *a, _n=_count_word(m.group(1)) if m.group(1) != "x" else None,
                         _c=cr_only, _cap=cap, **kw):
@@ -16380,7 +16380,7 @@ def _generic_amount_single_core(oracle: str):
         def eff(game, ctrl, *_a, _pw=incl_pw):
             for pl in game.players:
                 pool = [pm for pm in pl.battlefield
-                        if pm.is_creature() or (_pw and "planeswalker" in pm.card.types)]
+                        if pm.is_creature() or (_pw and pm.is_planeswalker())]
                 if pool:
                     why = "" if pl is ctrl else f" (lo fuerza {ctrl.name})"
                     _human_or_auto_sacrifice(
@@ -19624,7 +19624,7 @@ def _wire_b34(card, data, name, types):
                 return
             if c is getattr(g, "interactive_human", None):
                 allc = [pm for o in g.players for pm in o.battlefield
-                        if pm.is_creature() or "planeswalker" in pm.card.types] + [o for o in g.players if not o.lost]
+                        if pm.is_creature() or pm.is_planeswalker()] + [o for o in g.players if not o.lost]
                 opts = [(_tgt_label(g, y) if hasattr(y, "card") else f"{y.name} ({y.life})", y) for y in allc]
                 picked = []
 
@@ -21633,7 +21633,7 @@ def _wire_jace(card, data, name, types):
             c = perm.controller
 
             def _go(o):
-                pool = [x for x in o.battlefield if x.is_creature() or "planeswalker" in x.card.types]
+                pool = [x for x in o.battlefield if x.is_creature() or x.is_planeswalker()]
                 if pool:
                     _human_or_auto_sacrifice(g, o, f"{perm.name}: elegí una criatura o planeswalker para sacrificar",
                                              pool=pool)

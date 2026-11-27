@@ -750,3 +750,25 @@ def test_planeswalker_auras_target_planeswalkers():
     b = put(g, binding, me)
     run(g)
     assert b.enchanting is theirs and not g.activate_loyalty(theirs, 0)
+
+
+def test_in_too_deep_on_planeswalker_stops_being_one():
+    itd = cardsdb.build_card_from_data({
+        "name": "In Too Deep", "mana_cost": "{U}{U}", "type_line": "Enchantment — Aura",
+        "oracle_text": "Split second\nEnchant creature, planeswalker, or Clue\nEnchanted permanent is a colorless "
+        "Clue artifact with \"{2}, Sacrifice this artifact: Draw a card\" and loses all other abilities. (It's no "
+        "longer a creature or planeswalker.)"})
+    g, me, ops = _g()
+    pw = put(g, _mk("Elspeth, Sun's Champion"), ops[0])
+    run(g)
+    au = put(g, itd, me)
+    run(g)
+    assert au.enchanting is pw and not pw.is_planeswalker()
+    assert not g.activate_loyalty(pw, 0)
+    loy = pw.counters.get("loyalty", 0)
+    g.deal_damage(put(g, creature("Hit", "1", 3, 3), me), pw, 3, combat=True)
+    assert pw.counters.get("loyalty", 0) == loy          # ya no recibe daño como planeswalker
+    pw.counters["loyalty"] = 0
+    g.sba()
+    assert pw in ops[0].battlefield                      # sin lealtad no muere: no es planeswalker
+    assert not g._perm_state(pw)["is_planeswalker"]

@@ -483,6 +483,10 @@ class Permanent:
         return any(getattr(src, "enchanting", None) is self and getattr(src.card, "aura_moon", False)
                    for pl in g.players for src in pl.battlefield)
 
+    def is_planeswalker(self) -> bool:
+        """¿Es planeswalker AHORA? (In Too Deep lo convierte en una Clue: deja de serlo)."""
+        return "planeswalker" in self.card.types and not self._clued()
+
     def _clued(self) -> bool:
         """In Too Deep: el permanente encantado es una Clue artefacto (no criatura ni PW)."""
         g = self.game
@@ -1653,7 +1657,7 @@ class Game:
 
     def _perm_state(self, pm: "Permanent") -> dict:
         creature = pm.is_creature()
-        pw = "planeswalker" in pm.card.types
+        pw = pm.is_planeswalker()
         loy_abils = []
         if pw:
             _la, texts = pm.loyalty_abils()
@@ -3469,7 +3473,7 @@ class Game:
             # control or by a red planeswalker you control, return this card from your graveyard to your hand"
             if amount > 0 and getattr(self, "_any_phoenix", False):
                 _pc = None
-                if src_perm and "planeswalker" in source.card.types and "R" in _obj_colors(source.card):
+                if src_perm and source.is_planeswalker() and "R" in _obj_colors(source.card):
                     _pc = source.controller
                 elif not src_perm:
                     _rc = source if (source is not None and hasattr(source, "types")) else getattr(self, "_resolving_card", None)
@@ -3586,7 +3590,7 @@ class Game:
                             _hx[1], (lambda g, _f=_hx[2], _t=target, _n=amount, _s=source: _f(g, _s, _t, _n)),
                             source=source, label=f"cdmg_turn:{source.name}"))
         elif isinstance(target, Permanent):
-            if "planeswalker" in target.card.types:
+            if target.is_planeswalker():
                 # el dano a un planeswalker le quita lealtad (P2.3)
                 target.counters["loyalty"] = target.counters.get("loyalty", 0) - amount
                 if src_perm and source.is_creature() and target.aura_flag("aura_pw_dmg_destroy"):
@@ -3830,7 +3834,7 @@ class Game:
             # planeswalkers sin lealtad
             for p in self.players:
                 for perm in list(p.battlefield):
-                    if ("planeswalker" in perm.card.types
+                    if (perm.is_planeswalker()
                             and perm.counters.get("loyalty", 0) <= 0):
                         self.to_graveyard(perm, "loyalty 0")
                         changed = True
@@ -5003,7 +5007,7 @@ class Game:
         if perm.activated_this_turn and _xa and _xa[0] == self.turn and _xa[1] > 0:
             perm._extra_loy_acts = (_xa[0], _xa[1] - 1)      # Comet: "two more times this turn"
             perm.activated_this_turn = False
-        if perm.activated_this_turn or "planeswalker" not in perm.card.types:
+        if perm.activated_this_turn or not perm.is_planeswalker():
             return False
         if perm.aura_flag("aura_no_activate"):
             return False                     # "its activated abilities can't be activated" (Nahiri's Binding…)
@@ -5287,7 +5291,7 @@ class Game:
         "any_art_ench": lambda o: isinstance(o, Permanent)
         and bool({"artifact", "enchantment"} & o.card.types),
         "any_planeswalker": lambda o: isinstance(o, Permanent)
-        and "planeswalker" in o.card.types,
+        and o.is_planeswalker(),
         "any_nonland": lambda o: isinstance(o, Permanent) and not o.card.is_land(),
         "any_perm": lambda o: isinstance(o, Permanent),
         "any_acel": lambda o: isinstance(o, Permanent) and (
